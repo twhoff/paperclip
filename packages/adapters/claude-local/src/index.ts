@@ -27,6 +27,8 @@ Core fields:
 - env (object, optional): KEY=VALUE environment variables
 - workspaceStrategy (object, optional): execution workspace strategy; currently supports { type: "git_worktree", baseRef?, branchTemplate?, worktreeParentDir? }
 - workspaceRuntime (object, optional): workspace runtime service intents; local host-managed services are realized before Claude starts and exposed back via context/env
+- sessionPolicy (string, optional): "resume" (default) to reuse previous session, "always_fresh" to start a new session every run — useful for lightweight ping/health-check agents
+- skipSkills (boolean, optional): when true, do not mount the Paperclip skills directory via --add-dir — useful for agents that need zero tooling context
 
 Operational fields:
 - timeoutSec (number, optional): run timeout in seconds

@@ -307,6 +307,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const chrome = asBoolean(config.chrome, false);
   const maxTurns = asNumber(config.maxTurnsPerRun, 0);
   const dangerouslySkipPermissions = asBoolean(config.dangerouslySkipPermissions, false);
+  const sessionPolicy = asString(config.sessionPolicy, "resume");
+  const skipSkills = asBoolean(config.skipSkills, false);
   const instructionsFilePath = asString(config.instructionsFilePath, "").trim();
   const instructionsFileDir = instructionsFilePath ? `${path.dirname(instructionsFilePath)}/` : "";
   const commandNotes = instructionsFilePath
@@ -339,17 +341,19 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     ),
   );
   const billingType = resolveClaudeBillingType(effectiveEnv);
-  const skillsDir = await buildSkillsDir(config);
+  const skillsDir = skipSkills ? null : await buildSkillsDir(config);
 
   // When instructionsFilePath is configured, create a combined temp file that
   // includes both the file content and the path directive, so we only need
   // --append-system-prompt-file (Claude CLI forbids using both flags together).
   let effectiveInstructionsFilePath: string | undefined = instructionsFilePath;
+  let instructionsTmpDir: string | null = null;
   if (instructionsFilePath) {
     try {
       const instructionsContent = await fs.readFile(instructionsFilePath, "utf-8");
       const pathDirective = `\nThe above agent instructions were loaded from ${instructionsFilePath}. Resolve any relative file references from ${instructionsFileDir}.`;
-      const combinedPath = path.join(skillsDir, "agent-instructions.md");
+      const parentDir = skillsDir ?? (instructionsTmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-instr-")));
+      const combinedPath = path.join(parentDir, "agent-instructions.md");
       await fs.writeFile(combinedPath, instructionsContent + pathDirective, "utf-8");
       effectiveInstructionsFilePath = combinedPath;
       await onLog("stderr", `[paperclip] Loaded agent instructions file: ${instructionsFilePath}\n`);
@@ -366,11 +370,13 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const runtimeSessionParams = parseObject(runtime.sessionParams);
   const runtimeSessionId = asString(runtimeSessionParams.sessionId, runtime.sessionId ?? "");
   const runtimeSessionCwd = asString(runtimeSessionParams.cwd, "");
+  const alwaysFresh = sessionPolicy === "always_fresh";
   const canResumeSession =
+    !alwaysFresh &&
     runtimeSessionId.length > 0 &&
     (runtimeSessionCwd.length === 0 || path.resolve(runtimeSessionCwd) === path.resolve(cwd));
   const sessionId = canResumeSession ? runtimeSessionId : null;
-  if (runtimeSessionId && !canResumeSession) {
+  if (runtimeSessionId && !canResumeSession && !alwaysFresh) {
     await onLog(
       "stdout",
       `[paperclip] Claude session "${runtimeSessionId}" was saved for cwd "${runtimeSessionCwd}" and will not be resumed in "${cwd}".\n`,
@@ -415,7 +421,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     if (effectiveInstructionsFilePath) {
       args.push("--append-system-prompt-file", effectiveInstructionsFilePath);
     }
-    args.push("--add-dir", skillsDir);
+    if (skillsDir) args.push("--add-dir", skillsDir);
     if (extraArgs.length > 0) args.push(...extraArgs);
     return args;
   };
@@ -496,7 +502,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         errorMessage: `Timed out after ${timeoutSec}s`,
         errorCode: "timeout",
         errorMeta,
-        clearSession: Boolean(opts.clearSessionOnMissingSession),
+        clearSession: alwaysFresh || Boolean(opts.clearSessionOnMissingSession),
       };
     }
 
@@ -512,7 +518,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           stdout: proc.stdout,
           stderr: proc.stderr,
         },
-        clearSession: Boolean(opts.clearSessionOnMissingSession),
+        clearSession: alwaysFresh || Boolean(opts.clearSessionOnMissingSession),
       };
     }
 
@@ -562,7 +568,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       costUsd: parsedStream.costUsd ?? asNumber(parsed.total_cost_usd, 0),
       resultJson: parsed,
       summary: parsedStream.summary || asString(parsed.result, ""),
-      clearSession: clearSessionForMaxTurns || Boolean(opts.clearSessionOnMissingSession && !resolvedSessionId),
+      clearSession: alwaysFresh || clearSessionForMaxTurns || Boolean(opts.clearSessionOnMissingSession && !resolvedSessionId),
     };
   };
 
@@ -585,6 +591,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
     return toAdapterResult(initial, { fallbackSessionId: runtimeSessionId || runtime.sessionId });
   } finally {
-    fs.rm(skillsDir, { recursive: true, force: true }).catch(() => {});
+    if (skillsDir) fs.rm(skillsDir, { recursive: true, force: true }).catch(() => {});
+    if (instructionsTmpDir) fs.rm(instructionsTmpDir, { recursive: true, force: true }).catch(() => {});
   }
 }
