@@ -194,6 +194,7 @@ The `.paperclip.yaml` file is the Paperclip vendor extension. It configures adap
 **Do not specify an adapter unless the repo or user context warrants it.** If you don't know what adapter the user wants, omit the adapter block entirely — Paperclip will use its default. Specifying an unknown adapter type causes an import error.
 
 Paperclip's supported adapter types (these are the ONLY valid values):
+
 - `claude_local` — Claude Code CLI
 - `codex_local` — Codex CLI
 - `opencode_local` — OpenCode CLI
@@ -203,6 +204,7 @@ Paperclip's supported adapter types (these are the ONLY valid values):
 - `openclaw_gateway` — OpenClaw gateway
 
 Only set an adapter when:
+
 - The repo or its skills clearly target a specific runtime (e.g. gstack is built for Claude Code, so `claude_local` is appropriate)
 - The user explicitly requests a specific adapter
 - The agent's role requires a specific runtime capability
@@ -210,11 +212,13 @@ Only set an adapter when:
 ### Env Inputs Rules
 
 **Do not add boilerplate env variables.** Only add env inputs that the agent actually needs based on its skills or role:
+
 - `GH_TOKEN` for agents that push code, create PRs, or interact with GitHub
 - API keys only when a skill explicitly requires them
 - Never set `ANTHROPIC_API_KEY` as a default empty env variable — the runtime handles this
 
 Example with adapter (only when warranted):
+
 ```yaml
 schema: paperclip/v1
 agents:
@@ -222,7 +226,7 @@ agents:
     adapter:
       type: claude_local
       config:
-        model: claude-sonnet-4-6
+        model: claude-sonnet-4.6
     inputs:
       env:
         GH_TOKEN:
@@ -231,6 +235,7 @@ agents:
 ```
 
 Example — only agents with actual overrides appear:
+
 ```yaml
 schema: paperclip/v1
 agents:

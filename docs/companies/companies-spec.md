@@ -494,7 +494,7 @@ agents:
         ANTHROPIC_API_KEY:
           kind: secret
           requirement: optional
-          default: ""
+          default: ''
         GH_TOKEN:
           kind: secret
           requirement: optional
@@ -593,7 +593,7 @@ For Paperclip, this should be treated as a hard cutover in product direction rat
 
 ## 21. Minimal Example
 
-```text
+````text
 lean-dev-shop/
 ├── COMPANY.md
 ├── agents/
@@ -616,7 +616,8 @@ Optional:
 
 ```text
 .paperclip.yaml
-```
+````
+
 ```
 
 **Recommendation**
@@ -626,3 +627,4 @@ This is the direction I would take:
 - define `SKILL.md` compatibility as non-negotiable
 - treat this spec as an extension of Agent Skills, not a parallel format
 - make `companies.sh` a discovery layer for repos implementing this spec, not a publishing authority
+```

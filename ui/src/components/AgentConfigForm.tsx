@@ -42,6 +42,7 @@ import { defaultCreateValues } from "./agent-config-defaults";
 import { getUIAdapter } from "../adapters";
 import { ClaudeLocalAdvancedFields } from "../adapters/claude-local/config-fields";
 import { CopilotCliAdvancedFields } from "../adapters/copilot-cli/config-fields";
+import { modelEffortSupport as copilotModelEffortSupport } from "@paperclipai/adapter-copilot-cli";
 import { MarkdownEditor } from "./MarkdownEditor";
 import { ChoosePathButton } from "./PathInstructionsModal";
 import { OpenCodeLogoIcon } from "./OpenCodeLogoIcon";
@@ -162,6 +163,14 @@ const claudeThinkingEffortOptions = [
   { id: "low", label: "Low" },
   { id: "medium", label: "Medium" },
   { id: "high", label: "High" },
+] as const;
+
+const copilotThinkingEffortOptions = [
+  { id: "", label: "Auto" },
+  { id: "low", label: "Low" },
+  { id: "medium", label: "Medium" },
+  { id: "high", label: "High" },
+  { id: "xhigh", label: "Extra High" },
 ] as const;
 
 
@@ -377,8 +386,13 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
           : adapterType === "opencode_local"
             ? "variant"
             : "effort";
+  const copilotModelEffort = adapterType === "copilot_cli" ? copilotModelEffortSupport[currentModelId] : undefined;
   const thinkingEffortOptions =
-    adapterType === "codex_local" || adapterType === "copilot_cli"
+    adapterType === "copilot_cli"
+      ? copilotModelEffort
+        ? copilotThinkingEffortOptions.filter((o) => !o.id || copilotModelEffort.includes(o.id))
+        : copilotThinkingEffortOptions
+      : adapterType === "codex_local"
       ? codexThinkingEffortOptions
       : adapterType === "cursor"
         ? cursorModeOptions
@@ -400,7 +414,12 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
       : adapterType === "opencode_local"
         ? eff("adapterConfig", "variant", String(config.variant ?? ""))
       : eff("adapterConfig", "effort", String(config.effort ?? ""));
-  const showThinkingEffort = adapterType !== "gemini_local";
+  const showThinkingEffort =
+    adapterType === "gemini_local"
+      ? false
+      : adapterType === "copilot_cli"
+        ? Boolean(!currentModelId || copilotModelEffort)
+        : true;
   const codexSearchEnabled = adapterType === "codex_local"
     ? (isCreate ? Boolean(val!.search) : eff("adapterConfig", "search", Boolean(config.search)))
     : false;
@@ -684,6 +703,8 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
                           ? "agent"
                         : adapterType === "opencode_local"
                           ? "opencode"
+                        : adapterType === "copilot_cli"
+                          ? "copilot"
                           : "claude"
                   }
                 />

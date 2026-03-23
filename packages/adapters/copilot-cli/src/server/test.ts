@@ -16,6 +16,7 @@ import {
 } from "@paperclipai/adapter-utils/server-utils";
 import path from "node:path";
 import { parseCopilotJsonl, detectCopilotLoginRequired } from "./parse.js";
+import { modelEffortSupport } from "../index.js";
 
 function summarizeStatus(checks: AdapterEnvironmentCheck[]): AdapterEnvironmentTestResult["status"] {
   if (checks.some((check) => check.level === "error")) return "fail";
@@ -129,7 +130,7 @@ export async function testEnvironment(
       const args = ["-p", "Respond with exactly: hello", "--output-format", "json", "--silent", "--no-ask-user", "--no-auto-update"];
       if (allowAll) args.push("--yolo");
       if (model) args.push("--model", model);
-      if (reasoningEffort) args.push("--reasoning-effort", reasoningEffort);
+      if (reasoningEffort && (!model || model in modelEffortSupport)) args.push("--reasoning-effort", reasoningEffort);
       if (extraArgs.length > 0) args.push(...extraArgs);
 
       const probe = await runChildProcess(

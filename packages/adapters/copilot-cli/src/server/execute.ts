@@ -28,6 +28,7 @@ import {
   stripSkillFrontmatter,
 } from "./parse.js";
 import { createJsonlLogInterceptor } from "./jsonl-interceptor.js";
+import { modelEffortSupport } from "../index.js";
 
 const __moduleDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -201,6 +202,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   );
   const model = asString(config.model, "");
   const reasoningEffort = asString(config.reasoningEffort, asString(config.effort, ""));
+  const modelSupportsEffort = !model || model in modelEffortSupport;
   const allowAll = asBoolean(config.allowAll, true);
   const maxAutopilotContinues = asNumber(config.maxAutopilotContinues, 0);
   const noCustomInstructions = asBoolean(config.noCustomInstructions, false);
@@ -342,7 +344,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     if (resumeSessionId) args.push(`--resume=${resumeSessionId}`);
     if (allowAll) args.push("--yolo");
     if (model) args.push("--model", model);
-    if (reasoningEffort) args.push("--reasoning-effort", reasoningEffort);
+    if (reasoningEffort && modelSupportsEffort) args.push("--reasoning-effort", reasoningEffort);
     if (maxAutopilotContinues > 0) {
       args.push("--autopilot", "--max-autopilot-continues", String(maxAutopilotContinues));
     }
@@ -453,16 +455,15 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       : null;
     const clearSessionForMaxTurns = isCopilotMaxTurnsResult(parsedStream.resultJson);
 
-    const normalExit = (proc.exitCode ?? 0) === 0 && !loginMeta.requiresLogin;
-
     return {
       exitCode: proc.exitCode,
       signal: proc.signal,
       timedOut: false,
-      errorMessage: normalExit
-        ? null
-        : describeCopilotFailure(parsedStream.resultJson) ??
-            `Copilot exited with code ${proc.exitCode ?? -1}`,
+      errorMessage:
+        loginMeta.requiresLogin || (proc.exitCode ?? 0) !== 0
+          ? describeCopilotFailure(parsedStream.resultJson) ??
+            `Copilot exited with code ${proc.exitCode ?? -1}`
+          : null,
       errorCode: loginMeta.requiresLogin ? "copilot_auth_required" : null,
       usage: parsedStream.usage ?? undefined,
       sessionId: resolvedSessionId,

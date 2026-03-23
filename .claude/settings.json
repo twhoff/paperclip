@@ -1,0 +1,111 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash scripts/context-mode/pretooluse-wrapper.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "context-mode hook claude-code pretooluse"
+          }
+        ]
+      },
+      {
+        "matcher": "Grep",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "context-mode hook claude-code pretooluse"
+          }
+        ]
+      },
+      {
+        "matcher": "WebFetch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "context-mode hook claude-code pretooluse"
+          }
+        ]
+      },
+      {
+        "matcher": "Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "context-mode hook claude-code pretooluse"
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__context-mode__ctx_execute",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "context-mode hook claude-code pretooluse"
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__context-mode__ctx_execute_file",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "context-mode hook claude-code pretooluse"
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__context-mode__ctx_batch_execute",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "context-mode hook claude-code pretooluse"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "context-mode hook claude-code posttooluse"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "context-mode hook claude-code precompact"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash scripts/context-mode/sessionstart-wrapper.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

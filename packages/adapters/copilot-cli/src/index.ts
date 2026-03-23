@@ -1,6 +1,27 @@
 export const type = "copilot_cli";
 export const label = "GitHub Copilot CLI";
 
+/**
+ * Per-model reasoning effort support.
+ * Key = model id, value = array of supported effort levels.
+ * Models absent from this map do not support reasoning effort.
+ */
+export const modelEffortSupport: Record<string, readonly string[]> = {
+  "gpt-5.4": ["low", "medium", "high", "xhigh"],
+  "gpt-5.3-codex": ["low", "medium", "high", "xhigh"],
+  "gpt-5.2-codex": ["low", "medium", "high", "xhigh"],
+  "gpt-5.2": ["low", "medium", "high"],
+  "gpt-5.1-codex-max": ["low", "medium", "high", "xhigh"],
+  "gpt-5.1-codex": ["low", "medium", "high"],
+  "gpt-5.1": ["low", "medium", "high"],
+  "gpt-5.4-mini": ["low", "medium", "high", "xhigh"],
+  "gpt-5.1-codex-mini": ["low", "medium", "high"],
+  "gpt-5-mini": ["low", "medium", "high"],
+  "claude-sonnet-4.6": ["low", "medium", "high"],
+  "claude-opus-4.6": ["low", "medium", "high"],
+  "claude-opus-4.6-fast": ["low", "medium", "high"],
+};
+
 export const models = [
   { id: "gpt-5.4", label: "GPT 5.4" },
   { id: "gpt-5.3-codex", label: "GPT 5.3 Codex" },
@@ -17,6 +38,8 @@ export const models = [
   { id: "claude-sonnet-4.5", label: "Claude Sonnet 4.5" },
   { id: "claude-haiku-4.5", label: "Claude Haiku 4.5" },
   { id: "claude-opus-4.6", label: "Claude Opus 4.6" },
+  { id: "claude-opus-4.6-fast", label: "Claude Opus 4.6 (fast)" },
+  { id: "claude-opus-4.6-1m", label: "Claude Opus 4.6 (1M)" },
   { id: "claude-opus-4.5", label: "Claude Opus 4.5" },
   { id: "claude-sonnet-4", label: "Claude Sonnet 4" },
   { id: "gemini-3-pro-preview", label: "Gemini 3 Pro" },
@@ -42,7 +65,7 @@ Don't use when:
 Core fields:
 - cwd (string, optional): default absolute working directory for the agent process (created if missing)
 - model (string, optional): model id (e.g. claude-sonnet-4.6, gpt-5.4)
-- reasoningEffort (string, optional): reasoning effort level (low|medium|high); also accepts "effort" as a legacy alias
+- reasoningEffort (string, optional): reasoning effort level (low|medium|high|xhigh); also accepts "effort" as a legacy alias. Not all models support all levels — GPT 5.4/5.3-Codex/5.2-Codex/5.1-Codex-Max/5.4-Mini support xhigh; gpt-4.1 and older Claude/Gemini models have no reasoning effort
 - promptTemplate (string, optional): run prompt template
 - bootstrapPromptTemplate (string, optional): one-time prompt prepended on fresh sessions (when no session to resume); supports the same template variables as promptTemplate
 - maxAutopilotContinues (number, optional): max autonomous turns via --max-autopilot-continues

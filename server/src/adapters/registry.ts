@@ -77,6 +77,8 @@ import {
 } from "hermes-paperclip-adapter";
 import {
   execute as copilotCliExecute,
+  listCopilotCliSkills,
+  syncCopilotCliSkills,
   testEnvironment as copilotCliTestEnvironment,
   sessionCodec as copilotCliSessionCodec,
 } from "@paperclipai/adapter-copilot-cli/server";
@@ -194,6 +196,8 @@ const copilotCliAdapter: ServerAdapterModule = {
   type: "copilot_cli",
   execute: copilotCliExecute,
   testEnvironment: copilotCliTestEnvironment,
+  listSkills: listCopilotCliSkills,
+  syncSkills: syncCopilotCliSkills,
   sessionCodec: copilotCliSessionCodec,
   sessionManagement: getAdapterSessionManagement("copilot_cli") ?? undefined,
   models: copilotCliModels,
