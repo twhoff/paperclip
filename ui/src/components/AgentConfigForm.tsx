@@ -41,6 +41,7 @@ import {
 import { defaultCreateValues } from "./agent-config-defaults";
 import { getUIAdapter } from "../adapters";
 import { ClaudeLocalAdvancedFields } from "../adapters/claude-local/config-fields";
+import { CopilotCliAdvancedFields } from "../adapters/copilot-cli/config-fields";
 import { MarkdownEditor } from "./MarkdownEditor";
 import { ChoosePathButton } from "./PathInstructionsModal";
 import { OpenCodeLogoIcon } from "./OpenCodeLogoIcon";
@@ -285,7 +286,8 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
     adapterType === "codex_local" ||
     adapterType === "gemini_local" ||
     adapterType === "opencode_local" ||
-    adapterType === "cursor";
+    adapterType === "cursor" ||
+    adapterType === "copilot_cli";
   const uiAdapter = useMemo(() => getUIAdapter(adapterType), [adapterType]);
 
   // Fetch adapter models for the effective adapter type
@@ -353,13 +355,15 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
   const thinkingEffortKey =
     adapterType === "codex_local"
       ? "modelReasoningEffort"
-      : adapterType === "cursor"
-        ? "mode"
-        : adapterType === "opencode_local"
-          ? "variant"
-          : "effort";
+      : adapterType === "copilot_cli"
+        ? "reasoningEffort"
+        : adapterType === "cursor"
+          ? "mode"
+          : adapterType === "opencode_local"
+            ? "variant"
+            : "effort";
   const thinkingEffortOptions =
-    adapterType === "codex_local"
+    adapterType === "codex_local" || adapterType === "copilot_cli"
       ? codexThinkingEffortOptions
       : adapterType === "cursor"
         ? cursorModeOptions
@@ -374,6 +378,8 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
           "modelReasoningEffort",
           String(config.modelReasoningEffort ?? config.reasoningEffort ?? ""),
         )
+      : adapterType === "copilot_cli"
+        ? eff("adapterConfig", "reasoningEffort", String(config.reasoningEffort ?? ""))
       : adapterType === "cursor"
         ? eff("adapterConfig", "mode", String(config.mode ?? ""))
       : adapterType === "opencode_local"
@@ -530,32 +536,48 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
                   }
                   set!(nextValues);
                 } else {
-                  // Clear all adapter config and explicitly blank out model + effort/mode keys
-                  // so the old adapter's values don't bleed through via eff()
-                  setOverlay((prev) => ({
-                    ...prev,
-                    adapterType: t,
-                    adapterConfig: {
-                      model:
-                        t === "codex_local"
-                          ? DEFAULT_CODEX_LOCAL_MODEL
-                          : t === "gemini_local"
-                            ? DEFAULT_GEMINI_LOCAL_MODEL
-                          : t === "cursor"
-                            ? DEFAULT_CURSOR_LOCAL_MODEL
-                          : "",
-                      effort: "",
-                      modelReasoningEffort: "",
-                      variant: "",
-                      mode: "",
-                      ...(t === "codex_local"
-                        ? {
-                            dangerouslyBypassApprovalsAndSandbox:
-                              DEFAULT_CODEX_LOCAL_BYPASS_APPROVALS_AND_SANDBOX,
-                          }
-                        : {}),
-                    },
-                  }));
+                  // Clear adapter-specific config but preserve shared fields
+                  // (cwd, promptTemplate, instructionsFilePath) so they survive
+                  // adapter type switches and the subsequent save.
+                  setOverlay((prev) => {
+                    const effShared = (field: string) =>
+                      field in prev.adapterConfig
+                        ? prev.adapterConfig[field]
+                        : (config as Record<string, unknown>)[field];
+                    const cwd = effShared("cwd");
+                    const promptTemplate = effShared("promptTemplate");
+                    const instructionsFilePath = effShared("instructionsFilePath");
+                    return {
+                      ...prev,
+                      adapterType: t,
+                      adapterConfig: {
+                        // Preserve shared fields
+                        ...(cwd != null ? { cwd } : {}),
+                        ...(promptTemplate != null ? { promptTemplate } : {}),
+                        ...(instructionsFilePath != null ? { instructionsFilePath } : {}),
+                        // Reset adapter-specific fields
+                        model:
+                          t === "codex_local"
+                            ? DEFAULT_CODEX_LOCAL_MODEL
+                            : t === "gemini_local"
+                              ? DEFAULT_GEMINI_LOCAL_MODEL
+                            : t === "cursor"
+                              ? DEFAULT_CURSOR_LOCAL_MODEL
+                            : "",
+                        effort: "",
+                        modelReasoningEffort: "",
+                        reasoningEffort: "",
+                        variant: "",
+                        mode: "",
+                        ...(t === "codex_local"
+                          ? {
+                              dangerouslyBypassApprovalsAndSandbox:
+                                DEFAULT_CODEX_LOCAL_BYPASS_APPROVALS_AND_SANDBOX,
+                            }
+                          : {}),
+                      },
+                    };
+                  });
                 }
               }}
             />
@@ -734,6 +756,9 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
               )}
               {adapterType === "claude_local" && (
                 <ClaudeLocalAdvancedFields {...adapterFieldProps} />
+              )}
+              {adapterType === "copilot_cli" && (
+                <CopilotCliAdvancedFields {...adapterFieldProps} />
               )}
 
               <Field label="Extra args (comma-separated)" hint={help.extraArgs}>
@@ -939,7 +964,7 @@ function AdapterEnvironmentResult({ result }: { result: AdapterEnvironmentTestRe
 
 /* ---- Internal sub-components ---- */
 
-const ENABLED_ADAPTER_TYPES = new Set(["claude_local", "codex_local", "gemini_local", "opencode_local", "pi_local", "cursor"]);
+const ENABLED_ADAPTER_TYPES = new Set(["claude_local", "codex_local", "gemini_local", "opencode_local", "pi_local", "cursor", "copilot_cli"]);
 
 /** Display list includes all real adapter types plus UI-only coming-soon entries. */
 const ADAPTER_DISPLAY_LIST: { value: string; label: string; comingSoon: boolean }[] = [

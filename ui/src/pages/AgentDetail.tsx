@@ -1461,10 +1461,10 @@ function ConfigurationTab({
               role="switch"
               aria-checked={canAssignTasks}
               className={cn(
-                "relative inline-flex h-6 w-11 shrink-0 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50",
+                "relative inline-flex h-5 w-9 items-center rounded-full transition-colors shrink-0 disabled:cursor-not-allowed disabled:opacity-50",
                 canAssignTasks
-                  ? "bg-green-500 focus-visible:ring-green-500/70"
-                  : "bg-input/50 focus-visible:ring-ring",
+                  ? "bg-green-600"
+                  : "bg-muted",
               )}
               onClick={() =>
                 updatePermissions.mutate({
@@ -1476,8 +1476,8 @@ function ConfigurationTab({
             >
               <span
                 className={cn(
-                  "inline-block h-4 w-4 transform rounded-full bg-background transition-transform",
-                  canAssignTasks ? "translate-x-6" : "translate-x-1",
+                  "inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform",
+                  canAssignTasks ? "translate-x-4.5" : "translate-x-0.5",
                 )}
               />
             </button>

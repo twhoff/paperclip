@@ -51,6 +51,7 @@ import {
   Loader2,
   FolderOpen,
   ChevronDown,
+  Github,
   X
 } from "lucide-react";
 
@@ -58,6 +59,7 @@ type Step = 1 | 2 | 3 | 4;
 type AdapterType =
   | "claude_local"
   | "codex_local"
+  | "copilot_cli"
   | "gemini_local"
   | "opencode_local"
   | "pi_local"
@@ -198,6 +200,7 @@ export function OnboardingWizard() {
   const isLocalAdapter =
     adapterType === "claude_local" ||
     adapterType === "codex_local" ||
+    adapterType === "copilot_cli" ||
     adapterType === "gemini_local" ||
     adapterType === "opencode_local" ||
     adapterType === "cursor";
@@ -205,6 +208,8 @@ export function OnboardingWizard() {
     command.trim() ||
     (adapterType === "codex_local"
       ? "codex"
+      : adapterType === "copilot_cli"
+        ? "copilot"
       : adapterType === "gemini_local"
         ? "gemini"
       : adapterType === "cursor"
@@ -786,6 +791,12 @@ export function OnboardingWizard() {
                             label: "Gemini CLI",
                             icon: Gem,
                             desc: "Local Gemini agent"
+                          },
+                          {
+                            value: "copilot_cli" as const,
+                            label: "Copilot CLI",
+                            icon: Github,
+                            desc: "Local GitHub Copilot agent"
                           },
                           {
                             value: "process" as const,
