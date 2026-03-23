@@ -59,6 +59,8 @@ Core fields:
 - agent (string, optional): agent name for --agent flag
 - workspaceStrategy (object, optional): execution workspace strategy; supports { type: "git_worktree", baseRef?, branchTemplate?, worktreeParentDir? }
 - workspaceRuntime (object, optional): workspace runtime service intents
+- sessionPolicy (string, optional): "resume" (default) to reuse previous session, "always_fresh" to start a new session every run — useful for lightweight ping/health-check agents
+- skipSkills (boolean, optional): when true, do not inject Paperclip skill instructions via COPILOT_CUSTOM_INSTRUCTIONS_DIRS — useful for agents that need zero tooling context
 
 Operational fields:
 - timeoutSec (number, optional): run timeout in seconds

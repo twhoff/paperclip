@@ -212,6 +212,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const denyTool = asStringArray(config.denyTool);
 
   const skillsEnabled = asBoolean(config.skillsEnabled, true);
+  const sessionPolicy = asString(config.sessionPolicy, "resume");
+  const skipSkills = asBoolean(config.skipSkills, false);
 
   const runtimeConfig = await buildCopilotRuntimeConfig({ runId, agent, config, context, authToken });
   const {
@@ -226,25 +228,27 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     extraArgs,
   } = runtimeConfig;
 
-  const instructionsTmpDir = skillsEnabled ? await buildCopilotInstructionsTmpDir() : null;
+  const instructionsTmpDir = skillsEnabled && !skipSkills ? await buildCopilotInstructionsTmpDir() : null;
   if (instructionsTmpDir) {
     const existing = env.COPILOT_CUSTOM_INSTRUCTIONS_DIRS ?? "";
     env.COPILOT_CUSTOM_INSTRUCTIONS_DIRS = existing
       ? `${existing}:${instructionsTmpDir}`
       : instructionsTmpDir;
     await onLog("stdout", `[paperclip] Injected Paperclip skill instructions from ${instructionsTmpDir}/AGENTS.md\n`);
-  } else if (skillsEnabled) {
+  } else if (skillsEnabled && !skipSkills) {
     await onLog("stdout", `[paperclip] Warning: Could not resolve Paperclip skill instructions (moduleDir: ${__moduleDir})\n`);
   }
 
   const runtimeSessionParams = parseObject(runtime.sessionParams);
   const runtimeSessionId = asString(runtimeSessionParams.sessionId, runtime.sessionId ?? "");
   const runtimeSessionCwd = asString(runtimeSessionParams.cwd, "");
+  const alwaysFresh = sessionPolicy === "always_fresh";
   const canResumeSession =
+    !alwaysFresh &&
     runtimeSessionId.length > 0 &&
     (runtimeSessionCwd.length === 0 || path.resolve(runtimeSessionCwd) === path.resolve(cwd));
   const sessionId = canResumeSession ? runtimeSessionId : null;
-  if (runtimeSessionId && !canResumeSession) {
+  if (runtimeSessionId && !canResumeSession && !alwaysFresh) {
     await onLog(
       "stdout",
       `[paperclip] Copilot session "${runtimeSessionId}" was saved for cwd "${runtimeSessionCwd}" and will not be resumed in "${cwd}".\n`,
@@ -418,6 +422,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         timedOut: true,
         errorMessage: `Timed out after ${timeoutSec}s`,
         errorCode: "timeout",
+        clearSession: alwaysFresh,
       };
     }
 
@@ -470,7 +475,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       costUsd: parsedStream.costUsd ?? 0,
       resultJson: parsedStream.resultJson,
       summary: parsedStream.summary,
-      clearSession: clearSessionForMaxTurns,
+      clearSession: alwaysFresh || clearSessionForMaxTurns,
     };
   };
 
