@@ -1,6 +1,6 @@
 import { and, desc, eq, isNull, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { activityLog, heartbeatRuns, issues, agents } from "@paperclipai/db";
+import { activityLog, heartbeatRuns, issues } from "@paperclipai/db";
 
 export interface ActivityFilters {
   companyId: string;
@@ -9,28 +9,10 @@ export interface ActivityFilters {
   entityId?: string;
 }
 
-export interface FormattedActivityItem {
-  id: string;
-  actor: {
-    type: string;
-    id: string;
-    name: string;
-  };
-  action: string;
-  target: {
-    type: string;
-    id: string;
-    identifier?: string | null;
-  };
-  details?: Record<string, unknown> | null;
-  createdAt: Date;
-}
-
 export function activityService(db: Db) {
   const issueIdAsText = sql<string>`${issues.id}::text`;
-  const agentIdAsText = sql<string>`${agents.id}::text`;
   return {
-    list: async (filters: ActivityFilters): Promise<FormattedActivityItem[]> => {
+    list: (filters: ActivityFilters) => {
       const conditions = [eq(activityLog.companyId, filters.companyId)];
 
       if (filters.agentId) {
@@ -43,31 +25,14 @@ export function activityService(db: Db) {
         conditions.push(eq(activityLog.entityId, filters.entityId));
       }
 
-      const rows = await db
-        .select({
-          activityLog,
-          issue: {
-            id: issues.id,
-            identifier: issues.identifier,
-          },
-          agent: {
-            id: agents.id,
-            name: agents.name,
-          },
-        })
+      return db
+        .select({ activityLog })
         .from(activityLog)
         .leftJoin(
           issues,
           and(
             eq(activityLog.entityType, sql`'issue'`),
             eq(activityLog.entityId, issueIdAsText),
-          ),
-        )
-        .leftJoin(
-          agents,
-          and(
-            eq(activityLog.actorType, sql`'agent'`),
-            eq(activityLog.actorId, agentIdAsText),
           ),
         )
         .where(
@@ -79,25 +44,8 @@ export function activityService(db: Db) {
             ),
           ),
         )
-        .orderBy(desc(activityLog.createdAt));
-
-      return rows.map((row) => ({
-        id: row.activityLog.id,
-        actor: {
-          type: row.activityLog.actorType,
-          id: row.activityLog.actorId,
-          name: row.agent?.name ?? row.activityLog.actorId,
-        },
-        action: row.activityLog.action,
-        target: {
-          type: row.activityLog.entityType,
-          id: row.activityLog.entityId,
-          identifier:
-            row.activityLog.entityType === "issue" ? row.issue?.identifier : undefined,
-        },
-        details: row.activityLog.details,
-        createdAt: row.activityLog.createdAt,
-      }));
+        .orderBy(desc(activityLog.createdAt))
+        .then((rows) => rows.map((r) => r.activityLog));
     },
 
     forIssue: (issueId: string) =>
