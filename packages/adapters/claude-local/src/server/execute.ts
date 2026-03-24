@@ -29,6 +29,7 @@ import {
   isClaudeUnknownSessionError,
 } from "./parse.js";
 import { resolveClaudeDesiredSkillNames } from "./skills.js";
+import { shouldUseBatch, serializeToBatchRequest, generateCustomId } from "./batch.js";
 
 const __moduleDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -309,6 +310,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const dangerouslySkipPermissions = asBoolean(config.dangerouslySkipPermissions, false);
   const sessionPolicy = asString(config.sessionPolicy, "resume");
   const skipSkills = asBoolean(config.skipSkills, false);
+  const batchMode = asString(config.batchMode, "never") as "never" | "smart" | "always";
   const instructionsFilePath = asString(config.instructionsFilePath, "").trim();
   const instructionsFileDir = instructionsFilePath ? `${path.dirname(instructionsFilePath)}/` : "";
   const commandNotes = instructionsFilePath
@@ -368,6 +370,136 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   }
 
   const runtimeSessionParams = parseObject(runtime.sessionParams);
+
+  // Check if we're resuming from a batch
+  const batchPending = asBoolean(runtimeSessionParams.batchPending, false);
+  if (batchPending && typeof runtimeSessionParams.batchEntryId === "string") {
+    // Batch result will be handled by heartbeat service - just return waiting state
+    // The heartbeat service will put the result in sessionParams when available
+    const batchResult = parseObject(runtimeSessionParams.batchResult);
+
+    if (Object.keys(batchResult).length > 0) {
+      // Result is available - deserialize and return
+      const resultType = asString(batchResult.type, "");
+      if (resultType === "succeeded") {
+        return {
+          exitCode: 0,
+          signal: null,
+          timedOut: false,
+          errorMessage: null,
+          usage: {
+            inputTokens: asNumber(batchResult.input_tokens, 0),
+            outputTokens: asNumber(batchResult.output_tokens, 0),
+            cachedInputTokens: asNumber(batchResult.cache_read_input_tokens, 0),
+          },
+          sessionParams: { sessionId: asString(runtimeSessionParams.sessionId, "") || null, cwd } as Record<string, unknown>,
+          provider: "anthropic",
+          biller: "anthropic",
+          billingType: "api" as const,
+          model: asString(batchResult.model, model),
+          costUsd: asNumber(batchResult.costUsd, 0),
+          summary: asString(batchResult.summary, ""),
+          resultJson: batchResult.resultData,
+        };
+      } else {
+        // Batch failed - fall back to sync CLI execution if configured
+        if (asBoolean(config.batchFallbackOnError, true)) {
+          await onLog(
+            "stdout",
+            `[paperclip] Batch result ${resultType}; falling back to sync CLI execution.\n`,
+          );
+          // Clear batch state and continue to CLI execution below
+          delete runtimeSessionParams.batchPending;
+          delete runtimeSessionParams.batchEntryId;
+          delete runtimeSessionParams.batchQueuedAt;
+          delete runtimeSessionParams.batchResult;
+        } else {
+          return {
+            exitCode: 1,
+            signal: null,
+            timedOut: false,
+            errorMessage: `Batch result ${resultType}: ${asString(batchResult.error_message, resultType)}`,
+            errorCode: `batch_${resultType}`,
+            sessionParams: { sessionId: asString(runtimeSessionParams.sessionId, "") || null, cwd } as Record<string, unknown>,
+          };
+        }
+      }
+    } else {
+      // No result yet - return waiting state
+      const entryId = asString(runtimeSessionParams.batchEntryId, "");
+      return {
+        exitCode: 0,
+        signal: null,
+        timedOut: false,
+        errorMessage: null,
+        sessionParams: runtimeSessionParams as Record<string, unknown>,
+        sessionDisplayId: `batch:${entryId.slice(0, 8)}`,
+        provider: "anthropic",
+        biller: "anthropic",
+        billingType: "api" as const,
+        model,
+        summary: "Waiting for batch result...",
+      };
+    }
+  }
+
+  // Check if we should batch this new task
+  if (batchMode !== "never") {
+    const hasApiKey = hasNonEmptyEnvValue(effectiveEnv, "ANTHROPIC_API_KEY");
+    const taskType = asString(parseObject(context).paperclipTaskType, "");
+    const priority = asNumber(parseObject(context).paperclipPriority, 5);
+    const deadlineIso = asString(parseObject(context).paperclipDeadline, "");
+    const isBlocked = asBoolean(parseObject(context).paperclipIsBlocked, false);
+    const isInteractive = asBoolean(parseObject(context).paperclipIsInteractive, false);
+
+    const batchDecisionCtx = {
+      batchMode,
+      hasApiKey,
+      taskType: taskType || null,
+      priority,
+      deadlineIso: deadlineIso || null,
+      queueDepth: 0, // Set by heartbeat service
+      isBlocked,
+      isInteractive,
+    };
+
+    if (shouldUseBatch(batchDecisionCtx)) {
+      // Create batch request
+      const batchRequestParams = serializeToBatchRequest(
+        ctx,
+        config,
+        renderedPrompt || promptTemplate,
+        renderedBootstrapPrompt || "",
+        templateData,
+      );
+
+      const customId = generateCustomId(runId); // Use runId as the entry ID
+
+      await onLog("stdout", `[paperclip] Queuing task for Anthropic Batch API (${customId}).\n`);
+
+      // Return batch queue signal for heartbeat service to process
+      return {
+        exitCode: 0,
+        signal: null,
+        timedOut: false,
+        errorMessage: null,
+        sessionParams: {
+          batchQueue: {
+            customId,
+            requestParamsJson: batchRequestParams,
+          },
+          sessionParamsSnapshot: runtimeSessionParams,
+          batchQueuedAt: new Date().toISOString(),
+        } as Record<string, unknown>,
+        provider: "anthropic",
+        biller: "anthropic",
+        billingType: "api" as const,
+        model,
+        summary: "Queued for batch processing",
+      };
+    }
+  }
+
   const runtimeSessionId = asString(runtimeSessionParams.sessionId, runtime.sessionId ?? "");
   const runtimeSessionCwd = asString(runtimeSessionParams.cwd, "");
   const alwaysFresh = sessionPolicy === "always_fresh";

@@ -26,7 +26,7 @@ import { createApp } from "./app.js";
 import { loadConfig } from "./config.js";
 import { logger } from "./middleware/logger.js";
 import { setupLiveEventsWebSocketServer } from "./realtime/live-events-ws.js";
-import { heartbeatService, reconcilePersistedRuntimeServicesOnStartup, routineService } from "./services/index.js";
+import { createBatchJobService, heartbeatService, reconcilePersistedRuntimeServicesOnStartup, routineService } from "./services/index.js";
 import { createStorageServiceFromConfig } from "./storage/index.js";
 import { printStartupBanner } from "./startup-banner.js";
 import { getBoardClaimWarningUrl, initializeBoardClaimChallenge } from "./board-claim.js";
@@ -527,7 +527,19 @@ export async function startServer(): Promise<StartedServer> {
   if (config.heartbeatSchedulerEnabled) {
     const heartbeat = heartbeatService(db as any);
     const routines = routineService(db as any);
-  
+    const batchService = createBatchJobService({
+      db: db as any,
+      anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? "",
+      submitIntervalMs: 5 * 60 * 1000, // 5 minutes
+      pollIntervalMs: 5 * 60 * 1000, // 5 minutes
+      maxBatchSize: 100,
+      maxBatchWaitMs: 24 * 60 * 60 * 1000, // 24 hours
+    });
+
+    // Start batch job service
+    batchService.start();
+    logger.info("Batch job service started");
+
     // Reap orphaned running runs at startup while in-memory execution state is empty,
     // then resume any persisted queued runs that were waiting on the previous process.
     void heartbeat

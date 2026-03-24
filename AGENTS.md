@@ -143,3 +143,20 @@ A change is done when all are true:
 2. Typecheck, tests, and build pass
 3. Contracts are synced across db/shared/server/ui
 4. Docs updated when behavior or commands change
+
+## 11. Landing the Plane
+
+Work is NOT complete until `git push` succeeds.
+
+1. File issues for any remaining or follow-up work
+2. Run quality gates if code changed:
+   ```sh
+   pnpm -r typecheck
+   pnpm test:run
+   pnpm build
+   ```
+3. Push:
+   ```sh
+   git pull --rebase && git push
+   ```
+4. Verify: `git status` must show "up to date with origin"

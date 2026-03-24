@@ -30,10 +30,19 @@ Core fields:
 - sessionPolicy (string, optional): "resume" (default) to reuse previous session, "always_fresh" to start a new session every run — useful for lightweight ping/health-check agents
 - skipSkills (boolean, optional): when true, do not mount the Paperclip skills directory via --add-dir — useful for agents that need zero tooling context
 
+Batch API fields (async execution, 50% cost discount):
+- batchMode (string, optional): "never" | "smart" | "always". Default: "never".
+  When "smart", routes eligible tasks to Anthropic Batch API (~24h latency, 50% cheaper).
+  Requires ANTHROPIC_API_KEY. Bypasses Claude CLI — single-turn LLM response only.
+- batchMaxWaitSec (number, optional): seconds to wait for batch result before falling back to sync. Default: 86400 (24h).
+- batchFallbackOnError (boolean, optional): fall back to sync if batch fails. Default: true.
+- batchMaxTokens (number, optional): max_tokens for batch requests. Default: 8192.
+
 Operational fields:
 - timeoutSec (number, optional): run timeout in seconds
 - graceSec (number, optional): SIGTERM grace period in seconds
 
 Notes:
 - When Paperclip realizes a workspace/runtime for a run, it injects PAPERCLIP_WORKSPACE_* and PAPERCLIP_RUNTIME_* env vars for agent-side tooling.
+- Batch API mode is single-turn (no multi-turn agentic loops or tool callbacks). Best for analysis, reports, summarization, data processing.
 `;

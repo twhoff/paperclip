@@ -10,6 +10,7 @@ import {
   agentRuntimeState,
   agentTaskSessions,
   agentWakeupRequests,
+  batchQueueEntries,
   heartbeatRunEvents,
   heartbeatRuns,
   issues,
@@ -23,7 +24,7 @@ import { getRunLogStore, type RunLogHandle } from "./run-log-store.js";
 import { getServerAdapter, runningProcesses } from "../adapters/index.js";
 import type { AdapterExecutionResult, AdapterInvocationMeta, AdapterSessionCodec, UsageSummary } from "../adapters/index.js";
 import { createLocalAgentJwt } from "../agent-auth-jwt.js";
-import { parseObject, asBoolean, asNumber, appendWithCap, MAX_EXCERPT_BYTES } from "../adapters/utils.js";
+import { parseObject, asString, asBoolean, asNumber, appendWithCap, MAX_EXCERPT_BYTES } from "../adapters/utils.js";
 import { costService } from "./costs.js";
 import { companySkillService } from "./company-skills.js";
 import { budgetService, type BudgetEnforcementScope } from "./budgets.js";
@@ -1264,6 +1265,82 @@ export function heartbeatService(db: Db) {
       })
       .returning()
       .then((rows) => rows[0]);
+  }
+
+  /**
+   * Intercept batch queue signals from adapter and insert into batch_queue_entries.
+   * Transforms sessionParams to replace batchQueue with batchPending flags.
+   * Returns { entryId, transformedParams } or null if no batch queue signal.
+   */
+  async function processBatchQueueSignal(input: {
+    companyId: string;
+    agentId: string;
+    adapterType: string;
+    taskKey: string;
+    runId: string;
+    sessionParams: Record<string, unknown> | null;
+  }): Promise<{ entryId: string; transformedParams: Record<string, unknown> } | null> {
+    if (!input.sessionParams) return null;
+
+    const batchQueue = parseObject(input.sessionParams.batchQueue);
+    if (Object.keys(batchQueue).length === 0) return null;
+
+    const customId = asString(batchQueue.customId, "");
+    const requestParamsJson = parseObject(batchQueue.requestParamsJson);
+    if (!customId || Object.keys(requestParamsJson).length === 0) return null;
+
+    // Extract the snapshot and queue time for restoration
+    const sessionParamsSnapshot = parseObject(input.sessionParams.sessionParamsSnapshot);
+    const batchQueuedAt = asString(input.sessionParams.batchQueuedAt, new Date().toISOString());
+
+    try {
+      // INSERT into batch_queue_entries
+      const result = await db
+        .insert(batchQueueEntries)
+        .values({
+          companyId: input.companyId,
+          agentId: input.agentId,
+          customId,
+          adapterType: input.adapterType,
+          taskKey: input.taskKey,
+          runId: input.runId,
+          requestParamsJson,
+          sessionParamsSnapshotJson: Object.keys(sessionParamsSnapshot).length > 0 ? sessionParamsSnapshot : null,
+          status: "pending",
+        })
+        .returning();
+
+      if (!result || result.length === 0) {
+        logger.warn({ customId }, "batch queue entry insert returned no rows");
+        return null;
+      }
+
+      const entry = result[0];
+
+      // Transform sessionParams: remove batchQueue, add batchPending flags
+      const transformedParams: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(input.sessionParams)) {
+        if (key !== "batchQueue" && key !== "sessionParamsSnapshot") {
+          transformedParams[key] = value;
+        }
+      }
+      transformedParams.batchPending = true;
+      transformedParams.batchEntryId = entry.id;
+      transformedParams.batchQueuedAt = batchQueuedAt;
+
+      logger.debug(
+        { customId, entryId: entry.id, companyId: input.companyId, agentId: input.agentId },
+        "batch queue entry created and sessionParams transformed",
+      );
+
+      return {
+        entryId: entry.id,
+        transformedParams,
+      };
+    } catch (err) {
+      logger.error({ err, customId }, "failed to process batch queue signal");
+      return null;
+    }
   }
 
   async function setRunStatus(
@@ -2576,12 +2653,28 @@ export function heartbeatService(db: Db) {
               adapterType: agent.adapterType,
             });
           } else {
+            // Process batch queue signal if present
+            let sessionParamsToStore = nextSessionState.params;
+            if (nextSessionState.params && outcome === "succeeded") {
+              const batchSignal = await processBatchQueueSignal({
+                companyId: agent.companyId,
+                agentId: agent.id,
+                adapterType: agent.adapterType,
+                taskKey,
+                runId: finalizedRun.id,
+                sessionParams: nextSessionState.params,
+              });
+              if (batchSignal) {
+                sessionParamsToStore = batchSignal.transformedParams;
+              }
+            }
+
             await upsertTaskSession({
               companyId: agent.companyId,
               agentId: agent.id,
               adapterType: agent.adapterType,
               taskKey,
-              sessionParamsJson: nextSessionState.params,
+              sessionParamsJson: sessionParamsToStore,
               sessionDisplayId: nextSessionState.displayId,
               lastRunId: finalizedRun.id,
               lastError: outcome === "succeeded" ? null : (adapterResult.errorMessage ?? "run_failed"),
