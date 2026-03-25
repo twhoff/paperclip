@@ -23,6 +23,7 @@ import {
   parseCopilotJsonl,
   describeCopilotFailure,
   detectCopilotLoginRequired,
+  detectCopilotRateLimit,
   isCopilotMaxTurnsResult,
   isCopilotUnknownSessionError,
   stripSkillFrontmatter,
@@ -416,6 +417,11 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       stdout: proc.stdout,
       stderr: proc.stderr,
     });
+    const rateLimitMeta = detectCopilotRateLimit({
+      stdout: proc.stdout,
+      stderr: proc.stderr,
+      latestError: parsedStream.latestError ?? null,
+    });
 
     if (proc.timedOut) {
       return {
@@ -433,8 +439,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         exitCode: proc.exitCode,
         signal: proc.signal,
         timedOut: false,
-        errorMessage: parseFallbackErrorMessage(proc),
-        errorCode: loginMeta.requiresLogin ? "copilot_auth_required" : null,
+        errorMessage: rateLimitMeta.message ?? parseFallbackErrorMessage(proc),
+        errorCode: loginMeta.requiresLogin ? "copilot_auth_required" : rateLimitMeta.isRateLimited ? "rate_limit" : null,
         resultJson: {
           stdout: proc.stdout,
           stderr: proc.stderr,
@@ -461,10 +467,13 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       timedOut: false,
       errorMessage:
         loginMeta.requiresLogin || (proc.exitCode ?? 0) !== 0
-          ? describeCopilotFailure(parsedStream.resultJson) ??
+          ? describeCopilotFailure(parsedStream.resultJson, {
+              rateLimitMessage: rateLimitMeta.isRateLimited ? rateLimitMeta.message : null,
+            }) ??
             `Copilot exited with code ${proc.exitCode ?? -1}`
           : null,
-      errorCode: loginMeta.requiresLogin ? "copilot_auth_required" : null,
+      errorCode:
+        loginMeta.requiresLogin ? "copilot_auth_required" : rateLimitMeta.isRateLimited ? "rate_limit" : null,
       usage: parsedStream.usage ?? undefined,
       sessionId: resolvedSessionId,
       sessionParams: resolvedSessionParams,

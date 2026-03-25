@@ -3,6 +3,7 @@ import {
   parseCopilotJsonl,
   describeCopilotFailure,
   detectCopilotLoginRequired,
+  detectCopilotRateLimit,
   isCopilotMaxTurnsResult,
   mapCopilotJsonlLineToLog,
   stripSkillFrontmatter,
@@ -27,6 +28,13 @@ const TOOL_USE_JSONL = [
   '{"type":"tool.execution_complete","data":{"toolCallId":"tc1","model":"claude-sonnet-4.6","interactionId":"i1","success":true,"result":{"content":"test\\n<exited with exit code 0>","detailedContent":"test\\n<exited with exit code 0>"},"toolTelemetry":{}},"id":"g1","timestamp":"2026-03-20T13:41:13.902Z","parentId":"h1"}',
   '{"type":"assistant.message","data":{"messageId":"m2","content":"Done.","toolRequests":[],"interactionId":"i1","outputTokens":3},"id":"j1","timestamp":"2026-03-20T13:41:17.000Z","parentId":"k1"}',
   '{"type":"result","timestamp":"2026-03-20T13:41:17.278Z","sessionId":"session-456","exitCode":0,"usage":{"premiumRequests":1,"totalApiDurationMs":8558,"sessionDurationMs":22087,"codeChanges":{"linesAdded":0,"linesRemoved":0,"filesModified":[]}}}',
+].join("\n");
+
+const RATE_LIMIT_JSONL = [
+  '{"type":"session.tools_updated","data":{"model":"claude-sonnet-4.6"},"id":"r1","timestamp":"2026-03-24T22:25:44.688Z","parentId":"p1","ephemeral":true}',
+  '{"type":"session.info","data":{"infoType":"model_retry","message":"Request failed due to a transient API error. Retrying..."},"id":"r2","timestamp":"2026-03-24T22:33:15.138Z","parentId":"p2","ephemeral":true}',
+  '{"type":"session.error","data":{"errorType":"rate_limit","message":"Sorry, you\'ve hit a rate limit that restricts the number of Copilot model requests you can make within a specific time period. Please try again in 1 minute.","statusCode":429,"providerCallId":"req-123"},"id":"r3","timestamp":"2026-03-24T22:41:43.154Z","parentId":"p3"}',
+  '{"type":"result","timestamp":"2026-03-24T22:41:43.179Z","sessionId":"rate-limited-session","exitCode":1,"usage":{"premiumRequests":0,"totalApiDurationMs":29617,"sessionDurationMs":26000140}}',
 ].join("\n");
 
 describe("parseCopilotJsonl", () => {
@@ -74,6 +82,16 @@ describe("parseCopilotJsonl", () => {
     const result = parseCopilotJsonl(SIMPLE_JSONL);
     expect(result.premiumRequests).toBe(1);
   });
+
+  it("captures structured session errors from jsonl", () => {
+    const result = parseCopilotJsonl(RATE_LIMIT_JSONL);
+    expect(result.latestError).toEqual({
+      type: "rate_limit",
+      statusCode: 429,
+      message:
+        "Sorry, you've hit a rate limit that restricts the number of Copilot model requests you can make within a specific time period. Please try again in 1 minute.",
+    });
+  });
 });
 
 describe("describeCopilotFailure", () => {
@@ -83,6 +101,15 @@ describe("describeCopilotFailure", () => {
 
   it("describes failure for non-zero exit code", () => {
     expect(describeCopilotFailure({ exitCode: 1 })).toBe("Copilot CLI exited with code 1");
+  });
+
+  it("prefers the structured rate limit message when provided", () => {
+    expect(
+      describeCopilotFailure(
+        { exitCode: 1 },
+        { rateLimitMessage: "Sorry, you've hit a rate limit. Please try again in 1 minute." },
+      ),
+    ).toBe("Sorry, you've hit a rate limit. Please try again in 1 minute.");
   });
 });
 
@@ -103,6 +130,49 @@ describe("detectCopilotLoginRequired", () => {
         stderr: "",
       }).requiresLogin,
     ).toBe(false);
+  });
+});
+
+describe("detectCopilotRateLimit", () => {
+  it("detects rate limiting from structured session errors", () => {
+    expect(
+      detectCopilotRateLimit({
+        stdout: RATE_LIMIT_JSONL,
+        stderr: "",
+        latestError: {
+          type: "rate_limit",
+          statusCode: 429,
+          message: "Please try again in 1 minute.",
+        },
+      }),
+    ).toEqual({
+      isRateLimited: true,
+      message: "Please try again in 1 minute.",
+    });
+  });
+
+  it("detects rate limiting from raw output text when structured data is unavailable", () => {
+    expect(
+      detectCopilotRateLimit({
+        stdout: "",
+        stderr: "Error 429: rate limit exceeded. Please retry later.",
+      }),
+    ).toEqual({
+      isRateLimited: true,
+      message: "Error 429: rate limit exceeded. Please retry later.",
+    });
+  });
+
+  it("returns false for non-rate-limited output", () => {
+    expect(
+      detectCopilotRateLimit({
+        stdout: "normal output",
+        stderr: "",
+      }),
+    ).toEqual({
+      isRateLimited: false,
+      message: null,
+    });
   });
 });
 

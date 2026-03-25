@@ -18,6 +18,7 @@ export function parseCopilotJsonl(stdout: string) {
   let finalResult: Record<string, unknown> | null = null;
   const assistantTexts: string[] = [];
   let totalOutputTokens = 0;
+  let latestError: { type: string | null; statusCode: number | null; message: string | null } | null = null;
 
   for (const rawLine of stdout.split(/\r?\n/)) {
     const line = rawLine.trim();
@@ -43,6 +44,15 @@ export function parseCopilotJsonl(stdout: string) {
       continue;
     }
 
+    if (type === "session.error") {
+      latestError = {
+        type: asString(data.errorType, "") || null,
+        statusCode: Number.isFinite(asNumber(data.statusCode, Number.NaN)) ? asNumber(data.statusCode, Number.NaN) : null,
+        message: asString(data.message, "") || null,
+      };
+      continue;
+    }
+
     if (type === "result") {
       finalResult = event;
       sessionId = asString(event.sessionId, sessionId ?? "") || sessionId;
@@ -57,6 +67,7 @@ export function parseCopilotJsonl(stdout: string) {
       usage: null as UsageSummary | null,
       summary: assistantTexts.join("\n\n").trim(),
       resultJson: null as Record<string, unknown> | null,
+      latestError,
     };
   }
 
@@ -86,15 +97,20 @@ export function parseCopilotJsonl(stdout: string) {
     summary,
     resultJson: finalResult,
     premiumRequests,
+    latestError,
   };
 }
 
 /**
  * Describe a Copilot CLI failure from the result event.
  */
-export function describeCopilotFailure(result: Record<string, unknown>): string | null {
+export function describeCopilotFailure(
+  result: Record<string, unknown>,
+  options?: { rateLimitMessage?: string | null },
+): string | null {
   const exitCode = asNumber(result.exitCode, -1);
   if (exitCode === 0) return null;
+  if (options?.rateLimitMessage) return options.rateLimitMessage;
   return `Copilot CLI exited with code ${exitCode}`;
 }
 
@@ -110,6 +126,35 @@ export function detectCopilotLoginRequired(input: {
 }): { requiresLogin: boolean } {
   const combined = [input.stdout, input.stderr].join("\n");
   return { requiresLogin: AUTH_REQUIRED_RE.test(combined) };
+}
+
+const RATE_LIMIT_RE = /rate limit|too many requests|status\s*code\s*[:=]?\s*429|\b429\b/i;
+
+export function detectCopilotRateLimit(input: {
+  stdout: string;
+  stderr: string;
+  latestError?: {
+    type: string | null;
+    statusCode: number | null;
+    message: string | null;
+  } | null;
+}): { isRateLimited: boolean; message: string | null } {
+  if (
+    input.latestError?.type === "rate_limit" ||
+    input.latestError?.statusCode === 429
+  ) {
+    return {
+      isRateLimited: true,
+      message: input.latestError.message ?? "Copilot request rate limited",
+    };
+  }
+
+  const combined = [input.stdout, input.stderr].join("\n");
+  const match = combined.match(/[^\n]*?(rate limit|too many requests|429)[^\n]*/i);
+  return {
+    isRateLimited: RATE_LIMIT_RE.test(combined),
+    message: match?.[0]?.trim() ?? null,
+  };
 }
 
 /**

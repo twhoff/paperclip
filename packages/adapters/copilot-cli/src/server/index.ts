@@ -4,6 +4,7 @@ export {
   parseCopilotJsonl,
   describeCopilotFailure,
   detectCopilotLoginRequired,
+  detectCopilotRateLimit,
   isCopilotMaxTurnsResult,
   isCopilotUnknownSessionError,
 } from "./parse.js";
