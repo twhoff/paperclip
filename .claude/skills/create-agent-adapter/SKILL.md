@@ -845,7 +845,7 @@ Shared constants and dependencies:
 - [ ] Run `pnpm install` to link
 
 Registry registration:
-- [ ] Registered in `server/src/adapters/registry.ts`
+- [ ] Registered in `server/src/adapters/registry.ts` with `supportsLocalAgentJwt: true` (for local CLI adapters — required for `authenticated` deployment mode)
 - [ ] Registered in `ui/src/adapters/registry.ts`
 - [ ] Registered in `cli/src/adapters/registry.ts`
 

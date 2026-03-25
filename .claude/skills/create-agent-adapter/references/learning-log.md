@@ -89,3 +89,40 @@ Adapters with brand logos should use a dedicated SVG icon component (e.g. `OzLog
 - `NewAgentDialog.tsx` adapter card array
 - `OnboardingWizard.tsx` adapter card array
 - The `icon` field takes `ComponentType<{ className?: string }>` so custom SVG components work directly
+
+### supportsLocalAgentJwt Must Be true for Local Adapters
+
+**Impact:** Silent, total auth failure in `authenticated` deployment mode (e.g. `pnpm dev:tailscale`). Agents run but cannot call the Paperclip API.
+
+In the server adapter registry (`server/src/adapters/registry.ts`), every local CLI adapter must set `supportsLocalAgentJwt: true`. This single boolean controls whether the heartbeat service mints a short-lived JWT and injects it as `PAPERCLIP_API_KEY` into the agent's environment.
+
+When set to `false`:
+- The heartbeat service skips `createLocalAgentJwt()` entirely — no `authToken` is passed to the adapter
+- The adapter's `execute.ts` receives `authToken: undefined` and does not set `PAPERCLIP_API_KEY`
+- `pcurl` falls back to the `pcli-local` token, which only works in `local_trusted` mode
+- In `authenticated` mode, every API call returns 401/403
+- The agent spends its entire run trying to authenticate, burning credits on debugging instead of work
+
+**This failure is silent at the server level.** The only signal is a warning log: `"local agent jwt secret missing or invalid; running without injected PAPERCLIP_API_KEY"`. But when the flag is `false`, no warning is logged at all — the server intentionally skips JWT minting.
+
+**The fix is one line:**
+```ts
+const myAdapter: ServerAdapterModule = {
+  // ...
+  supportsLocalAgentJwt: true,  // CRITICAL: must be true for authenticated mode
+};
+```
+
+**Testing:** After setting this, verify by running an agent with `pnpm dev:tailscale` and checking the run logs for `PAPERCLIP_API_KEY set: yes` (or `pcurl /api/agents/me` returning agent data instead of `error: Agent authentication required`).
+
+### Skill Placement: .claude/skills/ vs skills/
+
+Paperclip has two separate skill directories with different purposes:
+
+1. **`.claude/skills/`** (or `.agents/skills/`) — **Maintainer skills.** These are for human developers using Claude Code (or other coding agents) to work on the repo itself. They are NOT auto-synced to agent runtimes. Examples: `create-agent-adapter`, `release`, `doc-maintenance`.
+
+2. **`skills/`** (repo root) — **Runtime skills.** These are auto-synced to agent runtime environments (e.g. `~/.warp/skills/` for Oz, tmpdir for Claude Code) by adapter `execute.ts` before every run. The adapter's `listPaperclipSkillEntries()` scans this directory. Examples: `paperclip`, `paperclip-create-agent`, `tailscale-jwt-auth`.
+
+If you create a skill that agents need at runtime (troubleshooting guides, API procedures, workflow instructions), it **must** go in `skills/`. If you create a skill for developers maintaining the codebase, it goes in `.claude/skills/`.
+
+**Common mistake:** Creating a runtime skill in `.claude/skills/` and wondering why agents can't find it. The auto-sync only reads from `skills/`. A skill can exist in both locations if it serves both audiences.
