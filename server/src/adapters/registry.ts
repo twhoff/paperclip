@@ -86,6 +86,18 @@ import {
   agentConfigurationDoc as copilotCliAgentConfigurationDoc,
   models as copilotCliModels,
 } from "@paperclipai/adapter-copilot-cli";
+import {
+  execute as ozExecute,
+  listOzSkills,
+  syncOzSkills,
+  testEnvironment as ozTestEnvironment,
+  sessionCodec as ozSessionCodec,
+  listOzModels,
+} from "@paperclipai/adapter-oz-local/server";
+import {
+  agentConfigurationDoc as ozAgentConfigurationDoc,
+  models as ozModels,
+} from "@paperclipai/adapter-oz-local";
 import { processAdapter } from "./process/index.js";
 import { httpAdapter } from "./http/index.js";
 
@@ -205,6 +217,19 @@ const copilotCliAdapter: ServerAdapterModule = {
   agentConfigurationDoc: copilotCliAgentConfigurationDoc,
 };
 
+const ozLocalAdapter: ServerAdapterModule = {
+  type: "oz_local",
+  execute: ozExecute,
+  testEnvironment: ozTestEnvironment,
+  listSkills: listOzSkills,
+  syncSkills: syncOzSkills,
+  sessionCodec: ozSessionCodec,
+  models: ozModels,
+  listModels: listOzModels,
+  supportsLocalAgentJwt: false,
+  agentConfigurationDoc: ozAgentConfigurationDoc,
+};
+
 const adaptersByType = new Map<string, ServerAdapterModule>(
   [
     claudeLocalAdapter,
@@ -216,6 +241,7 @@ const adaptersByType = new Map<string, ServerAdapterModule>(
     openclawGatewayAdapter,
     hermesLocalAdapter,
     copilotCliAdapter,
+    ozLocalAdapter,
     processAdapter,
     httpAdapter,
   ].map((a) => [a.type, a]),
