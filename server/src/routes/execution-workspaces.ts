@@ -317,8 +317,9 @@ export function executionWorkspaceRoutes(db: Db) {
       if (r.ew.cwd) byCwd.set(r.ew.cwd, r);
     }
 
-    // Also fetch all project issues by identifier for fallback matching
-    const projectIssues = await db
+    // Fetch all company issues by identifier for fallback matching
+    // Issues may not have a projectId set, so we search company-wide
+    const companyIssues = await db
       .select({
         id: issues.id,
         title: issues.title,
@@ -327,14 +328,14 @@ export function executionWorkspaceRoutes(db: Db) {
         agentId: issues.assigneeAgentId,
       })
       .from(issues)
-      .where(and(eq(issues.companyId, companyId), eq(issues.projectId, projectId)));
+      .where(eq(issues.companyId, companyId));
 
     const issueByIdentifier = new Map(
-      projectIssues.filter((i) => i.identifier).map((i) => [i.identifier!.toUpperCase(), i]),
+      companyIssues.filter((i) => i.identifier).map((i) => [i.identifier!.toUpperCase(), i]),
     );
 
     // Build a set of agent IDs we need and fetch them
-    const agentIds = new Set(projectIssues.map((i) => i.agentId).filter(Boolean) as string[]);
+    const agentIds = new Set(companyIssues.map((i) => i.agentId).filter(Boolean) as string[]);
     let agentMap = new Map<string, { id: string; name: string }>();
     if (agentIds.size > 0) {
       const agentRows = await db
