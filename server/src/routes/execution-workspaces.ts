@@ -330,7 +330,7 @@ export function executionWorkspaceRoutes(db: Db) {
       .where(and(eq(issues.companyId, companyId), eq(issues.projectId, projectId)));
 
     const issueByIdentifier = new Map(
-      projectIssues.filter((i) => i.identifier).map((i) => [i.identifier!, i]),
+      projectIssues.filter((i) => i.identifier).map((i) => [i.identifier!.toUpperCase(), i]),
     );
 
     // Build a set of agent IDs we need and fetch them
@@ -384,7 +384,7 @@ export function executionWorkspaceRoutes(db: Db) {
 
         // Fallback: extract issue identifier from the branch/path and look up directly
         const identifier = extractIdentifier(wt.branch, wt.path);
-        const issue = identifier ? issueByIdentifier.get(identifier) ?? null : null;
+        const issue = identifier ? issueByIdentifier.get(identifier.toUpperCase()) ?? null : null;
         const agent = issue?.agentId ? agentMap.get(issue.agentId) ?? null : null;
 
         return {

@@ -26,7 +26,10 @@ import { cn } from "@/lib/utils";
 
 const STALE_THRESHOLD_MS = 7 * 24 * 60 * 60 * 1000;
 
-type WorktreeDisplayStatus = "active" | "idle" | "stale" | "in_review" | "archived" | "cleanup_failed" | "untracked";
+type WorktreeDisplayStatus =
+  | "active" | "idle" | "stale" | "in_review" | "archived" | "cleanup_failed"
+  | "untracked"
+  | "issue_open" | "issue_in_progress" | "issue_done" | "issue_blocked" | "issue_cancelled";
 
 function timeAgo(date: Date): string {
   const secs = Math.floor((Date.now() - date.getTime()) / 1000);
@@ -42,29 +45,53 @@ function timeAgo(date: Date): string {
 
 function getDisplayStatus(entry: GitWorktreeEntry): WorktreeDisplayStatus {
   const ws = entry.executionWorkspace;
-  if (!ws) return "untracked";
-  if (ws.status === "idle") {
-    const lastUsed = ws.lastUsedAt ? new Date(ws.lastUsedAt).getTime() : 0;
-    if (Date.now() - lastUsed > STALE_THRESHOLD_MS) return "stale";
+  if (ws) {
+    if (ws.status === "idle") {
+      const lastUsed = ws.lastUsedAt ? new Date(ws.lastUsedAt).getTime() : 0;
+      if (Date.now() - lastUsed > STALE_THRESHOLD_MS) return "stale";
+    }
+    return ws.status as WorktreeDisplayStatus;
   }
-  return ws.status as WorktreeDisplayStatus;
+  // No execution workspace — derive from issue status if available
+  if (entry.issue?.status) {
+    const s = entry.issue.status.toLowerCase();
+    if (s === "in_progress" || s === "in progress") return "issue_in_progress";
+    if (s === "blocked") return "issue_blocked";
+    if (s === "done") return "issue_done";
+    if (s === "cancelled" || s === "canceled") return "issue_cancelled";
+    if (s === "open" || s === "backlog" || s === "todo") return "issue_open";
+    return "issue_open";
+  }
+  return "untracked";
 }
 
 const STATUS_CONFIG: Record<WorktreeDisplayStatus, { label: string; className: string }> = {
-  active:         { label: "Active",         className: "bg-green-100 text-green-800 border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:border-green-800" },
-  idle:           { label: "Idle",           className: "bg-secondary text-secondary-foreground" },
-  stale:          { label: "Stale",          className: "bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-900/30 dark:text-amber-400 dark:border-amber-800" },
-  in_review:      { label: "In Review",      className: "bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-800" },
-  archived:       { label: "Archived",       className: "text-muted-foreground border-border" },
-  cleanup_failed: { label: "Cleanup Failed", className: "bg-destructive/10 text-destructive border-destructive/20" },
-  untracked:      { label: "Untracked",      className: "bg-secondary text-secondary-foreground" },
+  active:            { label: "Active",         className: "bg-green-100 text-green-800 border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:border-green-800" },
+  idle:              { label: "Idle",           className: "bg-secondary text-secondary-foreground" },
+  stale:             { label: "Stale",          className: "bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-900/30 dark:text-amber-400 dark:border-amber-800" },
+  in_review:         { label: "In Review",      className: "bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-800" },
+  archived:          { label: "Archived",       className: "text-muted-foreground border-border" },
+  cleanup_failed:    { label: "Cleanup Failed", className: "bg-destructive/10 text-destructive border-destructive/20" },
+  issue_open:        { label: "Open",           className: "bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-800" },
+  issue_in_progress: { label: "In Progress",    className: "bg-green-100 text-green-800 border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:border-green-800" },
+  issue_done:        { label: "Done",           className: "text-muted-foreground border-border" },
+  issue_blocked:     { label: "Blocked",        className: "bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-900/30 dark:text-amber-400 dark:border-amber-800" },
+  issue_cancelled:   { label: "Cancelled",      className: "text-muted-foreground border-border" },
+  untracked:         { label: "Untracked",      className: "bg-secondary text-secondary-foreground" },
 };
 
 function StatusBadge({ entry }: { entry: GitWorktreeEntry }) {
   const display = getDisplayStatus(entry);
   const config = STATUS_CONFIG[display];
+  const tooltip = display === "untracked"
+    ? "No matching issue found in this project"
+    : undefined;
   return (
-    <Badge variant="outline" className={cn("text-[11px] font-medium", config.className)}>
+    <Badge
+      variant="outline"
+      className={cn("text-[11px] font-medium", config.className)}
+      title={tooltip}
+    >
       {config.label}
     </Badge>
   );
