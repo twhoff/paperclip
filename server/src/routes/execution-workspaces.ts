@@ -1,5 +1,7 @@
-import { and, eq, inArray, leftJoin } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { Router } from "express";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import type { Db } from "@paperclipai/db";
 import { agents, executionWorkspaces, issues, projects, projectWorkspaces } from "@paperclipai/db";
 import { updateExecutionWorkspaceSchema } from "@paperclipai/shared";
@@ -12,6 +14,8 @@ import {
 } from "../services/workspace-runtime.js";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
 import { toExecutionWorkspace } from "../services/execution-workspaces.js";
+
+const execFileAsync = promisify(execFile);
 
 const TERMINAL_ISSUE_STATUSES = new Set(["done", "cancelled"]);
 
@@ -62,8 +66,8 @@ export function executionWorkspaceRoutes(db: Db) {
 
       const result = rows.map((row) => ({
         ...toExecutionWorkspace(row.workspace),
-        issue: row.issue.id ? { id: row.issue.id, title: row.issue.title, identifier: row.issue.identifier, status: row.issue.status } : null,
-        agent: row.agent.id ? { id: row.agent.id, name: row.agent.name } : null,
+        issue: row.issue?.id ? { id: row.issue.id, title: row.issue.title, identifier: row.issue.identifier, status: row.issue.status } : null,
+        agent: row.agent?.id ? { id: row.agent.id, name: row.agent.name } : null,
       }));
       res.json(result);
       return;
@@ -222,6 +226,99 @@ export function executionWorkspaceRoutes(db: Db) {
       },
     });
     res.json(workspace);
+  });
+
+  // GET /companies/:companyId/projects/:projectId/git-worktrees
+  // Reads live git worktrees from the project's primary workspace cwd and enriches
+  // with DB execution_workspace records for status/issue/agent info.
+  router.get("/companies/:companyId/projects/:projectId/git-worktrees", async (req, res) => {
+    const { companyId, projectId } = req.params as { companyId: string; projectId: string };
+    assertCompanyAccess(req, companyId);
+
+    // Find primary project workspace to get the local path
+    const [pw] = await db
+      .select({ id: projectWorkspaces.id, cwd: projectWorkspaces.cwd })
+      .from(projectWorkspaces)
+      .where(
+        and(
+          eq(projectWorkspaces.companyId, companyId),
+          eq(projectWorkspaces.projectId, projectId),
+          eq(projectWorkspaces.isPrimary, true),
+        ),
+      )
+      .limit(1);
+
+    if (!pw?.cwd) {
+      res.json([]);
+      return;
+    }
+
+    // Run git worktree list --porcelain in the repo root
+    let stdout = "";
+    try {
+      ({ stdout } = await execFileAsync("git", ["worktree", "list", "--porcelain"], { cwd: pw.cwd }));
+    } catch {
+      res.json([]);
+      return;
+    }
+
+    // Parse porcelain output into worktree entries
+    type GitWorktreeEntry = { path: string; head: string; branch: string | null; bare: boolean };
+    const parsed: GitWorktreeEntry[] = [];
+    let current: Partial<GitWorktreeEntry> | null = null;
+    for (const line of stdout.split("\n")) {
+      if (line.startsWith("worktree ")) {
+        if (current?.path) parsed.push(current as GitWorktreeEntry);
+        current = { path: line.slice(9), head: "", branch: null, bare: false };
+      } else if (line.startsWith("HEAD ") && current) {
+        current.head = line.slice(5);
+      } else if (line.startsWith("branch ") && current) {
+        current.branch = line.slice(7).replace(/^refs\/heads\//, "");
+      } else if (line === "bare" && current) {
+        current.bare = true;
+      }
+    }
+    if (current?.path) parsed.push(current as GitWorktreeEntry);
+
+    // Fetch all non-archived execution_workspaces for this project to enrich
+    const dbWorkspaces = await db
+      .select({
+        ew: executionWorkspaces,
+        issue: {
+          id: issues.id,
+          title: issues.title,
+          identifier: issues.identifier,
+          status: issues.status,
+        },
+        agent: {
+          id: agents.id,
+          name: agents.name,
+        },
+      })
+      .from(executionWorkspaces)
+      .leftJoin(issues, eq(issues.id, executionWorkspaces.sourceIssueId))
+      .leftJoin(agents, eq(agents.id, issues.assigneeAgentId))
+      .where(and(eq(executionWorkspaces.companyId, companyId), eq(executionWorkspaces.projectId, projectId)));
+
+    const byBranch = new Map(dbWorkspaces.map((r) => [r.ew.branchName, r]));
+    const byCwd = new Map(dbWorkspaces.map((r) => [r.ew.cwd, r]));
+
+    const result = parsed
+      .filter((wt) => !wt.bare)
+      .map((wt) => {
+        const dbRow = byBranch.get(wt.branch ?? "") ?? byCwd.get(wt.path);
+        return {
+          path: wt.path,
+          head: wt.head,
+          branch: wt.branch,
+          isMainWorktree: wt.path === pw.cwd,
+          executionWorkspace: dbRow ? toExecutionWorkspace(dbRow.ew) : null,
+          issue: dbRow?.issue?.id ? dbRow.issue : null,
+          agent: dbRow?.agent?.id ? dbRow.agent : null,
+        };
+      });
+
+    res.json(result);
   });
 
   return router;

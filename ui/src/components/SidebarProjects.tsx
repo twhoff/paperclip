@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState } from "react";
 import { NavLink, useLocation } from "@/lib/router";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronRight, GitBranch, Plus } from "lucide-react";
+import { ChevronRight, CircleDot, DollarSign, GitBranch, LayoutDashboard, Plus, Settings2 } from "lucide-react";
 import {
   DndContext,
   PointerSensor,
@@ -92,23 +92,30 @@ function SortableProjectItem({
           {project.pauseReason === "budget" ? <BudgetSidebarMarker title="Project paused by budget" /> : null}
         </NavLink>
         <div className="ml-5 flex flex-col gap-0.5">
-          <NavLink
-            to={`/projects/${routeRef}/worktrees`}
-            onClick={() => {
-              if (isMobile) setSidebarOpen(false);
-            }}
-            className={({ isActive }) =>
-              cn(
-                "flex items-center gap-2 px-3 py-1 text-[12px] transition-colors",
-                isActive
-                  ? "bg-accent text-foreground"
-                  : "text-foreground/60 hover:bg-accent/50 hover:text-foreground",
-              )
-            }
-          >
-            <GitBranch className="h-3 w-3 shrink-0" />
-            <span>Worktrees</span>
-          </NavLink>
+          {[
+            { to: `/projects/${routeRef}/issues`,        icon: CircleDot,       label: "Issues" },
+            { to: `/projects/${routeRef}/overview`,       icon: LayoutDashboard, label: "Overview" },
+            { to: `/projects/${routeRef}/configuration`,  icon: Settings2,       label: "Configuration" },
+            { to: `/projects/${routeRef}/budget`,         icon: DollarSign,      label: "Budget" },
+            { to: `/projects/${routeRef}/worktrees`,      icon: GitBranch,       label: "Worktrees" },
+          ].map(({ to, icon: Icon, label }) => (
+            <NavLink
+              key={to}
+              to={to}
+              onClick={() => { if (isMobile) setSidebarOpen(false); }}
+              className={({ isActive }) =>
+                cn(
+                  "flex items-center gap-2 px-3 py-1 text-[12px] transition-colors",
+                  isActive
+                    ? "bg-accent text-foreground"
+                    : "text-foreground/60 hover:bg-accent/50 hover:text-foreground",
+                )
+              }
+            >
+              <Icon className="h-3 w-3 shrink-0" />
+              <span>{label}</span>
+            </NavLink>
+          ))}
         </div>
         {projectSidebarSlots.length > 0 && (
           <div className="ml-5 flex flex-col gap-0.5">

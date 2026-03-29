@@ -1,6 +1,16 @@
 import type { EnrichedExecutionWorkspace, ExecutionWorkspace } from "@paperclipai/shared";
 import { api } from "./client";
 
+export type GitWorktreeEntry = {
+  path: string;
+  head: string;
+  branch: string | null;
+  isMainWorktree: boolean;
+  executionWorkspace: ExecutionWorkspace | null;
+  issue: { id: string; title: string; identifier: string | null; status: string } | null;
+  agent: { id: string; name: string } | null;
+};
+
 export const executionWorkspacesApi = {
   list: (
     companyId: string,
@@ -33,6 +43,8 @@ export const executionWorkspacesApi = {
     if (filters?.status) params.set("status", filters.status);
     return api.get<EnrichedExecutionWorkspace[]>(`/companies/${companyId}/execution-workspaces?${params.toString()}`);
   },
+  listGitWorktrees: (companyId: string, projectId: string) =>
+    api.get<GitWorktreeEntry[]>(`/companies/${companyId}/projects/${projectId}/git-worktrees`),
   get: (id: string) => api.get<ExecutionWorkspace>(`/execution-workspaces/${id}`),
   update: (id: string, data: Record<string, unknown>) => api.patch<ExecutionWorkspace>(`/execution-workspaces/${id}`, data),
 };

@@ -2,9 +2,8 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@/lib/router";
 import { GitBranch, MoreHorizontal, RefreshCw, Trash2, ExternalLink } from "lucide-react";
-import type { EnrichedExecutionWorkspace } from "@paperclipai/shared";
+import type { GitWorktreeEntry } from "../api/execution-workspaces";
 import { executionWorkspacesApi } from "../api/execution-workspaces";
-import { queryKeys } from "../lib/queryKeys";
 import { useToast } from "../context/ToastContext";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -27,7 +26,7 @@ import { cn } from "@/lib/utils";
 
 const STALE_THRESHOLD_MS = 7 * 24 * 60 * 60 * 1000;
 
-type WorktreeDisplayStatus = "active" | "idle" | "stale" | "in_review" | "archived" | "cleanup_failed";
+type WorktreeDisplayStatus = "active" | "idle" | "stale" | "in_review" | "archived" | "cleanup_failed" | "untracked";
 
 function timeAgo(date: Date): string {
   const secs = Math.floor((Date.now() - date.getTime()) / 1000);
@@ -38,11 +37,12 @@ function timeAgo(date: Date): string {
   if (hrs < 24) return `${hrs}h ago`;
   const days = Math.floor(hrs / 24);
   if (days < 30) return `${days}d ago`;
-  const months = Math.floor(days / 30);
-  return `${months}mo ago`;
+  return `${Math.floor(days / 30)}mo ago`;
 }
 
-function getDisplayStatus(ws: EnrichedExecutionWorkspace): WorktreeDisplayStatus {
+function getDisplayStatus(entry: GitWorktreeEntry): WorktreeDisplayStatus {
+  const ws = entry.executionWorkspace;
+  if (!ws) return "untracked";
   if (ws.status === "idle") {
     const lastUsed = ws.lastUsedAt ? new Date(ws.lastUsedAt).getTime() : 0;
     if (Date.now() - lastUsed > STALE_THRESHOLD_MS) return "stale";
@@ -57,10 +57,11 @@ const STATUS_CONFIG: Record<WorktreeDisplayStatus, { label: string; className: s
   in_review:      { label: "In Review",      className: "bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-800" },
   archived:       { label: "Archived",       className: "text-muted-foreground border-border" },
   cleanup_failed: { label: "Cleanup Failed", className: "bg-destructive/10 text-destructive border-destructive/20" },
+  untracked:      { label: "Untracked",      className: "bg-secondary text-secondary-foreground" },
 };
 
-function StatusBadge({ ws }: { ws: EnrichedExecutionWorkspace }) {
-  const display = getDisplayStatus(ws);
+function StatusBadge({ entry }: { entry: GitWorktreeEntry }) {
+  const display = getDisplayStatus(entry);
   const config = STATUS_CONFIG[display];
   return (
     <Badge variant="outline" className={cn("text-[11px] font-medium", config.className)}>
@@ -70,9 +71,9 @@ function StatusBadge({ ws }: { ws: EnrichedExecutionWorkspace }) {
 }
 
 type ConfirmAction =
-  | { type: "archive"; ws: EnrichedExecutionWorkspace }
-  | { type: "retry"; ws: EnrichedExecutionWorkspace }
-  | { type: "prune"; count: number };
+  | { type: "archive"; entry: GitWorktreeEntry }
+  | { type: "retry"; entry: GitWorktreeEntry }
+  | { type: "prune"; count: number; ids: string[] };
 
 interface WorktreesContentProps {
   companyId: string;
@@ -85,17 +86,17 @@ export function WorktreesContent({ companyId, projectId }: WorktreesContentProps
   const [pendingAction, setPendingAction] = useState<ConfirmAction | null>(null);
 
   const { data: worktrees = [], isLoading } = useQuery({
-    queryKey: [...queryKeys.executionWorkspaces.list(companyId, { projectId }), "enriched"],
-    queryFn: () => executionWorkspacesApi.listEnriched(companyId, { projectId }),
+    queryKey: ["git-worktrees", companyId, projectId],
+    queryFn: () => executionWorkspacesApi.listGitWorktrees(companyId, projectId),
+    refetchInterval: 30_000,
   });
 
-  const gitWorktrees = worktrees.filter((ws) => ws.strategyType === "git_worktree");
-  const staleWorktrees = gitWorktrees.filter((ws) => getDisplayStatus(ws) === "stale");
+  // Exclude the main worktree (primary checkout) from the list
+  const branchWorktrees = worktrees.filter((w) => !w.isMainWorktree);
+  const staleEntries = branchWorktrees.filter((w) => getDisplayStatus(w) === "stale" && w.executionWorkspace);
 
   const invalidate = () => {
-    queryClient.invalidateQueries({
-      queryKey: queryKeys.executionWorkspaces.list(companyId, { projectId }),
-    });
+    queryClient.invalidateQueries({ queryKey: ["git-worktrees", companyId, projectId] });
   };
 
   const archiveMutation = useMutation({
@@ -116,9 +117,7 @@ export function WorktreesContent({ companyId, projectId }: WorktreesContentProps
 
   const pruneAllMutation = useMutation({
     mutationFn: async (ids: string[]) => {
-      for (const id of ids) {
-        await executionWorkspacesApi.update(id, { status: "archived" });
-      }
+      for (const id of ids) await executionWorkspacesApi.update(id, { status: "archived" });
     },
     onSuccess: () => {
       invalidate();
@@ -131,12 +130,12 @@ export function WorktreesContent({ companyId, projectId }: WorktreesContentProps
 
   const handleConfirm = () => {
     if (!pendingAction) return;
-    if (pendingAction.type === "archive") {
-      archiveMutation.mutate(pendingAction.ws.id);
-    } else if (pendingAction.type === "retry") {
-      archiveMutation.mutate(pendingAction.ws.id);
+    if (pendingAction.type === "archive" && pendingAction.entry.executionWorkspace) {
+      archiveMutation.mutate(pendingAction.entry.executionWorkspace.id);
+    } else if (pendingAction.type === "retry" && pendingAction.entry.executionWorkspace) {
+      archiveMutation.mutate(pendingAction.entry.executionWorkspace.id);
     } else if (pendingAction.type === "prune") {
-      pruneAllMutation.mutate(staleWorktrees.map((ws) => ws.id));
+      pruneAllMutation.mutate(pendingAction.ids);
     }
     setPendingAction(null);
   };
@@ -151,7 +150,7 @@ export function WorktreesContent({ companyId, projectId }: WorktreesContentProps
     );
   }
 
-  if (gitWorktrees.length === 0) {
+  if (branchWorktrees.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-16 gap-3 text-center">
         <GitBranch className="h-8 w-8 text-muted-foreground/50" />
@@ -165,31 +164,35 @@ export function WorktreesContent({ companyId, projectId }: WorktreesContentProps
 
   return (
     <div className="flex flex-col gap-4">
-      {/* Header row */}
       <div className="flex items-center justify-between">
         <p className="text-sm text-muted-foreground">
-          {gitWorktrees.length} {gitWorktrees.length === 1 ? "worktree" : "worktrees"}
+          {branchWorktrees.length} {branchWorktrees.length === 1 ? "worktree" : "worktrees"}
         </p>
-        {staleWorktrees.length > 0 && (
+        {staleEntries.length > 0 && (
           <Button
             variant="outline"
             size="sm"
             className="text-destructive hover:text-destructive border-destructive/30 hover:border-destructive/60 hover:bg-destructive/5"
             disabled={isMutating}
-            onClick={() => setPendingAction({ type: "prune", count: staleWorktrees.length })}
+            onClick={() =>
+              setPendingAction({
+                type: "prune",
+                count: staleEntries.length,
+                ids: staleEntries.map((e) => e.executionWorkspace!.id),
+              })
+            }
           >
             <Trash2 className="h-3.5 w-3.5 mr-1.5" />
-            Prune {staleWorktrees.length} stale
+            Prune {staleEntries.length} stale
           </Button>
         )}
       </div>
 
-      {/* Table */}
       <div className="rounded-md border border-border overflow-hidden">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-border bg-muted/40">
-              <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Name / Branch</th>
+              <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Branch / Path</th>
               <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Issue</th>
               <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Agent</th>
               <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Status</th>
@@ -198,21 +201,20 @@ export function WorktreesContent({ companyId, projectId }: WorktreesContentProps
             </tr>
           </thead>
           <tbody>
-            {gitWorktrees.map((ws, idx) => (
+            {branchWorktrees.map((entry, idx) => (
               <WorktreeRow
-                key={ws.id}
-                ws={ws}
-                isLast={idx === gitWorktrees.length - 1}
+                key={entry.path}
+                entry={entry}
+                isLast={idx === branchWorktrees.length - 1}
                 isMutating={isMutating}
-                onArchive={() => setPendingAction({ type: "archive", ws })}
-                onRetryCleanup={() => setPendingAction({ type: "retry", ws })}
+                onArchive={() => setPendingAction({ type: "archive", entry })}
+                onRetryCleanup={() => setPendingAction({ type: "retry", entry })}
               />
             ))}
           </tbody>
         </table>
       </div>
 
-      {/* Confirmation dialog */}
       <Dialog open={!!pendingAction} onOpenChange={(open) => { if (!open) setPendingAction(null); }}>
         <DialogContent>
           <DialogHeader>
@@ -223,19 +225,13 @@ export function WorktreesContent({ companyId, projectId }: WorktreesContentProps
             </DialogTitle>
             <DialogDescription>
               {pendingAction?.type === "archive" && (
-                <>
-                  The worktree for <strong>{pendingAction.ws.name}</strong> will be archived and its directory removed from disk. This cannot be undone.
-                </>
+                <>The worktree for <strong>{pendingAction.entry.branch ?? pendingAction.entry.path}</strong> will be archived and its directory removed from disk. This cannot be undone.</>
               )}
               {pendingAction?.type === "retry" && (
-                <>
-                  Re-run cleanup for <strong>{pendingAction.ws.name}</strong>. The worktree directory will be removed from disk.
-                </>
+                <>Re-run cleanup for <strong>{pendingAction.entry.branch ?? pendingAction.entry.path}</strong>. The worktree directory will be removed from disk.</>
               )}
               {pendingAction?.type === "prune" && (
-                <>
-                  {pendingAction.count} idle {pendingAction.count === 1 ? "worktree" : "worktrees"} that haven't been used in over 7 days will be archived and removed from disk. This cannot be undone.
-                </>
+                <>{pendingAction.count} idle {pendingAction.count === 1 ? "worktree" : "worktrees"} unused for over 7 days will be archived and removed from disk. This cannot be undone.</>
               )}
             </DialogDescription>
           </DialogHeader>
@@ -252,35 +248,39 @@ export function WorktreesContent({ companyId, projectId }: WorktreesContentProps
 }
 
 function WorktreeRow({
-  ws,
+  entry,
   isLast,
   isMutating,
   onArchive,
   onRetryCleanup,
 }: {
-  ws: EnrichedExecutionWorkspace;
+  entry: GitWorktreeEntry;
   isLast: boolean;
   isMutating: boolean;
   onArchive: () => void;
   onRetryCleanup: () => void;
 }) {
-  const isArchived = ws.status === "archived";
-  const isCleanupFailed = ws.status === "cleanup_failed";
+  const ws = entry.executionWorkspace;
+  const isArchived = ws?.status === "archived";
+  const isCleanupFailed = ws?.status === "cleanup_failed";
+  const pathBasename = entry.path.split("/").pop() ?? entry.path;
 
   return (
     <tr className={cn("hover:bg-muted/30 transition-colors", !isLast && "border-b border-border")}>
-      {/* Name / branch */}
+      {/* Branch / path */}
       <td className="px-4 py-3">
         <div className="flex flex-col gap-0.5">
-          <span className={cn("font-medium text-[13px]", isArchived && "text-muted-foreground")}>{ws.name}</span>
-          {ws.branchName && (
-            <div className="flex items-center gap-1 text-xs text-muted-foreground">
-              <GitBranch className="h-3 w-3 shrink-0" />
-              <span className="font-mono truncate max-w-[200px]">{ws.branchName}</span>
-            </div>
-          )}
-          {ws.cleanupReason && isCleanupFailed && (
-            <span className="text-xs text-destructive truncate max-w-[200px]" title={ws.cleanupReason}>
+          <div className="flex items-center gap-1.5">
+            <GitBranch className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <span className={cn("font-mono text-[13px]", isArchived && "text-muted-foreground")}>
+              {entry.branch ?? pathBasename}
+            </span>
+          </div>
+          <span className="text-[11px] text-muted-foreground/60 truncate max-w-[260px]" title={entry.path}>
+            {entry.path}
+          </span>
+          {ws?.cleanupReason && isCleanupFailed && (
+            <span className="text-xs text-destructive truncate max-w-[260px]" title={ws.cleanupReason}>
               {ws.cleanupReason}
             </span>
           )}
@@ -289,15 +289,15 @@ function WorktreeRow({
 
       {/* Issue */}
       <td className="px-4 py-3">
-        {ws.issue ? (
+        {entry.issue ? (
           <Link
-            to={`/issues/${ws.issue.id}`}
+            to={`/issues/${entry.issue.id}`}
             className="flex items-center gap-1 text-[13px] text-foreground/80 hover:text-foreground hover:underline max-w-[180px]"
           >
-            {ws.issue.identifier && (
-              <span className="shrink-0 text-xs text-muted-foreground font-mono">{ws.issue.identifier}</span>
+            {entry.issue.identifier && (
+              <span className="shrink-0 text-xs text-muted-foreground font-mono">{entry.issue.identifier}</span>
             )}
-            <span className="truncate">{ws.issue.title}</span>
+            <span className="truncate">{entry.issue.title}</span>
             <ExternalLink className="h-3 w-3 shrink-0 opacity-50" />
           </Link>
         ) : (
@@ -307,12 +307,12 @@ function WorktreeRow({
 
       {/* Agent */}
       <td className="px-4 py-3">
-        {ws.agent ? (
+        {entry.agent ? (
           <Link
-            to={`/agents/${ws.agent.id}`}
+            to={`/agents/${entry.agent.id}`}
             className="text-[13px] text-foreground/80 hover:text-foreground hover:underline"
           >
-            {ws.agent.name}
+            {entry.agent.name}
           </Link>
         ) : (
           <span className="text-muted-foreground text-xs">—</span>
@@ -321,19 +321,17 @@ function WorktreeRow({
 
       {/* Status */}
       <td className="px-4 py-3">
-        <StatusBadge ws={ws} />
+        <StatusBadge entry={entry} />
       </td>
 
       {/* Last used */}
       <td className="px-4 py-3 text-xs text-muted-foreground whitespace-nowrap">
-        {ws.lastUsedAt
-          ? timeAgo(new Date(ws.lastUsedAt))
-          : "—"}
+        {ws?.lastUsedAt ? timeAgo(new Date(ws.lastUsedAt)) : "—"}
       </td>
 
       {/* Actions */}
       <td className="px-2 py-3 text-right">
-        {!isArchived && (
+        {ws && !isArchived && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" size="icon" className="h-7 w-7" disabled={isMutating}>
@@ -342,34 +340,24 @@ function WorktreeRow({
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              {ws.issue && (
+              {entry.issue && (
                 <DropdownMenuItem asChild>
-                  <Link to={`/issues/${ws.issue.id}`} className="cursor-pointer">
-                    Open issue
-                  </Link>
+                  <Link to={`/issues/${entry.issue.id}`} className="cursor-pointer">Open issue</Link>
                 </DropdownMenuItem>
               )}
-              {ws.agent && (
+              {entry.agent && (
                 <DropdownMenuItem asChild>
-                  <Link to={`/agents/${ws.agent.id}`} className="cursor-pointer">
-                    Open agent
-                  </Link>
+                  <Link to={`/agents/${entry.agent.id}`} className="cursor-pointer">Open agent</Link>
                 </DropdownMenuItem>
               )}
-              {(ws.issue || ws.agent) && <DropdownMenuSeparator />}
+              {(entry.issue || entry.agent) && <DropdownMenuSeparator />}
               {isCleanupFailed ? (
-                <DropdownMenuItem
-                  className="text-destructive focus:text-destructive"
-                  onClick={onRetryCleanup}
-                >
+                <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={onRetryCleanup}>
                   <RefreshCw className="h-4 w-4 mr-2" />
                   Retry cleanup
                 </DropdownMenuItem>
               ) : (
-                <DropdownMenuItem
-                  className="text-destructive focus:text-destructive"
-                  onClick={onArchive}
-                >
+                <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={onArchive}>
                   <Trash2 className="h-4 w-4 mr-2" />
                   Archive & clean up
                 </DropdownMenuItem>
