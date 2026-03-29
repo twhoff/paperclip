@@ -39,10 +39,7 @@ const __moduleDir = path.dirname(fileURLToPath(import.meta.url));
  * this into the skills tmpdir to pre-approve headless agent tool usage.
  */
 const PAPERCLIP_AGENT_ALLOWED_TOOLS = [
-  // Paperclip API calls via pcurl/curl (env vars injected by the adapter)
-  "Bash(pcurl *)",
-  "Bash(curl *)",
-  // context-mode MCP sandbox tools
+  // context-mode MCP sandbox tools (used for Paperclip API calls via paperclip-ctx-auth skill)
   "mcp__context-mode__ctx_execute(*)",
   "mcp__context-mode__ctx_batch_execute(*)",
   "mcp__context-mode__ctx_execute_file(*)",
