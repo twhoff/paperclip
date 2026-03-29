@@ -195,6 +195,8 @@ Agent configuration includes an **adapter** that defines how Paperclip invokes t
 | `openclaw_gateway`   | OpenClaw gateway API    | Managed OpenClaw agent via gateway             |
 | `gemini_local`       | Gemini CLI process      | Local Gemini CLI with sandbox and approval     |
 | `hermes_local`       | Hermes agent process    | Local Hermes agent                             |
+| `oz_local`           | Warp Oz CLI process     | Local Warp Oz agent                            |
+| `copilot_cli`        | GitHub Copilot CLI      | Local GitHub Copilot CLI agent                 |
 
 The `process` and `http` adapters ship as defaults. Additional adapters have been added for specific agent runtimes (see list above), and new adapter types can be registered via the plugin system (see Plugin / Extension Architecture).
 

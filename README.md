@@ -123,6 +123,12 @@ Hierarchies, roles, reporting lines. Your agents have a boss, a title, and a job
 Monitor and manage your autonomous businesses from anywhere.
 </td>
 </tr>
+<tr>
+<td align="center" colspan="3">
+<h3>⏱️ Routines <sup><em>Beta</em></sup></h3>
+Scheduled and webhook-triggered automations that create and assign tasks. Run on a cron, fire from an API call, or trigger from external events.
+</td>
+</tr>
 </table>
 
 <br/>
