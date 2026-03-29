@@ -34,14 +34,48 @@ import { shouldUseBatch, serializeToBatchRequest, generateCustomId } from "./bat
 const __moduleDir = path.dirname(fileURLToPath(import.meta.url));
 
 /**
+ * Tools that Paperclip agents need without interactive approval.
+ * Claude Code loads settings.json from --add-dir directories, so we write
+ * this into the skills tmpdir to pre-approve headless agent tool usage.
+ */
+const PAPERCLIP_AGENT_ALLOWED_TOOLS = [
+  // Paperclip API calls via pcurl/curl (env vars injected by the adapter)
+  "Bash(pcurl *)",
+  "Bash(curl *)",
+  // context-mode MCP sandbox tools
+  "mcp__context-mode__ctx_execute(*)",
+  "mcp__context-mode__ctx_batch_execute(*)",
+  "mcp__context-mode__ctx_execute_file(*)",
+  "mcp__context-mode__ctx_search(*)",
+  "mcp__context-mode__ctx_fetch_and_index(*)",
+  "mcp__context-mode__ctx_index(*)",
+  "mcp__context-mode__ctx_stats(*)",
+  "mcp__context-mode__ctx_upgrade(*)",
+  "mcp__context-mode__ctx_doctor(*)",
+];
+
+/**
  * Create a tmpdir with `.claude/skills/` containing symlinks to skills from
  * the repo's `skills/` directory, so `--add-dir` makes Claude Code discover
  * them as proper registered skills.
+ *
+ * Also writes a `.claude/settings.json` with pre-approved tool permissions so
+ * headless agents are not blocked waiting for interactive approval.
  */
 async function buildSkillsDir(config: Record<string, unknown>): Promise<string> {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-skills-"));
-  const target = path.join(tmp, ".claude", "skills");
+  const claudeDir = path.join(tmp, ".claude");
+  const target = path.join(claudeDir, "skills");
   await fs.mkdir(target, { recursive: true });
+
+  // Pre-approve tools so headless agents don't stall on permission prompts.
+  const extraAllowedTools = asStringArray(config.allowedTools);
+  const allowedTools = [...PAPERCLIP_AGENT_ALLOWED_TOOLS, ...extraAllowedTools];
+  await fs.writeFile(
+    path.join(claudeDir, "settings.json"),
+    JSON.stringify({ permissions: { allow: allowedTools } }, null, 2),
+  );
+
   const availableEntries = await readPaperclipRuntimeSkillEntries(config, __moduleDir);
   const desiredNames = new Set(
     resolveClaudeDesiredSkillNames(

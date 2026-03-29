@@ -11,8 +11,11 @@ TOOL_NAME=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.std
 if [ "$TOOL_NAME" = "Bash" ]; then
   COMMAND=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tool_input',{}).get('command',''))" 2>/dev/null || echo "")
 
-  # Allow curl/wget to localhost (Paperclip API at 127.0.0.1:3100)
-  # Match literal localhost addresses OR Paperclip env var references
+  # Allow pcurl/curl/wget to localhost (Paperclip API at 127.0.0.1:3100)
+  # Match pcurl (always allowed) OR curl/wget to localhost addresses / Paperclip env var references
+  if echo "$COMMAND" | grep -qiE '^pcurl\s'; then
+    exit 0  # pcurl always allowed — it wraps curl with auth + TOON compression
+  fi
   if echo "$COMMAND" | grep -qiE '(curl|wget)\s' && \
      echo "$COMMAND" | grep -qiE '(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|\$PAPERCLIP_API_URL|\$\{PAPERCLIP_API_URL)'; then
     exit 0  # empty output = passthrough

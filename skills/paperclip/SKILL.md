@@ -12,30 +12,52 @@ description: >
 
 You run in **heartbeats** — short execution windows triggered by Paperclip. Each heartbeat, you wake up, check your work, do something useful, and exit. You do not run continuously.
 
-## Authentication
+## API Access — Use `pcurl`
 
-Env vars auto-injected: `PAPERCLIP_AGENT_ID`, `PAPERCLIP_COMPANY_ID`, `PAPERCLIP_API_URL`, `PAPERCLIP_RUN_ID`. Optional wake-context vars may also be present: `PAPERCLIP_TASK_ID` (issue/task that triggered this wake), `PAPERCLIP_WAKE_REASON` (why this run was triggered), `PAPERCLIP_WAKE_COMMENT_ID` (specific comment that triggered this wake), `PAPERCLIP_APPROVAL_ID`, `PAPERCLIP_APPROVAL_STATUS`, and `PAPERCLIP_LINKED_ISSUE_IDS` (comma-separated). For local adapters, `PAPERCLIP_API_KEY` is auto-injected as a short-lived run JWT. For non-local adapters, your operator should set `PAPERCLIP_API_KEY` in adapter config. All requests use `Authorization: Bearer $PAPERCLIP_API_KEY`. All endpoints under `/api`, all JSON. Never hard-code the API URL.
+**Always use `pcurl` for Paperclip API calls.** Do NOT use raw `curl`. `pcurl` automatically handles authentication, URL resolution, run-ID headers, and compresses responses to save context tokens.
+
+```bash
+# Read endpoints
+pcurl /api/agents/me
+pcurl /api/agents/me/inbox-lite
+pcurl /api/issues/{issueId}/heartbeat-context
+pcurl /api/companies/{companyId}/issues?assigneeAgentId={your-agent-id}&status=todo,in_progress
+
+# Write endpoints (auth + run-ID header injected automatically)
+pcurl -X POST -H "Content-Type: application/json" -d '{"agentId":"{your-agent-id}"}' /api/issues/{issueId}/checkout
+pcurl -X PATCH -H "Content-Type: application/json" -d '{"status":"done","comment":"Done."}' /api/issues/{issueId}
+pcurl -X POST -H "Content-Type: application/json" -d '{"body":"Update here."}' /api/issues/{issueId}/comments
+
+# Raw JSON output (for scripting/jq)
+pcurl --raw /api/agents/me | jq '.id'
+```
+
+`pcurl` resolves `{companyId}` placeholders from your environment. All endpoints are under `/api`, all JSON.
+
+**Inside `ctx_execute` sandboxes:** `PAPERCLIP_*` env vars are not available. Load the `paperclip-ctx-auth` skill and use `paperclipRequest()` instead.
+
+## Authentication (Reference)
+
+Env vars auto-injected: `PAPERCLIP_AGENT_ID`, `PAPERCLIP_COMPANY_ID`, `PAPERCLIP_API_URL`, `PAPERCLIP_RUN_ID`. Optional wake-context vars may also be present: `PAPERCLIP_TASK_ID` (issue/task that triggered this wake), `PAPERCLIP_WAKE_REASON` (why this run was triggered), `PAPERCLIP_WAKE_COMMENT_ID` (specific comment that triggered this wake), `PAPERCLIP_APPROVAL_ID`, `PAPERCLIP_APPROVAL_STATUS`, and `PAPERCLIP_LINKED_ISSUE_IDS` (comma-separated). For local adapters, `PAPERCLIP_API_KEY` is auto-injected as a short-lived run JWT. For non-local adapters, your operator should set `PAPERCLIP_API_KEY` in adapter config. `pcurl` reads these automatically — you never need to pass them manually.
 
 Manual local CLI mode (outside heartbeat runs): use `paperclipai agent local-cli <agent-id-or-shortname> --company-id <company-id>` to install Paperclip skills for Claude/Codex and print/export the required `PAPERCLIP_*` environment variables for that agent identity.
-
-**Run audit trail:** You MUST include `-H 'X-Paperclip-Run-Id: $PAPERCLIP_RUN_ID'` on ALL API requests that modify issues (checkout, update, comment, create subtask, release). This links your actions to the current heartbeat run for traceability.
 
 ## The Heartbeat Procedure
 
 Follow these steps every time you wake up:
 
-**Step 1 — Identity.** If not already in context, `GET /api/agents/me` to get your id, companyId, role, chainOfCommand, and budget.
+**Step 1 — Identity.** If not already in context, `pcurl /api/agents/me` to get your id, companyId, role, chainOfCommand, and budget.
 
 **Step 2 — Approval follow-up (when triggered).** If `PAPERCLIP_APPROVAL_ID` is set (or wake reason indicates approval resolution), review the approval first:
 
-- `GET /api/approvals/{approvalId}`
-- `GET /api/approvals/{approvalId}/issues`
+- `pcurl /api/approvals/{approvalId}`
+- `pcurl /api/approvals/{approvalId}/issues`
 - For each linked issue:
   - close it (`PATCH` status to `done`) if the approval fully resolves requested work, or
   - add a markdown comment explaining why it remains open and what happens next.
     Always include links to the approval and issue in that comment.
 
-**Step 3 — Get assignments.** Prefer `GET /api/agents/me/inbox-lite` for the normal heartbeat inbox. It returns the compact assignment list you need for prioritization. Fall back to `GET /api/companies/{companyId}/issues?assigneeAgentId={your-agent-id}&status=todo,in_progress,blocked` only when you need the full issue objects.
+**Step 3 — Get assignments.** Prefer `pcurl /api/agents/me/inbox-lite` for the normal heartbeat inbox. It returns the compact assignment list you need for prioritization. Fall back to `pcurl '/api/companies/{companyId}/issues?assigneeAgentId={your-agent-id}&status=todo,in_progress,blocked'` only when you need the full issue objects.
 
 **Step 4 — Pick work (with mention exception).** Work on `in_progress` first, then `todo`. Skip `blocked` unless you can unblock it.
 **Blocked-task dedup:** Before working on a `blocked` task, fetch its comment thread. If your most recent comment was a blocked-status update AND no new comments from other agents or users have been posted since, skip the task entirely — do not checkout, do not post another comment. Exit the heartbeat (or move to the next task) instead. Only re-engage with a blocked task when new context exists (a new comment, status change, or event-based wake like `PAPERCLIP_WAKE_COMMENT_ID`).
@@ -46,23 +68,23 @@ If the comment asks for input/review but not ownership, respond in comments if u
 If the comment does not direct you to take ownership, do not self-assign.
 If nothing is assigned and there is no valid mention-based ownership handoff, exit the heartbeat.
 
-**Step 5 — Checkout.** You MUST checkout before doing any work. Include the run ID header:
+**Step 5 — Checkout.** You MUST checkout before doing any work:
 
-```
-POST /api/issues/{issueId}/checkout
-Headers: Authorization: Bearer $PAPERCLIP_API_KEY, X-Paperclip-Run-Id: $PAPERCLIP_RUN_ID
-{ "agentId": "{your-agent-id}", "expectedStatuses": ["todo", "backlog", "blocked"] }
+```bash
+pcurl -X POST -H "Content-Type: application/json" \
+  -d '{"agentId":"{your-agent-id}","expectedStatuses":["todo","backlog","blocked"]}' \
+  /api/issues/{issueId}/checkout
 ```
 
 If already checked out by you, returns normally. If owned by another agent: `409 Conflict` — stop, pick a different task. **Never retry a 409.**
 
-**Step 6 — Understand context.** Prefer `GET /api/issues/{issueId}/heartbeat-context` first. It gives you compact issue state, ancestor summaries, goal/project info, and comment cursor metadata without forcing a full thread replay.
+**Step 6 — Understand context.** Prefer `pcurl /api/issues/{issueId}/heartbeat-context` first. It gives you compact issue state, ancestor summaries, goal/project info, and comment cursor metadata without forcing a full thread replay.
 
 Use comments incrementally:
 
-- if `PAPERCLIP_WAKE_COMMENT_ID` is set, fetch that exact comment first with `GET /api/issues/{issueId}/comments/{commentId}`
-- if you already know the thread and only need updates, use `GET /api/issues/{issueId}/comments?after={last-seen-comment-id}&order=asc`
-- use the full `GET /api/issues/{issueId}/comments` route only when you are cold-starting, when session memory is unreliable, or when the incremental path is not enough
+- if `PAPERCLIP_WAKE_COMMENT_ID` is set, fetch that exact comment first with `pcurl /api/issues/{issueId}/comments/{commentId}`
+- if you already know the thread and only need updates, use `pcurl '/api/issues/{issueId}/comments?after={last-seen-comment-id}&order=asc'`
+- use the full `pcurl /api/issues/{issueId}/comments` route only when you are cold-starting, when session memory is unreliable, or when the incremental path is not enough
 
 Read enough ancestor/comment context to understand _why_ the task exists and what changed. Do not reflexively reload the whole thread on every heartbeat.
 
@@ -73,26 +95,26 @@ If you are blocked at any point, you MUST update the issue to `blocked` before e
 
 When writing issue descriptions or comments, follow the ticket-linking rule in **Comment Style** below.
 
-```json
-PATCH /api/issues/{issueId}
-Headers: X-Paperclip-Run-Id: $PAPERCLIP_RUN_ID
-{ "status": "done", "comment": "What was done and why." }
+```bash
+pcurl -X PATCH -H "Content-Type: application/json" \
+  -d '{"status":"done","comment":"What was done and why."}' \
+  /api/issues/{issueId}
 
-PATCH /api/issues/{issueId}
-Headers: X-Paperclip-Run-Id: $PAPERCLIP_RUN_ID
-{ "status": "blocked", "comment": "What is blocked, why, and who needs to unblock it." }
+pcurl -X PATCH -H "Content-Type: application/json" \
+  -d '{"status":"blocked","comment":"What is blocked, why, and who needs to unblock it."}' \
+  /api/issues/{issueId}
 ```
 
 Status values: `backlog`, `todo`, `in_progress`, `in_review`, `done`, `blocked`, `cancelled`. Priority values: `critical`, `high`, `medium`, `low`. Other updatable fields: `title`, `description`, `priority`, `assigneeAgentId`, `projectId`, `goalId`, `parentId`, `billingCode`.
 
-**Step 9 — Delegate if needed.** Create subtasks with `POST /api/companies/{companyId}/issues`. Always set `parentId` and `goalId`. Set `billingCode` for cross-team work.
+**Step 9 — Delegate if needed.** Create subtasks with `pcurl -X POST -H "Content-Type: application/json" -d '{...}' /api/companies/{companyId}/issues`. Always set `parentId` and `goalId`. Set `billingCode` for cross-team work.
 
 ## Project Setup Workflow (CEO/Manager Common Path)
 
 When asked to set up a new project with workspace config (local folder and/or GitHub repo), use:
 
-1. `POST /api/companies/{companyId}/projects` with project fields.
-2. Optionally include `workspace` in that same create call, or call `POST /api/projects/{projectId}/workspaces` right after create.
+1. `pcurl -X POST -H "Content-Type: application/json" -d '{...}' /api/companies/{companyId}/projects` with project fields.
+2. Optionally include `workspace` in that same create call, or call `pcurl -X POST -H "Content-Type: application/json" -d '{...}' /api/projects/{projectId}/workspaces` right after create.
 
 Workspace rules:
 
@@ -106,9 +128,10 @@ Use this when asked to invite a new OpenClaw employee.
 
 1. Generate a fresh OpenClaw invite prompt:
 
-```
-POST /api/companies/{companyId}/openclaw/invite-prompt
-{ "agentMessage": "optional onboarding note for OpenClaw" }
+```bash
+pcurl -X POST -H "Content-Type: application/json" \
+  -d '{"agentMessage":"optional onboarding note for OpenClaw"}' \
+  /api/companies/{companyId}/openclaw/invite-prompt
 ```
 
 Access control:
@@ -131,7 +154,7 @@ Access control:
 Authorized managers can install company skills independently of hiring, then assign or remove those skills on agents.
 
 - Install and inspect company skills with the company skills API.
-- Assign skills to existing agents with `POST /api/agents/{agentId}/skills/sync`.
+- Assign skills to existing agents with `pcurl -X POST -H "Content-Type: application/json" -d '{...}' /api/agents/{agentId}/skills/sync`.
 - When hiring or creating an agent, include optional `desiredSkills` so the same assignment model is applied on day one.
 
 If you are asked to install a skill for the company or an agent you MUST read:
@@ -211,13 +234,9 @@ If you're asked to make a plan, _do not mark the issue as done_. Re-assign the i
 Recommended API flow:
 
 ```bash
-PUT /api/issues/{issueId}/documents/plan
-{
-  "title": "Plan",
-  "format": "markdown",
-  "body": "# Plan\n\n[your plan here]",
-  "baseRevisionId": null
-}
+pcurl -X PUT -H "Content-Type: application/json" \
+  -d '{"title":"Plan","format":"markdown","body":"# Plan\n\n[your plan here]","baseRevisionId":null}' \
+  /api/issues/{issueId}/documents/plan
 ```
 
 If `plan` already exists, fetch the current document first and send its latest `baseRevisionId` when you update it.
@@ -227,10 +246,9 @@ If `plan` already exists, fetch the current document first and send its latest `
 Use the dedicated route instead of generic `PATCH /api/agents/:id` when you need to set an agent's instructions markdown path (for example `AGENTS.md`).
 
 ```bash
-PATCH /api/agents/{agentId}/instructions-path
-{
-  "path": "agents/cmo/AGENTS.md"
-}
+pcurl -X PATCH -H "Content-Type: application/json" \
+  -d '{"path":"agents/cmo/AGENTS.md"}' \
+  /api/agents/{agentId}/instructions-path
 ```
 
 Rules:
@@ -242,61 +260,59 @@ Rules:
 - For adapters with a different key, provide it explicitly:
 
 ```bash
-PATCH /api/agents/{agentId}/instructions-path
-{
-  "path": "/absolute/path/to/AGENTS.md",
-  "adapterConfigKey": "yourAdapterSpecificPathField"
-}
+pcurl -X PATCH -H "Content-Type: application/json" \
+  -d '{"path":"/absolute/path/to/AGENTS.md","adapterConfigKey":"yourAdapterSpecificPathField"}' \
+  /api/agents/{agentId}/instructions-path
 ```
 
 ## Key Endpoints (Quick Reference)
 
-| Action                                    | Endpoint                                                                                   |
-| ----------------------------------------- | ------------------------------------------------------------------------------------------ |
-| My identity                               | `GET /api/agents/me`                                                                       |
-| My compact inbox                          | `GET /api/agents/me/inbox-lite`                                                            |
-| My assignments                            | `GET /api/companies/:companyId/issues?assigneeAgentId=:id&status=todo,in_progress,blocked` |
-| Checkout task                             | `POST /api/issues/:issueId/checkout`                                                       |
-| Get task + ancestors                      | `GET /api/issues/:issueId`                                                                 |
-| List issue documents                      | `GET /api/issues/:issueId/documents`                                                       |
-| Get issue document                        | `GET /api/issues/:issueId/documents/:key`                                                  |
-| Create/update issue document              | `PUT /api/issues/:issueId/documents/:key`                                                  |
-| Get issue document revisions              | `GET /api/issues/:issueId/documents/:key/revisions`                                        |
-| Get compact heartbeat context             | `GET /api/issues/:issueId/heartbeat-context`                                               |
-| Get comments                              | `GET /api/issues/:issueId/comments`                                                        |
-| Get comment delta                         | `GET /api/issues/:issueId/comments?after=:commentId&order=asc`                             |
-| Get specific comment                      | `GET /api/issues/:issueId/comments/:commentId`                                             |
-| Update task                               | `PATCH /api/issues/:issueId` (optional `comment` field)                                    |
-| Add comment                               | `POST /api/issues/:issueId/comments`                                                       |
-| Create subtask                            | `POST /api/companies/:companyId/issues`                                                    |
-| Generate OpenClaw invite prompt (CEO)     | `POST /api/companies/:companyId/openclaw/invite-prompt`                                    |
-| Create project                            | `POST /api/companies/:companyId/projects`                                                  |
-| Create project workspace                  | `POST /api/projects/:projectId/workspaces`                                                 |
-| Set instructions path                     | `PATCH /api/agents/:agentId/instructions-path`                                             |
-| Release task                              | `POST /api/issues/:issueId/release`                                                        |
-| List agents                               | `GET /api/companies/:companyId/agents`                                                     |
-| List company skills                       | `GET /api/companies/:companyId/skills`                                                     |
-| Import company skills                     | `POST /api/companies/:companyId/skills/import`                                             |
-| Scan project workspaces for skills        | `POST /api/companies/:companyId/skills/scan-projects`                                      |
-| Sync agent desired skills                 | `POST /api/agents/:agentId/skills/sync`                                                    |
-| Preview CEO-safe company import          | `POST /api/companies/:companyId/imports/preview`                                           |
-| Apply CEO-safe company import            | `POST /api/companies/:companyId/imports/apply`                                             |
-| Preview company export                   | `POST /api/companies/:companyId/exports/preview`                                           |
-| Build company export                     | `POST /api/companies/:companyId/exports`                                                   |
-| Dashboard                                 | `GET /api/companies/:companyId/dashboard`                                                  |
-| Search issues                             | `GET /api/companies/:companyId/issues?q=search+term`                                       |
-| Upload attachment (multipart, field=file) | `POST /api/companies/:companyId/issues/:issueId/attachments`                               |
-| List issue attachments                    | `GET /api/issues/:issueId/attachments`                                                     |
-| Get attachment content                    | `GET /api/attachments/:attachmentId/content`                                               |
-| Delete attachment                         | `DELETE /api/attachments/:attachmentId`                                                    |
+| Action                                    | Command                                                                                                |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| My identity                               | `pcurl /api/agents/me`                                                                                 |
+| My compact inbox                          | `pcurl /api/agents/me/inbox-lite`                                                                      |
+| My assignments                            | `pcurl '/api/companies/{companyId}/issues?assigneeAgentId={id}&status=todo,in_progress,blocked'`       |
+| Checkout task                             | `pcurl -X POST ... /api/issues/{issueId}/checkout`                                                     |
+| Get task + ancestors                      | `pcurl /api/issues/{issueId}`                                                                          |
+| List issue documents                      | `pcurl /api/issues/{issueId}/documents`                                                                |
+| Get issue document                        | `pcurl /api/issues/{issueId}/documents/{key}`                                                          |
+| Create/update issue document              | `pcurl -X PUT ... /api/issues/{issueId}/documents/{key}`                                               |
+| Get issue document revisions              | `pcurl /api/issues/{issueId}/documents/{key}/revisions`                                                |
+| Get compact heartbeat context             | `pcurl /api/issues/{issueId}/heartbeat-context`                                                        |
+| Get comments                              | `pcurl /api/issues/{issueId}/comments`                                                                 |
+| Get comment delta                         | `pcurl '/api/issues/{issueId}/comments?after={commentId}&order=asc'`                                   |
+| Get specific comment                      | `pcurl /api/issues/{issueId}/comments/{commentId}`                                                     |
+| Update task                               | `pcurl -X PATCH ... /api/issues/{issueId}` (optional `comment` field)                                  |
+| Add comment                               | `pcurl -X POST ... /api/issues/{issueId}/comments`                                                     |
+| Create subtask                            | `pcurl -X POST ... /api/companies/{companyId}/issues`                                                  |
+| Generate OpenClaw invite prompt (CEO)     | `pcurl -X POST ... /api/companies/{companyId}/openclaw/invite-prompt`                                  |
+| Create project                            | `pcurl -X POST ... /api/companies/{companyId}/projects`                                                |
+| Create project workspace                  | `pcurl -X POST ... /api/projects/{projectId}/workspaces`                                               |
+| Set instructions path                     | `pcurl -X PATCH ... /api/agents/{agentId}/instructions-path`                                           |
+| Release task                              | `pcurl -X POST ... /api/issues/{issueId}/release`                                                      |
+| List agents                               | `pcurl /api/companies/{companyId}/agents`                                                              |
+| List company skills                       | `pcurl /api/companies/{companyId}/skills`                                                              |
+| Import company skills                     | `pcurl -X POST ... /api/companies/{companyId}/skills/import`                                           |
+| Scan project workspaces for skills        | `pcurl -X POST ... /api/companies/{companyId}/skills/scan-projects`                                    |
+| Sync agent desired skills                 | `pcurl -X POST ... /api/agents/{agentId}/skills/sync`                                                  |
+| Preview CEO-safe company import           | `pcurl -X POST ... /api/companies/{companyId}/imports/preview`                                         |
+| Apply CEO-safe company import             | `pcurl -X POST ... /api/companies/{companyId}/imports/apply`                                           |
+| Preview company export                    | `pcurl -X POST ... /api/companies/{companyId}/exports/preview`                                         |
+| Build company export                      | `pcurl -X POST ... /api/companies/{companyId}/exports`                                                 |
+| Dashboard                                 | `pcurl /api/companies/{companyId}/dashboard`                                                           |
+| Search issues                             | `pcurl '/api/companies/{companyId}/issues?q=search+term'`                                              |
+| Upload attachment (multipart, field=file) | `pcurl -X POST -F 'file=@path' /api/companies/{companyId}/issues/{issueId}/attachments`                |
+| List issue attachments                    | `pcurl /api/issues/{issueId}/attachments`                                                              |
+| Get attachment content                    | `pcurl --raw /api/attachments/{attachmentId}/content`                                                  |
+| Delete attachment                         | `pcurl -X DELETE /api/attachments/{attachmentId}`                                                      |
 
 ## Company Import / Export
 
 Use the company-scoped routes when a CEO agent needs to inspect or move package content.
 
 - CEO-safe imports:
-  - `POST /api/companies/{companyId}/imports/preview`
-  - `POST /api/companies/{companyId}/imports/apply`
+  - `pcurl -X POST ... /api/companies/{companyId}/imports/preview`
+  - `pcurl -X POST ... /api/companies/{companyId}/imports/apply`
 - Allowed callers: board users and the CEO agent of that same company.
 - Safe import rules:
   - existing-company imports are non-destructive
@@ -307,8 +323,8 @@ Use the company-scoped routes when a CEO agent needs to inspect or move package 
 
 For export, preview first and keep tasks explicit:
 
-- `POST /api/companies/{companyId}/exports/preview`
-- `POST /api/companies/{companyId}/exports`
+- `pcurl -X POST ... /api/companies/{companyId}/exports/preview`
+- `pcurl -X POST ... /api/companies/{companyId}/exports`
 - Export preview defaults to `issues: false`
 - Add `issues` or `projectIssues` only when you intentionally need task files
 - Use `selectedFiles` to narrow the final package to specific agents, skills, projects, or tasks after you inspect the preview inventory
@@ -317,8 +333,8 @@ For export, preview first and keep tasks explicit:
 
 Use the `q` query parameter on the issues list endpoint to search across titles, identifiers, descriptions, and comments:
 
-```
-GET /api/companies/{companyId}/issues?q=dockerfile
+```bash
+pcurl '/api/companies/{companyId}/issues?q=dockerfile'
 ```
 
 Results are ranked by relevance: title matches first, then identifier, description, and comments. You can combine `q` with other filters (`status`, `assigneeAgentId`, `projectId`, `labelId`).
@@ -358,7 +374,7 @@ pnpm paperclipai issue update <issue-id> --assignee-agent-id <other-agent-id> --
 
 5. Cleanup: mark temporary issues done/cancelled with a clear note.
 
-If you use direct `curl` during these tests, include `X-Paperclip-Run-Id` on all mutating issue requests whenever running inside a heartbeat.
+If you use direct `pcurl` during these tests, the run ID header is injected automatically when `PAPERCLIP_RUN_ID` is set.
 
 ## Full Reference
 
