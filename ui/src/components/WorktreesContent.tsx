@@ -222,7 +222,8 @@ export function WorktreesContent({ companyId, projectId }: WorktreesContentProps
       const markdownMentionRe = /@\[([^\]]+)\]\([^)]*\/agents\/([^)]+)\)/g;
       const plainMentionRe = /@([\w][\w\s]*[\w])/g;
 
-      for (let i = comments.length - 1; i >= 0; i--) {
+      // Comments are returned newest-first; scan from newest to find the most recent @mention.
+      for (let i = 0; i < comments.length; i++) {
         const body = comments[i]!.body;
 
         // Prefer Markdown link mentions (the format agents actually use)
