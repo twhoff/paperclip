@@ -232,7 +232,7 @@ export function WorktreesContent({ companyId, projectId }: WorktreesContentProps
           const name = match[1]!.trim().toLowerCase();
           const agent = agentByUrlKey.get(urlKey) ?? agentByName.get(name);
           if (agent) {
-            await agentsApi.invoke(agent.id, companyId);
+            await issuesApi.addComment(issueId, `@[${agent.name}](/agents/${agent.urlKey}) — review requested from the Worktrees view.`);
             return { agentName: agent.name };
           }
         }
@@ -241,7 +241,7 @@ export function WorktreesContent({ companyId, projectId }: WorktreesContentProps
         for (const match of body.matchAll(plainMentionRe)) {
           const agent = agentByName.get(match[1]!.trim().toLowerCase());
           if (agent) {
-            await agentsApi.invoke(agent.id, companyId);
+            await issuesApi.addComment(issueId, `@[${agent.name}](/agents/${agent.urlKey}) — review requested from the Worktrees view.`);
             return { agentName: agent.name };
           }
         }
@@ -250,7 +250,7 @@ export function WorktreesContent({ companyId, projectId }: WorktreesContentProps
       throw new Error("No @mentioned agent found in comments");
     },
     onSuccess: (result) => {
-      pushToast({ title: `Triggered ${result.agentName}'s heartbeat.`, tone: "success" });
+      pushToast({ title: `Requested review from ${result.agentName}.`, tone: "success" });
     },
     onError: (err: unknown) => {
       const msg = err instanceof Error ? err.message : "Failed to trigger review";
