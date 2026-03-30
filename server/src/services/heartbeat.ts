@@ -63,6 +63,7 @@ const HEARTBEAT_MAX_CONCURRENT_RUNS_DEFAULT = 1;
 const HEARTBEAT_MAX_CONCURRENT_RUNS_MAX = 10;
 const DEFERRED_WAKE_CONTEXT_KEY = "_paperclipWakeContext";
 const DETACHED_PROCESS_ERROR_CODE = "process_detached";
+const CIRCUIT_BREAKER_THRESHOLD = 10;
 const startLocksByAgent = new Map<string, Promise<void>>();
 const REPO_ONLY_CWD_SENTINEL = "/__paperclip_repo_only__";
 const MANAGED_WORKSPACE_GIT_CLONE_TIMEOUT_MS = 10 * 60 * 1000;
@@ -1721,6 +1722,57 @@ export function heartbeatService(db: Db) {
     }
 
     const runningCount = await countRunningRunsForAgent(agentId);
+
+    // Circuit breaker: auto-pause after consecutive failures
+    if (outcome === "failed" && runningCount === 0) {
+      const recentRuns = await db
+        .select({ status: heartbeatRuns.status })
+        .from(heartbeatRuns)
+        .where(eq(heartbeatRuns.agentId, agentId))
+        .orderBy(desc(heartbeatRuns.startedAt))
+        .limit(CIRCUIT_BREAKER_THRESHOLD);
+
+      const allFailed =
+        recentRuns.length >= CIRCUIT_BREAKER_THRESHOLD &&
+        recentRuns.every((r) => r.status === "failed");
+
+      if (allFailed) {
+        logger.warn(
+          { agentId, agentName: existing.name, threshold: CIRCUIT_BREAKER_THRESHOLD },
+          `circuit breaker: auto-pausing agent after ${CIRCUIT_BREAKER_THRESHOLD} consecutive failures`,
+        );
+        const paused = await db
+          .update(agents)
+          .set({
+            status: "paused",
+            pauseReason: `circuit_breaker: ${CIRCUIT_BREAKER_THRESHOLD} consecutive failures`,
+            pausedAt: new Date(),
+            lastHeartbeatAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(agents.id, agentId))
+          .returning()
+          .then((rows) => rows[0] ?? null);
+
+        if (paused) {
+          publishLiveEvent({
+            companyId: paused.companyId,
+            type: "agent.status",
+            payload: {
+              agentId: paused.id,
+              status: paused.status,
+              lastHeartbeatAt: paused.lastHeartbeatAt
+                ? new Date(paused.lastHeartbeatAt).toISOString()
+                : null,
+              outcome,
+              pauseReason: paused.pauseReason,
+            },
+          });
+        }
+        return;
+      }
+    }
+
     const nextStatus =
       runningCount > 0
         ? "running"
