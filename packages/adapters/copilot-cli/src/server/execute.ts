@@ -291,6 +291,26 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   if (ctxTaskId) contextLines.push(`Assigned task: ${ctxTaskId}${ctxTaskKey ? ` (${ctxTaskKey})` : ""}`);
   if (ctxCommentId) contextLines.push(`Triggered by comment: ${ctxCommentId}`);
   if (ctxWakeSource) contextLines.push(`Wake source: ${ctxWakeSource}`);
+
+  // Inject last-run failure summary so the agent knows what happened before it woke up
+  const lastRunSummary = context.paperclipLastRunSummary;
+  if (lastRunSummary && typeof lastRunSummary === "object" && !Array.isArray(lastRunSummary)) {
+    const s = lastRunSummary as Record<string, unknown>;
+    contextLines.push(``);
+    contextLines.push(`[Previous Run Failed]`);
+    if (s.errorCode) contextLines.push(`Error code: ${s.errorCode}`);
+    if (s.error) contextLines.push(`Error: ${s.error}`);
+    if (typeof s.durationMs === "number") contextLines.push(`Duration: ${Math.round(s.durationMs / 1000)}s`);
+    if (s.issueId) contextLines.push(`Was working on issue: ${s.issueId}`);
+    const lastEvents = Array.isArray(s.lastEvents) ? s.lastEvents : [];
+    if (lastEvents.length > 0) {
+      contextLines.push(`Last events:`);
+      for (const ev of lastEvents) {
+        const e = ev as Record<string, unknown>;
+        if (e.message) contextLines.push(`  - ${e.message}`);
+      }
+    }
+  }
   contextLines.push(
     ``,
     `Environment variables injected: PAPERCLIP_API_URL, PAPERCLIP_API_KEY, PAPERCLIP_AGENT_ID, PAPERCLIP_COMPANY_ID, PAPERCLIP_RUN_ID${ctxTaskId ? ", PAPERCLIP_TASK_ID" : ""}`,

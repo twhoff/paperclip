@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
-import { and, asc, desc, eq, gt, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNotNull, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import type { BillingType } from "@paperclipai/shared";
 import {
@@ -1564,7 +1564,7 @@ export function heartbeatService(db: Db) {
       retryReason: errorCode,
     };
 
-    const scheduledAt = policy.delayMs > 0 ? new Date(now.getTime() + policy.delayMs) : now;
+    const scheduledAt = policy.delayMs > 0 ? new Date(now.getTime() + policy.delayMs) : null;
 
     const queued = await db.transaction(async (tx) => {
       const wakeupRequest = await tx
@@ -1596,7 +1596,10 @@ export function heartbeatService(db: Db) {
           triggerDetail: "system",
           status: "queued",
           wakeupRequestId: wakeupRequest.id,
-          contextSnapshot: retryContextSnapshot,
+          contextSnapshot: {
+            ...retryContextSnapshot,
+            ...(scheduledAt ? { retryNotBeforeAt: scheduledAt.toISOString() } : {}),
+          },
           sessionIdBefore: sessionBefore,
           retryOfRunId: run.id,
           processLossRetryCount: retryCount + 1,
@@ -1694,6 +1697,13 @@ export function heartbeatService(db: Db) {
     }
 
     const context = parseObject(run.contextSnapshot);
+
+    // Safety gate for delayed retries: if retryNotBeforeAt is in the future, skip claiming
+    const retryNotBeforeAt = readNonEmptyString(context.retryNotBeforeAt);
+    if (retryNotBeforeAt && new Date(retryNotBeforeAt) > new Date()) {
+      return null;
+    }
+
     const budgetBlock = await budgets.getInvocationBlock(run.companyId, run.agentId, {
       issueId: readNonEmptyString(context.issueId),
       projectId: readNonEmptyString(context.projectId),
@@ -1754,7 +1764,15 @@ export function heartbeatService(db: Db) {
       const recentRuns = await db
         .select({ status: heartbeatRuns.status })
         .from(heartbeatRuns)
-        .where(eq(heartbeatRuns.agentId, agentId))
+        .where(
+          and(
+            eq(heartbeatRuns.agentId, agentId),
+            // Only look at terminal runs (not queued/running) so newly queued retries don't dilute the window.
+            // NULL startedAt (queued rows) would otherwise sort first on DESC and corrupt the check.
+            inArray(heartbeatRuns.status, ["failed", "succeeded", "cancelled", "timed_out"]),
+            isNotNull(heartbeatRuns.startedAt),
+          ),
+        )
         .orderBy(desc(heartbeatRuns.startedAt))
         .limit(CIRCUIT_BREAKER_THRESHOLD);
 
@@ -1849,8 +1867,14 @@ export function heartbeatService(db: Db) {
         contextSnapshot: heartbeatRuns.contextSnapshot,
       })
       .from(heartbeatRuns)
-      .where(and(eq(heartbeatRuns.agentId, agentId), sql`${heartbeatRuns.id} != ${currentRunId}`))
-      .orderBy(desc(heartbeatRuns.startedAt))
+      .where(
+        and(
+          eq(heartbeatRuns.agentId, agentId),
+          sql`${heartbeatRuns.id} != ${currentRunId}`,
+          eq(heartbeatRuns.status, "failed"),
+          isNotNull(heartbeatRuns.startedAt),
+        ),
+      )      .orderBy(desc(heartbeatRuns.startedAt))
       .limit(1)
       .then((rows) => rows[0] ?? null);
 
@@ -1939,7 +1963,32 @@ export function heartbeatService(db: Db) {
           } catch {
             // Process may have already exited between check and kill
           }
-          // Fall through to the dead-process reap logic below
+          // Finalize as timed_out — not as process_lost. Timeout is deliberate; don't retry.
+          const timeoutMessage = `Run exceeded max duration of ${maxMin}min; process killed`;
+          const timedOutRun = await setRunStatus(run.id, "failed", {
+            error: timeoutMessage,
+            errorCode: "timeout",
+            finishedAt: now,
+          });
+          await setWakeupStatus(run.wakeupRequestId, "failed", {
+            finishedAt: now,
+            error: timeoutMessage,
+          });
+          const resolvedTimedOut = timedOutRun ?? await getRun(run.id);
+          if (resolvedTimedOut) {
+            await appendRunEvent(resolvedTimedOut, await nextRunEventSeq(resolvedTimedOut.id), {
+              eventType: "lifecycle",
+              stream: "system",
+              level: "error",
+              message: timeoutMessage,
+              payload: { processPid: run.processPid, durationMin, maxDurationMin: maxMin },
+            });
+            await releaseIssueExecutionAndPromote(resolvedTimedOut);
+            await finalizeAgentStatus(run.agentId, "timed_out");
+          }
+          runningProcesses.delete(run.id);
+          reaped.push(run.id);
+          continue;
         } else {
           if (run.errorCode !== DETACHED_PROCESS_ERROR_CODE) {
             const detachedMessage = `Lost in-memory process handle, but child pid ${run.processPid} is still alive`;
@@ -2100,7 +2149,14 @@ export function heartbeatService(db: Db) {
       const queuedRuns = await db
         .select()
         .from(heartbeatRuns)
-        .where(and(eq(heartbeatRuns.agentId, agentId), eq(heartbeatRuns.status, "queued")))
+        .where(
+          and(
+            eq(heartbeatRuns.agentId, agentId),
+            eq(heartbeatRuns.status, "queued"),
+            // Skip runs that have a future retryNotBeforeAt — they're waiting for their delay
+            sql`(${heartbeatRuns.contextSnapshot} ->> 'retryNotBeforeAt') IS NULL OR (${heartbeatRuns.contextSnapshot} ->> 'retryNotBeforeAt')::timestamptz <= now()`,
+          ),
+        )
         .orderBy(asc(heartbeatRuns.createdAt))
         .limit(availableSlots);
       if (queuedRuns.length === 0) return [];
