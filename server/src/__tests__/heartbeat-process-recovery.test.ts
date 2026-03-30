@@ -11,7 +11,9 @@ import {
   createDb,
   ensurePostgresDatabase,
   agents,
+  agentRuntimeState,
   agentWakeupRequests,
+  companySkills,
   companies,
   heartbeatRunEvents,
   heartbeatRuns,
@@ -92,6 +94,19 @@ function spawnAliveProcess() {
   });
 }
 
+async function waitFor(check: () => Promise<void>, timeoutMs = 5_000, intervalMs = 50) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      await check();
+      return;
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
+  }
+  await check();
+}
+
 describe("heartbeat orphaned process recovery", () => {
   let db!: ReturnType<typeof createDb>;
   let instance: EmbeddedPostgresInstance | null = null;
@@ -114,7 +129,9 @@ describe("heartbeat orphaned process recovery", () => {
     await db.delete(issues);
     await db.delete(heartbeatRunEvents);
     await db.delete(heartbeatRuns);
+    await db.delete(agentRuntimeState);
     await db.delete(agentWakeupRequests);
+    await db.delete(companySkills);
     await db.delete(agents);
     await db.delete(companies);
   });
@@ -317,5 +334,94 @@ describe("heartbeat orphaned process recovery", () => {
     const run = await heartbeat.getRun(runId);
     expect(run?.errorCode).toBeNull();
     expect(run?.error).toBeNull();
+  });
+
+  it("does not let a malformed delayed-retry timestamp break queued heartbeat processing", async () => {
+    const { companyId, agentId } = await seedRunFixture({
+      includeIssue: false,
+      runStatus: "failed",
+    });
+    const heartbeat = heartbeatService(db);
+    const olderWakeupRequestId = randomUUID();
+    const olderRunId = randomUUID();
+    const newerWakeupRequestId = randomUUID();
+    const newerRunId = randomUUID();
+
+    await db
+      .update(agents)
+      .set({ status: "idle", updatedAt: new Date("2026-03-19T00:00:00.000Z") })
+      .where(eq(agents.id, agentId));
+
+    await db.insert(agentWakeupRequests).values([
+      {
+        id: olderWakeupRequestId,
+        companyId,
+        agentId,
+        source: "automation",
+        triggerDetail: "system",
+        reason: "process_lost_retry",
+        payload: {},
+        status: "queued",
+        createdAt: new Date("2026-03-19T00:01:00.000Z"),
+        updatedAt: new Date("2026-03-19T00:01:00.000Z"),
+      },
+      {
+        id: newerWakeupRequestId,
+        companyId,
+        agentId,
+        source: "on_demand",
+        triggerDetail: "manual",
+        reason: "manual",
+        payload: {},
+        status: "queued",
+        createdAt: new Date("2026-03-19T00:02:00.000Z"),
+        updatedAt: new Date("2026-03-19T00:02:00.000Z"),
+      },
+    ]);
+
+    await db.insert(heartbeatRuns).values([
+      {
+        id: olderRunId,
+        companyId,
+        agentId,
+        invocationSource: "automation",
+        triggerDetail: "system",
+        status: "queued",
+        wakeupRequestId: olderWakeupRequestId,
+        contextSnapshot: { retryNotBeforeAt: "not-a-timestamp" },
+        createdAt: new Date("2026-03-19T00:01:00.000Z"),
+        updatedAt: new Date("2026-03-19T00:01:00.000Z"),
+      },
+      {
+        id: newerRunId,
+        companyId,
+        agentId,
+        invocationSource: "on_demand",
+        triggerDetail: "manual",
+        status: "queued",
+        wakeupRequestId: newerWakeupRequestId,
+        contextSnapshot: {},
+        createdAt: new Date("2026-03-19T00:02:00.000Z"),
+        updatedAt: new Date("2026-03-19T00:02:00.000Z"),
+      },
+    ]);
+
+    await expect(heartbeat.resumeQueuedRuns()).resolves.toBeUndefined();
+
+    await waitFor(async () => {
+      const olderRun = await heartbeat.getRun(olderRunId);
+      const newerRun = await heartbeat.getRun(newerRunId);
+      expect([olderRun?.status, newerRun?.status]).toContain("running");
+    });
+
+    const olderRun = await heartbeat.getRun(olderRunId);
+    const newerRun = await heartbeat.getRun(newerRunId);
+    expect([olderRun?.status, newerRun?.status]).toContain("running");
+
+    await waitFor(async () => {
+      const currentOlderRun = await heartbeat.getRun(olderRunId);
+      const currentNewerRun = await heartbeat.getRun(newerRunId);
+      expect([currentOlderRun?.status, currentNewerRun?.status]).not.toContain("running");
+    });
   });
 });

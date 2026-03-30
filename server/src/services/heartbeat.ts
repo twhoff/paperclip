@@ -2149,20 +2149,13 @@ export function heartbeatService(db: Db) {
       const queuedRuns = await db
         .select()
         .from(heartbeatRuns)
-        .where(
-          and(
-            eq(heartbeatRuns.agentId, agentId),
-            eq(heartbeatRuns.status, "queued"),
-            // Skip runs that have a future retryNotBeforeAt — they're waiting for their delay
-            sql`(${heartbeatRuns.contextSnapshot} ->> 'retryNotBeforeAt') IS NULL OR (${heartbeatRuns.contextSnapshot} ->> 'retryNotBeforeAt')::timestamptz <= now()`,
-          ),
-        )
-        .orderBy(asc(heartbeatRuns.createdAt))
-        .limit(availableSlots);
+        .where(and(eq(heartbeatRuns.agentId, agentId), eq(heartbeatRuns.status, "queued")))
+        .orderBy(asc(heartbeatRuns.createdAt));
       if (queuedRuns.length === 0) return [];
 
       const claimedRuns: Array<typeof heartbeatRuns.$inferSelect> = [];
       for (const queuedRun of queuedRuns) {
+        if (claimedRuns.length >= availableSlots) break;
         const claimed = await claimQueuedRun(queuedRun);
         if (claimed) claimedRuns.push(claimed);
       }
