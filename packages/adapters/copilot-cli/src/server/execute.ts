@@ -500,6 +500,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       errorCode:
         requiresLogin ? "copilot_auth_required" : rateLimitMeta.isRateLimited ? "rate_limit" : null,
       usage: parsedStream.usage ?? undefined,
+      premiumRequests: parsedStream.premiumRequests,
       sessionId: resolvedSessionId,
       sessionParams: resolvedSessionParams,
       sessionDisplayId: resolvedSessionId,

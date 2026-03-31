@@ -105,6 +105,7 @@ describe("copilot execute", () => {
     expect(result.exitCode).toBe(0);
     expect(result.errorCode).toBeNull();
     expect(result.errorMessage).toBeNull();
+    expect(result.premiumRequests).toBe(1);
     expect(result.resultJson).toMatchObject({
       exitCode: 0,
       usage: { premiumRequests: 1 },

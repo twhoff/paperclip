@@ -69,6 +69,7 @@ export interface AdapterExecutionResult {
   errorCode?: string | null;
   errorMeta?: Record<string, unknown>;
   usage?: UsageSummary;
+  premiumRequests?: number | null;
   /**
    * Legacy single session id output. Prefer `sessionParams` + `sessionDisplayId`.
    */
