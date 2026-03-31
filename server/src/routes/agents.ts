@@ -357,6 +357,18 @@ export function agentRoutes(db: Db) {
     adapterConfig: Record<string, unknown>,
   ): Record<string, unknown> {
     const next = { ...adapterConfig };
+    if (adapterType === "claude_local") {
+      if (typeof next.dangerouslySkipPermissions !== "boolean") {
+        next.dangerouslySkipPermissions = true;
+      }
+      return ensureGatewayDeviceKey(adapterType, next);
+    }
+    if (adapterType === "copilot_cli") {
+      if (typeof next.allowAll !== "boolean") {
+        next.allowAll = true;
+      }
+      return ensureGatewayDeviceKey(adapterType, next);
+    }
     if (adapterType === "codex_local") {
       if (!asNonEmptyString(next.model)) {
         next.model = DEFAULT_CODEX_LOCAL_MODEL;

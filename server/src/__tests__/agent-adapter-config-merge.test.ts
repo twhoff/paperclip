@@ -183,6 +183,64 @@ describe("PATCH /api/agents/:id — adapterConfig merge", () => {
     expect(saved.cwd).toBe("/Users/test/project");
   });
 
+  it("defaults dangerouslySkipPermissions when switching into claude_local", async () => {
+    mockAgentService.getById.mockResolvedValue(
+      makeAgent({
+        adapterType: "codex_local",
+        adapterConfig: {
+          model: "codex-mini-latest",
+          dangerouslyBypassApprovalsAndSandbox: true,
+          cwd: "/Users/test/project",
+        },
+      }),
+    );
+
+    const app = createApp();
+    const res = await request(app)
+      .patch(`/api/agents/${agentId}`)
+      .send({
+        adapterType: "claude_local",
+        adapterConfig: { model: "claude-sonnet-4-20250514" },
+      });
+
+    expect(res.status).toBe(200);
+    const saved = capturedUpdatePatch?.adapterConfig as Record<string, unknown>;
+    expect(saved).toBeDefined();
+    expect(saved.model).toBe("claude-sonnet-4-20250514");
+    expect(saved.dangerouslySkipPermissions).toBe(true);
+    expect(saved.dangerouslyBypassApprovalsAndSandbox).toBe(true);
+    expect(saved.cwd).toBe("/Users/test/project");
+  });
+
+  it("defaults allowAll when switching into copilot_cli", async () => {
+    mockAgentService.getById.mockResolvedValue(
+      makeAgent({
+        adapterType: "claude_local",
+        adapterConfig: {
+          model: "claude-sonnet-4-20250514",
+          dangerouslySkipPermissions: true,
+          cwd: "/Users/test/project",
+        },
+      }),
+    );
+
+    const app = createApp();
+    const res = await request(app)
+      .patch(`/api/agents/${agentId}`)
+      .send({
+        adapterType: "copilot_cli",
+        adapterConfig: { model: "claude-sonnet-4-20250514" },
+      });
+
+    expect(res.status).toBe(200);
+    const saved = capturedUpdatePatch?.adapterConfig as Record<string, unknown>;
+    expect(saved).toBeDefined();
+    expect(saved.model).toBe("claude-sonnet-4-20250514");
+    expect(saved.dangerouslySkipPermissions).toBe(true);
+    expect(saved.allowAll).toBe(true);
+    expect(saved.cwd).toBe("/Users/test/project");
+  });
+
   it("allows overlay to override an existing private field", async () => {
     const app = createApp();
     const res = await request(app)
