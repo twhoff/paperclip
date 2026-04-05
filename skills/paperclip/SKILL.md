@@ -59,6 +59,63 @@ Env vars auto-injected: `PAPERCLIP_AGENT_ID`, `PAPERCLIP_COMPANY_ID`, `PAPERCLIP
 
 Manual local CLI mode (outside heartbeat runs): use `paperclipai agent local-cli <agent-id-or-shortname> --company-id <company-id>` to install Paperclip skills for Claude/Codex and print/export the required `PAPERCLIP_*` environment variables for that agent identity.
 
+## Troubleshooting Auth Failures
+
+`paperclipRequest` handles JWT minting automatically. If you still get 401/403 errors, work through this checklist:
+
+### 1. Check deployment mode
+
+```javascript
+const res = await fetch('http://localhost:3100/api/health');
+const health = await res.json();
+console.log(health.deploymentMode); // "local_trusted" or "authenticated"
+```
+
+- `local_trusted` (plain `pnpm dev`): auth is implicit — 401s should not happen. Check the API base URL.
+- `authenticated` (`pnpm dev:tailscale`): every request needs a valid JWT. Continue to step 2.
+
+### 2. Verify the JWT secret exists
+
+The server needs `PAPERCLIP_AGENT_JWT_SECRET` in `~/.paperclip/instances/default/.env` to mint and verify JWTs.
+
+```bash
+pnpm paperclipai doctor        # Check if secret exists
+pnpm paperclipai doctor --repair  # Generate if missing, then restart the server
+```
+
+If the server was already running when the secret was created, restart it — the secret is loaded at startup.
+
+### 3. Verify identity resolution
+
+`paperclipRequest` resolves identity from env vars (`PAPERCLIP_AGENT_ID`, `PAPERCLIP_COMPANY_ID`, `PAPERCLIP_ADAPTER_TYPE`) or falls back to a DB lookup for an active agent. If identity resolution fails, pass it explicitly:
+
+```javascript
+const { response } = await paperclipRequest('/agents/me', {
+  identity: { agentId: '...', companyId: '...', adapterType: 'claude_local' },
+});
+```
+
+### 4. Check adapter JWT support
+
+In `server/src/adapters/registry.ts`, the adapter entry must include `supportsLocalAgentJwt: true`. Without this, the heartbeat service skips JWT minting and agents run without `PAPERCLIP_API_KEY`.
+
+### 5. Tailscale hostname not allowed
+
+When accessing via a Tailscale hostname, register it:
+
+```bash
+pnpm paperclipai allowed-hostname <your-tailscale-hostname>
+```
+
+### Common error messages
+
+| Error | Cause | Fix |
+|---|---|---|
+| `401 Agent authentication required` | JWT missing or invalid | Use `paperclipRequest` — it mints a fresh JWT per call |
+| `PAPERCLIP_AGENT_JWT_SECRET missing` | Secret not in instance env file | `pnpm paperclipai doctor --repair` + restart server |
+| `No active agent found for adapter_type=...` | Identity resolution failed | Pass explicit `identity` option |
+| `local agent jwt secret missing` (server log) | Secret not loaded | Restart server after `doctor --repair` |
+
 ## The Heartbeat Procedure
 
 Follow these steps every time you wake up:
