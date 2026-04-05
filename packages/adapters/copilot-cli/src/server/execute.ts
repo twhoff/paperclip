@@ -42,6 +42,7 @@ const __moduleDir = path.dirname(fileURLToPath(import.meta.url));
  */
 async function buildCopilotInstructionsTmpDir(
   config: Record<string, unknown>,
+  onLog?: (stream: "stdout" | "stderr", chunk: string) => Promise<void>,
 ): Promise<string | null> {
   const availableEntries = await readPaperclipRuntimeSkillEntries(config, __moduleDir);
   const desiredNames = new Set(resolvePaperclipDesiredSkillNames(config, availableEntries));
@@ -55,8 +56,9 @@ async function buildCopilotInstructionsTmpDir(
       const raw = await fs.readFile(path.join(entry.source, "SKILL.md"), "utf-8");
       const stripped = stripSkillFrontmatter(raw);
       if (stripped) parts.push(stripped);
-    } catch {
-      // skill file unreadable — skip
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      await onLog?.("stderr", `[paperclip] Warning: Could not read skill "${entry.key}" SKILL.md: ${msg}\n`);
     }
   }
 
@@ -250,7 +252,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     extraArgs,
   } = runtimeConfig;
 
-  const instructionsTmpDir = skillsEnabled && !skipSkills ? await buildCopilotInstructionsTmpDir(config) : null;
+  const instructionsTmpDir = skillsEnabled && !skipSkills ? await buildCopilotInstructionsTmpDir(config, onLog) : null;
   if (instructionsTmpDir) {
     const existing = env.COPILOT_CUSTOM_INSTRUCTIONS_DIRS ?? "";
     env.COPILOT_CUSTOM_INSTRUCTIONS_DIRS = existing
@@ -375,7 +377,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
   // Assemble final prompt: instructions (optional) + bootstrap (fresh sessions only) + session handoff + Paperclip context + user prompt
   const promptParts: string[] = [];
-  if (instructionsContent) promptParts.push(instructionsContent);
+  if (instructionsContent && !sessionId) promptParts.push(instructionsContent);
   if (renderedBootstrapPrompt) promptParts.push(renderedBootstrapPrompt);
   if (sessionHandoffNote) promptParts.push(sessionHandoffNote);
   promptParts.push(paperclipContextBlock);
@@ -386,8 +388,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   if (instructionsTmpDir) {
     commandNotes.push(`Injected Paperclip skill instructions via COPILOT_CUSTOM_INSTRUCTIONS_DIRS: ${instructionsTmpDir}/AGENTS.md`);
   }
-  if (instructionsContent) {
+  if (instructionsContent && !sessionId) {
     commandNotes.push(`Injected agent instructions file: ${instructionsFilePath}`);
+  } else if (instructionsContent && sessionId) {
+    commandNotes.push(`Skipped agent instructions file (resumed session): ${instructionsFilePath}`);
   }
   const promptMetrics = {
     promptChars: prompt.length,
