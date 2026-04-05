@@ -31,7 +31,7 @@ async function buildCopilotSkillSnapshot(
     sourcePath: entry.source,
     targetPath: null,
     detail: desiredSet.has(entry.key)
-      ? "Will be injected via COPILOT_CUSTOM_INSTRUCTIONS_DIRS on the next run."
+      ? "Will be symlinked into .agents/skills/ via COPILOT_CUSTOM_INSTRUCTIONS_DIRS on the next run."
       : null,
     required: Boolean(entry.required),
     requiredReason: entry.requiredReason ?? null,

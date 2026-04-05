@@ -27,7 +27,6 @@ import {
   detectCopilotRateLimit,
   isCopilotMaxTurnsResult,
   isCopilotUnknownSessionError,
-  stripSkillFrontmatter,
 } from "./parse.js";
 import { createJsonlLogInterceptor } from "./jsonl-interceptor.js";
 import { modelEffortSupport } from "../index.js";
@@ -35,12 +34,14 @@ import { modelEffortSupport } from "../index.js";
 const __moduleDir = path.dirname(fileURLToPath(import.meta.url));
 
 /**
- * Resolve all desired Paperclip runtime skills, strip their YAML frontmatter,
- * concatenate them into a single AGENTS.md written to a fresh tmpdir, and
- * return the tmpdir path (set as COPILOT_CUSTOM_INSTRUCTIONS_DIRS).
- * Returns null if no desired skills are found or all are unreadable.
+ * Create a tmpdir with `.agents/skills/` containing symlinks to desired
+ * Paperclip runtime skills, so Copilot CLI discovers them as individual
+ * skills through its native `.agents/skills/` scan.
+ *
+ * The tmpdir is passed via COPILOT_CUSTOM_INSTRUCTIONS_DIRS.
+ * Returns null if no desired skills are found.
  */
-async function buildCopilotInstructionsTmpDir(
+async function buildCopilotSkillsTmpDir(
   config: Record<string, unknown>,
   onLog?: (stream: "stdout" | "stderr", chunk: string) => Promise<void>,
 ): Promise<string | null> {
@@ -50,22 +51,26 @@ async function buildCopilotInstructionsTmpDir(
 
   if (desiredEntries.length === 0) return null;
 
-  const parts: string[] = [];
+  const tmpdir = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-copilot-skills-"));
+  const skillsDir = path.join(tmpdir, ".agents", "skills");
+  await fs.mkdir(skillsDir, { recursive: true });
+
+  let linked = 0;
   for (const entry of desiredEntries) {
     try {
-      const raw = await fs.readFile(path.join(entry.source, "SKILL.md"), "utf-8");
-      const stripped = stripSkillFrontmatter(raw);
-      if (stripped) parts.push(stripped);
+      await fs.symlink(entry.source, path.join(skillsDir, entry.runtimeName));
+      linked++;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      await onLog?.("stderr", `[paperclip] Warning: Could not read skill "${entry.key}" SKILL.md: ${msg}\n`);
+      await onLog?.("stderr", `[paperclip] Warning: Could not symlink skill "${entry.key}": ${msg}\n`);
     }
   }
 
-  if (parts.length === 0) return null;
+  if (linked === 0) {
+    await fs.rm(tmpdir, { recursive: true, force: true });
+    return null;
+  }
 
-  const tmpdir = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-copilot-instructions-"));
-  await fs.writeFile(path.join(tmpdir, "AGENTS.md"), parts.join("\n\n---\n\n"), "utf-8");
   return tmpdir;
 }
 
@@ -252,15 +257,15 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     extraArgs,
   } = runtimeConfig;
 
-  const instructionsTmpDir = skillsEnabled && !skipSkills ? await buildCopilotInstructionsTmpDir(config, onLog) : null;
-  if (instructionsTmpDir) {
+  const skillsTmpDir = skillsEnabled && !skipSkills ? await buildCopilotSkillsTmpDir(config, onLog) : null;
+  if (skillsTmpDir) {
     const existing = env.COPILOT_CUSTOM_INSTRUCTIONS_DIRS ?? "";
     env.COPILOT_CUSTOM_INSTRUCTIONS_DIRS = existing
-      ? `${existing}:${instructionsTmpDir}`
-      : instructionsTmpDir;
-    await onLog("stdout", `[paperclip] Injected Paperclip skill instructions from ${instructionsTmpDir}/AGENTS.md\n`);
+      ? `${existing}:${skillsTmpDir}`
+      : skillsTmpDir;
+    await onLog("stdout", `[paperclip] Injected Paperclip skills via symlinks in ${skillsTmpDir}/.agents/skills/\n`);
   } else if (skillsEnabled && !skipSkills) {
-    await onLog("stdout", `[paperclip] Warning: Could not resolve Paperclip skill instructions (moduleDir: ${__moduleDir})\n`);
+    await onLog("stdout", `[paperclip] Warning: Could not resolve Paperclip skills (moduleDir: ${__moduleDir})\n`);
   }
 
   const runtimeSessionParams = parseObject(runtime.sessionParams);
@@ -385,8 +390,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const prompt = promptParts.join("\n\n---\n\n");
 
   const commandNotes: string[] = [];
-  if (instructionsTmpDir) {
-    commandNotes.push(`Injected Paperclip skill instructions via COPILOT_CUSTOM_INSTRUCTIONS_DIRS: ${instructionsTmpDir}/AGENTS.md`);
+  if (skillsTmpDir) {
+    commandNotes.push(`Injected Paperclip skills via COPILOT_CUSTOM_INSTRUCTIONS_DIRS: ${skillsTmpDir}/.agents/skills/`);
   }
   if (instructionsContent && !sessionId) {
     commandNotes.push(`Injected agent instructions file: ${instructionsFilePath}`);
@@ -576,8 +581,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       fallbackSessionId: runtimeSessionId || runtime.sessionId,
     });
   } finally {
-    if (instructionsTmpDir) {
-      fs.rm(instructionsTmpDir, { recursive: true, force: true }).catch(() => {});
+    if (skillsTmpDir) {
+      fs.rm(skillsTmpDir, { recursive: true, force: true }).catch(() => {});
     }
   }
 }
