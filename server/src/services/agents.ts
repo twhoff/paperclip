@@ -330,6 +330,17 @@ export function agentService(db: Db) {
       }
     }
 
+    // When status moves away from "paused", clear stale pause metadata
+    // unless the caller explicitly provides replacement values.
+    if (data.status && data.status !== "paused" && (existing.pauseReason || existing.pausedAt)) {
+      if (!Object.prototype.hasOwnProperty.call(data, "pauseReason")) {
+        data.pauseReason = null;
+      }
+      if (!Object.prototype.hasOwnProperty.call(data, "pausedAt")) {
+        data.pausedAt = null;
+      }
+    }
+
     const normalizedPatch = { ...data } as Partial<typeof agents.$inferInsert>;
     if (data.permissions !== undefined) {
       const role = (data.role ?? existing.role) as string;
