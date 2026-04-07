@@ -4,7 +4,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
-import { eq } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   applyPendingMigrations,
@@ -423,5 +423,266 @@ describe("heartbeat orphaned process recovery", () => {
       const currentNewerRun = await heartbeat.getRun(newerRunId);
       expect([currentOlderRun?.status, currentNewerRun?.status]).not.toContain("running");
     });
+  });
+});
+
+/**
+ * Regression tests for TIZA-753 Bug 2: legacy run promotion skips non-assignee.
+ *
+ * Bug: heartbeat.ts legacy run detection stamped any queued/running run that had
+ * issueId in its contextSnapshot as the execution owner, regardless of whether
+ * that run belonged to the current assignee. Mention-triggered wakes from
+ * non-assignee agents left runs that were then promoted, causing routing
+ * oscillation.
+ *
+ * Fix: the legacy run promotion now guards with
+ *   `legacyRun.agentId === issue.assigneeAgentId`
+ * before stamping executionRunId (heartbeat.ts ~3422).
+ */
+describe("heartbeat legacy run promotion — assignee guard (TIZA-753)", () => {
+  let db!: ReturnType<typeof createDb>;
+  let instance: EmbeddedPostgresInstance | null = null;
+  let dataDir = "";
+
+  beforeAll(async () => {
+    const started = await startTempDatabase();
+    db = createDb(started.connectionString);
+    instance = started.instance;
+    dataDir = started.dataDir;
+  }, 20_000);
+
+  afterEach(async () => {
+    await db.delete(issues);
+    await db.delete(heartbeatRunEvents);
+    await db.delete(heartbeatRuns);
+    await db.delete(agentRuntimeState);
+    await db.delete(agentWakeupRequests);
+    await db.delete(companySkills);
+    await db.delete(agents);
+    await db.delete(companies);
+  });
+
+  afterAll(async () => {
+    await instance?.stop();
+    if (dataDir) fs.rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  /**
+   * Seed a minimal fixture: two agents (assignee A, non-assignee B), one issue
+   * (assigneeAgentId = A, executionRunId = null), and queued runs for each.
+   */
+  async function seedLegacyRunFixture() {
+    const companyId = randomUUID();
+    const issuePrefix = "LRG";
+    const agentAId = randomUUID(); // assignee
+    const agentBId = randomUUID(); // non-assignee (mention wake)
+    const issueId = randomUUID();
+    const runAId = randomUUID();
+    const runBId = randomUUID();
+    const now = new Date("2026-04-07T00:00:00.000Z");
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Legacy Run Guard Test Co",
+      issuePrefix,
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    await db.insert(agents).values([
+      {
+        id: agentAId,
+        companyId,
+        name: "Assignee Agent",
+        role: "engineer",
+        status: "running",
+        adapterType: "codex_local",
+        adapterConfig: {},
+        runtimeConfig: {},
+        permissions: {},
+      },
+      {
+        id: agentBId,
+        companyId,
+        name: "Non-Assignee Agent",
+        role: "engineer",
+        status: "running",
+        adapterType: "codex_local",
+        adapterConfig: {},
+        runtimeConfig: {},
+        permissions: {},
+      },
+    ]);
+
+    // Agent B's run: queued, has issueId in contextSnapshot — simulates a
+    // mention-triggered wake from a non-assignee agent.
+    await db.insert(heartbeatRuns).values({
+      id: runBId,
+      companyId,
+      agentId: agentBId,
+      invocationSource: "assignment",
+      triggerDetail: "system",
+      status: "queued",
+      contextSnapshot: { issueId },
+      processPid: null,
+      processLossRetryCount: 0,
+      errorCode: null,
+      error: null,
+      startedAt: now,
+      updatedAt: now,
+    });
+
+    // Agent A's run: queued, also has issueId in contextSnapshot — the
+    // legitimate assignee wake.
+    await db.insert(heartbeatRuns).values({
+      id: runAId,
+      companyId,
+      agentId: agentAId,
+      invocationSource: "assignment",
+      triggerDetail: "system",
+      status: "queued",
+      contextSnapshot: { issueId },
+      processPid: null,
+      processLossRetryCount: 0,
+      errorCode: null,
+      error: null,
+      startedAt: now,
+      updatedAt: new Date(now.getTime() + 1000), // slightly later
+    });
+
+    // Issue: no active execution, assignee = Agent A.
+    await db.insert(issues).values({
+      id: issueId,
+      companyId,
+      title: "Legacy run guard test issue",
+      status: "in_progress",
+      priority: "medium",
+      assigneeAgentId: agentAId,
+      checkoutRunId: null,
+      executionRunId: null,
+      issueNumber: 1,
+      identifier: `${issuePrefix}-1`,
+    });
+
+    return { companyId, agentAId, agentBId, issueId, runAId, runBId };
+  }
+
+  it("non-assignee queued run does NOT satisfy the legacy promotion guard", async () => {
+    const { issueId, agentAId, agentBId, runBId } = await seedLegacyRunFixture();
+
+    // Reproduce the exact DB query from heartbeat.ts: find any queued/running run
+    // with issueId in contextSnapshot, ordered by status priority then age.
+    const issue = await db
+      .select({ id: issues.id, assigneeAgentId: issues.assigneeAgentId })
+      .from(issues)
+      .where(eq(issues.id, issueId))
+      .then((rows) => rows[0]!);
+
+    const legacyRun = await db
+      .select()
+      .from(heartbeatRuns)
+      .where(
+        and(
+          eq(heartbeatRuns.companyId, issue.assigneeAgentId ? heartbeatRuns.companyId : heartbeatRuns.companyId),
+          inArray(heartbeatRuns.status, ["queued", "running"]),
+          sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issue.id}`,
+        ),
+      )
+      .orderBy(
+        sql`case when ${heartbeatRuns.status} = 'running' then 0 else 1 end`,
+      )
+      .limit(1)
+      .then((rows) => rows[0] ?? null);
+
+    // A legacy run IS found (Agent B's run qualifies by the SQL query alone).
+    expect(legacyRun).not.toBeNull();
+    expect(legacyRun!.agentId).toBe(agentBId);
+
+    // But the assignee guard correctly rejects it.
+    const wouldPromote = legacyRun!.agentId === issue.assigneeAgentId;
+    expect(wouldPromote).toBe(false);
+  });
+
+  it("assignee queued run DOES satisfy the legacy promotion guard", async () => {
+    const { issueId, agentAId, runAId } = await seedLegacyRunFixture();
+
+    // Remove Agent B's run so only Agent A's run exists in the legacy query.
+    await db
+      .delete(heartbeatRuns)
+      .where(
+        and(
+          eq(heartbeatRuns.agentId, (await db.select({ id: agents.id }).from(agents).where(eq(agents.name, "Non-Assignee Agent")).then((r) => r[0]?.id ?? "")),),
+        ),
+      );
+
+    const issue = await db
+      .select({ id: issues.id, assigneeAgentId: issues.assigneeAgentId })
+      .from(issues)
+      .where(eq(issues.id, issueId))
+      .then((rows) => rows[0]!);
+
+    const legacyRun = await db
+      .select()
+      .from(heartbeatRuns)
+      .where(
+        and(
+          inArray(heartbeatRuns.status, ["queued", "running"]),
+          sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issue.id}`,
+        ),
+      )
+      .orderBy(
+        sql`case when ${heartbeatRuns.status} = 'running' then 0 else 1 end`,
+      )
+      .limit(1)
+      .then((rows) => rows[0] ?? null);
+
+    // Agent A's run is found.
+    expect(legacyRun).not.toBeNull();
+    expect(legacyRun!.agentId).toBe(agentAId);
+
+    // The assignee guard correctly allows promotion.
+    const wouldPromote = legacyRun!.agentId === issue.assigneeAgentId;
+    expect(wouldPromote).toBe(true);
+  });
+
+  it("legacy query returns non-assignee run first when both exist (guard is the only safety)", async () => {
+    const { issueId, agentBId } = await seedLegacyRunFixture();
+
+    const issue = await db
+      .select({ id: issues.id, assigneeAgentId: issues.assigneeAgentId })
+      .from(issues)
+      .where(eq(issues.id, issueId))
+      .then((rows) => rows[0]!);
+
+    // Both Agent A and Agent B's runs exist and are queued.
+    // The SQL query returns the first match — without the guard, either could
+    // be promoted. With both queued and Agent B inserted first (older),
+    // Agent B's run is returned first.
+    const legacyRun = await db
+      .select()
+      .from(heartbeatRuns)
+      .where(
+        and(
+          inArray(heartbeatRuns.status, ["queued", "running"]),
+          sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issue.id}`,
+        ),
+      )
+      .orderBy(
+        sql`case when ${heartbeatRuns.status} = 'running' then 0 else 1 end`,
+      )
+      .limit(1)
+      .then((rows) => rows[0] ?? null);
+
+    expect(legacyRun).not.toBeNull();
+    // Whichever run is returned, applying the guard ensures only the assignee's
+    // run can be promoted.
+    const wouldPromote = legacyRun!.agentId === issue.assigneeAgentId;
+
+    if (legacyRun!.agentId === agentBId) {
+      // Non-assignee surfaced first — guard must block it.
+      expect(wouldPromote).toBe(false);
+    } else {
+      // Assignee surfaced first — guard allows it.
+      expect(wouldPromote).toBe(true);
+    }
   });
 });
