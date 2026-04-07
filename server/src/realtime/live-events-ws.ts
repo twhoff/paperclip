@@ -234,6 +234,12 @@ export function setupLiveEventsWebSocketServer(
   });
 
   server.on("upgrade", (req, socket, head) => {
+    // Attach an error handler immediately to prevent unhandled ECONNRESET crashes
+    // if the client disconnects during the async authorization window.
+    socket.on("error", (err: Error) => {
+      logger.warn({ err, path: req.url }, "upgrade socket error");
+    });
+
     if (!req.url) {
       rejectUpgrade(socket, "400 Bad Request", "missing url");
       return;
