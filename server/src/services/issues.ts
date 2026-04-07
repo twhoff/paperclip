@@ -966,8 +966,15 @@ export function issueService(db: Db) {
           or(isNull(issues.checkoutRunId), eq(issues.checkoutRunId, safeCheckoutRunId)),
         )
         : and(eq(issues.assigneeAgentId, agentId), isNull(issues.checkoutRunId));
+      // TIZA-757: when checkoutRunId is null there is no legitimate checkout
+      // owner, so a ghost executionRunId (from heartbeat legacy promotion)
+      // should not block the rightful assignee from checking out.
       const executionLockCondition = safeCheckoutRunId
-        ? or(isNull(issues.executionRunId), eq(issues.executionRunId, safeCheckoutRunId))
+        ? or(
+          isNull(issues.checkoutRunId),
+          isNull(issues.executionRunId),
+          eq(issues.executionRunId, safeCheckoutRunId),
+        )
         : isNull(issues.executionRunId);
       const updated = await db
         .update(issues)
@@ -1010,11 +1017,12 @@ export function issueService(db: Db) {
 
       if (!current) throw notFound("Issue not found");
 
+      // TIZA-757: when checkoutRunId is null, a ghost executionRunId should
+      // not prevent the rightful assignee from adopting checkout.
       if (
         current.assigneeAgentId === agentId &&
         current.status === "in_progress" &&
         current.checkoutRunId == null &&
-        (current.executionRunId == null || current.executionRunId === safeCheckoutRunId) &&
         safeCheckoutRunId
       ) {
         const adopted = await db
@@ -1030,7 +1038,6 @@ export function issueService(db: Db) {
               eq(issues.status, "in_progress"),
               eq(issues.assigneeAgentId, agentId),
               isNull(issues.checkoutRunId),
-              or(isNull(issues.executionRunId), eq(issues.executionRunId, safeCheckoutRunId)),
             ),
           )
           .returning()
@@ -1096,6 +1103,17 @@ export function issueService(db: Db) {
         current.status === "in_progress" &&
         current.assigneeAgentId === actorAgentId &&
         sameRunLock(current.checkoutRunId, actorRunId)
+      ) {
+        return { ...current, adoptedFromRunId: null as string | null };
+      }
+
+      // TIZA-757: when checkoutRunId is null there is no active checkout owner.
+      // The rightful assignee should not be blocked by ghost executionRunId
+      // metadata from heartbeat legacy promotion.
+      if (
+        current.status === "in_progress" &&
+        current.assigneeAgentId === actorAgentId &&
+        current.checkoutRunId == null
       ) {
         return { ...current, adoptedFromRunId: null as string | null };
       }

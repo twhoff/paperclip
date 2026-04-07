@@ -3415,11 +3415,16 @@ export function heartbeatService(db: Db) {
             .limit(1)
             .then((rows) => rows[0] ?? null);
 
-          // Only promote a legacy run if it belongs to the current assignee.
-          // Non-assignee mention wakes can leave runs with issueId in their
-          // contextSnapshot; stamping those as execution owners causes routing
-          // oscillation (TIZA-753).
-          if (legacyRun && legacyRun.agentId === issue.assigneeAgentId) {
+          // Only promote a legacy run if it belongs to the current assignee
+          // AND is not stale. Non-assignee mention wakes can leave runs with
+          // issueId in their contextSnapshot; stamping those as execution owners
+          // causes routing oscillation (TIZA-753). Stale same-assignee runs
+          // from crashed processes also create ghost locks (TIZA-757).
+          const LEGACY_RUN_MAX_AGE_MS = 30 * 60 * 1000; // 30 minutes
+          const isStaleRun =
+            legacyRun?.createdAt &&
+            Date.now() - new Date(legacyRun.createdAt).getTime() > LEGACY_RUN_MAX_AGE_MS;
+          if (legacyRun && legacyRun.agentId === issue.assigneeAgentId && !isStaleRun) {
             activeExecutionRun = legacyRun;
             const legacyAgent = await tx
               .select({ name: agents.name })
