@@ -880,7 +880,12 @@ export function issueService(db: Db) {
         (issueData.assigneeAgentId !== undefined && issueData.assigneeAgentId !== existing.assigneeAgentId) ||
         (issueData.assigneeUserId !== undefined && issueData.assigneeUserId !== existing.assigneeUserId)
       ) {
+        // Assignee change: clear all execution ownership — the incoming assignee
+        // must do a fresh checkout before execution metadata is re-stamped.
         patch.checkoutRunId = null;
+        patch.executionRunId = null;
+        patch.executionAgentNameKey = null;
+        patch.executionLockedAt = null;
       }
 
       return db.transaction(async (tx) => {

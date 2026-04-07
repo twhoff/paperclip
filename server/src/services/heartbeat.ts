@@ -3348,6 +3348,7 @@ export function heartbeatService(db: Db) {
           .select({
             id: issues.id,
             companyId: issues.companyId,
+            assigneeAgentId: issues.assigneeAgentId,
             executionRunId: issues.executionRunId,
             executionAgentNameKey: issues.executionAgentNameKey,
           })
@@ -3414,7 +3415,11 @@ export function heartbeatService(db: Db) {
             .limit(1)
             .then((rows) => rows[0] ?? null);
 
-          if (legacyRun) {
+          // Only promote a legacy run if it belongs to the current assignee.
+          // Non-assignee mention wakes can leave runs with issueId in their
+          // contextSnapshot; stamping those as execution owners causes routing
+          // oscillation (TIZA-753).
+          if (legacyRun && legacyRun.agentId === issue.assigneeAgentId) {
             activeExecutionRun = legacyRun;
             const legacyAgent = await tx
               .select({ name: agents.name })
