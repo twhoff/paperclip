@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link } from "@/lib/router";
 import { useQuery } from "@tanstack/react-query";
-import type { Goal } from "@paperclipai/shared";
+import type { Goal, Agent } from "@paperclipai/shared";
 import { GOAL_STATUSES, GOAL_LEVELS } from "@paperclipai/shared";
 import { agentsApi } from "../api/agents";
 import { goalsApi } from "../api/goals";
@@ -70,6 +70,122 @@ function PickerButton({
   );
 }
 
+function OwnerAgentPicker({
+  currentOwnerId,
+  agents,
+  ownerAgent,
+  onChange,
+}: {
+  currentOwnerId: string | null;
+  agents: Agent[];
+  ownerAgent: Agent | null;
+  onChange: (ownerAgentId: string | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button className="cursor-pointer hover:opacity-80 transition-opacity text-sm truncate max-w-[180px]">
+          {ownerAgent ? ownerAgent.name : <span className="text-muted-foreground">None</span>}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="w-56 p-1 max-h-64 overflow-y-auto" align="end">
+        <Button
+          variant="ghost"
+          size="sm"
+          className={cn("w-full justify-start text-xs", !currentOwnerId && "bg-accent")}
+          onClick={() => {
+            onChange(null);
+            setOpen(false);
+          }}
+        >
+          None
+        </Button>
+        {agents.map((a) => (
+          <Button
+            key={a.id}
+            variant="ghost"
+            size="sm"
+            className={cn("w-full justify-start text-xs truncate", a.id === currentOwnerId && "bg-accent")}
+            onClick={() => {
+              onChange(a.id);
+              setOpen(false);
+            }}
+          >
+            {a.name}
+          </Button>
+        ))}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function ParentGoalPicker({
+  currentParentId,
+  goalId,
+  goals,
+  parentGoal,
+  onChange,
+}: {
+  currentParentId: string | null;
+  goalId: string;
+  goals: Goal[];
+  parentGoal: Goal | null;
+  onChange: (parentId: string | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  // Exclude self and own descendants to prevent cycles
+  const descendants = new Set<string>();
+  function collectDescendants(id: string) {
+    for (const g of goals) {
+      if (g.parentId === id && !descendants.has(g.id)) {
+        descendants.add(g.id);
+        collectDescendants(g.id);
+      }
+    }
+  }
+  collectDescendants(goalId);
+
+  const eligible = goals.filter((g) => g.id !== goalId && !descendants.has(g.id));
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button className="cursor-pointer hover:opacity-80 transition-opacity text-sm truncate max-w-[180px]">
+          {parentGoal ? parentGoal.title : <span className="text-muted-foreground">None</span>}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="w-56 p-1 max-h-64 overflow-y-auto" align="end">
+        <Button
+          variant="ghost"
+          size="sm"
+          className={cn("w-full justify-start text-xs", !currentParentId && "bg-accent")}
+          onClick={() => {
+            onChange(null);
+            setOpen(false);
+          }}
+        >
+          None
+        </Button>
+        {eligible.map((g) => (
+          <Button
+            key={g.id}
+            variant="ghost"
+            size="sm"
+            className={cn("w-full justify-start text-xs truncate", g.id === currentParentId && "bg-accent")}
+            onClick={() => {
+              onChange(g.id);
+              setOpen(false);
+            }}
+          >
+            {g.title}
+          </Button>
+        ))}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 export function GoalProperties({ goal, onUpdate }: GoalPropertiesProps) {
   const { selectedCompanyId } = useCompany();
 
@@ -125,7 +241,14 @@ export function GoalProperties({ goal, onUpdate }: GoalPropertiesProps) {
         </PropertyRow>
 
         <PropertyRow label="Owner">
-          {ownerAgent ? (
+          {onUpdate ? (
+            <OwnerAgentPicker
+              currentOwnerId={goal.ownerAgentId}
+              agents={agents ?? []}
+              ownerAgent={ownerAgent ?? null}
+              onChange={(ownerAgentId) => onUpdate({ ownerAgentId })}
+            />
+          ) : ownerAgent ? (
             <Link
               to={agentUrl(ownerAgent)}
               className="text-sm hover:underline"
@@ -137,16 +260,26 @@ export function GoalProperties({ goal, onUpdate }: GoalPropertiesProps) {
           )}
         </PropertyRow>
 
-        {goal.parentId && (
-          <PropertyRow label="Parent Goal">
+        <PropertyRow label="Parent Goal">
+          {onUpdate ? (
+            <ParentGoalPicker
+              currentParentId={goal.parentId}
+              goalId={goal.id}
+              goals={allGoals ?? []}
+              parentGoal={parentGoal ?? null}
+              onChange={(parentId) => onUpdate({ parentId })}
+            />
+          ) : parentGoal ? (
             <Link
               to={`/goals/${goal.parentId}`}
               className="text-sm hover:underline"
             >
-              {parentGoal?.title ?? goal.parentId.slice(0, 8)}
+              {parentGoal.title}
             </Link>
-          </PropertyRow>
-        )}
+          ) : (
+            <span className="text-sm text-muted-foreground">None</span>
+          )}
+        </PropertyRow>
       </div>
 
       <Separator />
