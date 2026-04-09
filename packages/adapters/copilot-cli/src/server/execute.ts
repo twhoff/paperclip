@@ -337,29 +337,45 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       }
     }
   }
+  const paperclipCtxAuthHelperPath = skillsTmpDir
+    ? path.join(skillsTmpDir, ".agents", "skills", "paperclip-ctx-auth", "scripts", "paperclip_request.mjs")
+    : null;
   contextLines.push(
     ``,
     `Environment variables injected: PAPERCLIP_API_URL, PAPERCLIP_API_KEY, PAPERCLIP_AGENT_ID, PAPERCLIP_COMPANY_ID, PAPERCLIP_RUN_ID${ctxTaskId ? ", PAPERCLIP_TASK_ID" : ""}`,
     ``,
     `[Paperclip API Usage]`,
-    `You are running natively inside the Paperclip runtime. Use the Paperclip REST API via curl with the injected environment variables. Do NOT use pcli — that is an emulation tool for local development only.`,
+    `Call the Paperclip API from inside the context-mode MCP sandbox using the bundled paperclip-ctx-auth skill helper. Do NOT use curl, pcurl, or pcli directly — curl/pcurl bypass ctx_execute (flooding context with raw responses), and the injected PAPERCLIP_API_KEY may be the fallback "pcli-local" which is rejected in authenticated deployment mode. paperclipRequest mints a real local agent JWT, sets Authorization + X-Paperclip-Run-Id, and posts to PAPERCLIP_API_URL.`,
     ``,
-    `API pattern:`,
-    `  curl -s -H "Authorization: Bearer $PAPERCLIP_API_KEY" -H "X-Paperclip-Run-Id: $PAPERCLIP_RUN_ID" "$PAPERCLIP_API_URL/<endpoint>"`,
+    `Usage pattern (inside mcp__context-mode__ctx_execute with language="javascript"):`,
+    `  const { paperclipRequest } = await import(`,
+    paperclipCtxAuthHelperPath
+      ? `    'file://${paperclipCtxAuthHelperPath}'`
+      : `    'file:///<absolute>/.agents/skills/paperclip-ctx-auth/scripts/paperclip_request.mjs'`,
+    `  );`,
+    `  const { response, runId } = await paperclipRequest('/agents/me');`,
+    `  const body = await response.json();`,
     ``,
-    `Common endpoints:`,
-    `  GET  /api/agents/me                                          — your identity`,
-    `  GET  /api/agents/me/inbox-lite                               — assigned tasks feed (todo, in_progress, blocked)`,
-    `  GET  /api/companies/{companyId}/dashboard                    — company health overview`,
-    `  GET  /api/companies/{companyId}/issues?status=<s>&limit=50   — list issues`,
-    `  GET  /api/issues/{id}                                        — issue detail`,
-    `  GET  /api/issues/{id}/comments?order=asc                     — issue comments`,
-    `  POST /api/issues/{id}/comments  {"body":"..."}               — post comment`,
-    `  POST /api/issues/{id}/checkout                               — claim a task`,
-    `  PATCH /api/issues/{id}  {"status":"...","comment":"..."}     — update issue`,
-    `  POST /api/companies/{companyId}/issues  {...}                — create issue`,
+    `For mutating calls, pass fetch-style options as the 2nd arg:`,
+    `  await paperclipRequest('/issues/{id}/comments', {`,
+    `    method: 'POST',`,
+    `    headers: { 'Content-Type': 'application/json' },`,
+    `    body: JSON.stringify({ body: '...' }),`,
+    `  });`,
     ``,
-    `Use $PAPERCLIP_COMPANY_ID for {companyId}. Always include X-Paperclip-Run-Id on mutating calls.`,
+    `Common endpoints (paths are relative to PAPERCLIP_API_URL, which already includes /api):`,
+    `  GET  /agents/me                                          — your identity`,
+    `  GET  /agents/me/inbox-lite                               — assigned tasks feed (todo, in_progress, blocked)`,
+    `  GET  /companies/{companyId}/dashboard                    — company health overview`,
+    `  GET  /companies/{companyId}/issues?status=<s>&limit=50   — list issues`,
+    `  GET  /issues/{id}                                        — issue detail`,
+    `  GET  /issues/{id}/comments?order=asc                     — issue comments`,
+    `  POST /issues/{id}/comments  {"body":"..."}               — post comment`,
+    `  POST /issues/{id}/checkout                               — claim a task`,
+    `  PATCH /issues/{id}  {"status":"...","comment":"..."}     — update issue`,
+    `  POST /companies/{companyId}/issues  {...}                — create issue`,
+    ``,
+    `Use PAPERCLIP_COMPANY_ID for {companyId}. paperclipRequest sets X-Paperclip-Run-Id automatically on every call.`,
   );
   const paperclipContextBlock = contextLines.join("\n");
 
