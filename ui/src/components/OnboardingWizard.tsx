@@ -678,7 +678,7 @@ export function OnboardingWizard() {
                       Mission / goal (optional)
                     </label>
                     <textarea
-                      className="w-full rounded-md border border-border bg-transparent px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50 resize-none min-h-[60px]"
+                      className="w-full rounded-md border border-border bg-transparent px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50 resize-none min-h-15"
                       placeholder="What is this company trying to achieve?"
                       value={companyGoal}
                       onChange={(e) => setCompanyGoal(e.target.value)}
@@ -912,7 +912,7 @@ export function OnboardingWizard() {
                             </button>
                           </PopoverTrigger>
                           <PopoverContent
-                            className="w-[var(--radix-popover-trigger-width)] p-1"
+                            className="w-(--radix-popover-trigger-width) p-1"
                             align="start"
                           >
                             <input
@@ -936,7 +936,7 @@ export function OnboardingWizard() {
                                 Default
                               </button>
                             )}
-                            <div className="max-h-[240px] overflow-y-auto">
+                            <div className="max-h-60 overflow-y-auto">
                               {groupedModels.map((group) => (
                                 <div
                                   key={group.provider}
@@ -1170,7 +1170,7 @@ export function OnboardingWizard() {
                     </label>
                     <textarea
                       ref={textareaRef}
-                      className="w-full rounded-md border border-border bg-transparent px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50 resize-none min-h-[120px] max-h-[300px] overflow-y-auto"
+                      className="w-full rounded-md border border-border bg-transparent px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50 resize-none min-h-30 max-h-75 overflow-y-auto"
                       placeholder="Add more detail about what the agent should do..."
                       value={taskDescription}
                       onChange={(e) => setTaskDescription(e.target.value)}
@@ -1357,7 +1357,7 @@ function AdapterEnvironmentResult({
         {result.checks.map((check, idx) => (
           <div
             key={`${check.code}-${idx}`}
-            className="leading-relaxed break-words"
+            className="leading-relaxed wrap-break-word"
           >
             <span className="font-medium uppercase tracking-wide opacity-80">
               {check.level}
@@ -1370,7 +1370,7 @@ function AdapterEnvironmentResult({
               </span>
             )}
             {check.hint && (
-              <span className="block opacity-90 break-words">
+              <span className="block opacity-90 wrap-break-word">
                 Hint: {check.hint}
               </span>
             )}

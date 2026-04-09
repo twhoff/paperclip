@@ -1026,14 +1026,14 @@ function AdapterEnvironmentResult({ result }: { result: AdapterEnvironmentTestRe
       </div>
       <div className="mt-2 space-y-1.5">
         {result.checks.map((check, idx) => (
-          <div key={`${check.code}-${idx}`} className="text-[11px] leading-relaxed break-words">
+          <div key={`${check.code}-${idx}`} className="text-[11px] leading-relaxed wrap-break-word">
             <span className="font-medium uppercase tracking-wide opacity-80">
               {check.level}
             </span>
             <span className="mx-1 opacity-60">·</span>
             <span>{check.message}</span>
             {check.detail && <span className="block opacity-75 break-all">({check.detail})</span>}
-            {check.hint && <span className="block opacity-90 break-words">Hint: {check.hint}</span>}
+            {check.hint && <span className="block opacity-90 wrap-break-word">Hint: {check.hint}</span>}
           </div>
         ))}
       </div>
@@ -1072,7 +1072,7 @@ function AdapterTypeDropdown({
           <ChevronDown className="h-3 w-3 text-muted-foreground" />
         </button>
       </PopoverTrigger>
-      <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-1" align="start">
+      <PopoverContent className="w-(--radix-popover-trigger-width) p-1" align="start">
         {ADAPTER_DISPLAY_LIST.map((item) => (
           <button
             key={item.value}
@@ -1272,13 +1272,13 @@ function EnvVarEditor({
         return (
           <div key={i} className="flex items-center gap-1.5">
             <input
-              className={cn(inputClass, "flex-[2]")}
+              className={cn(inputClass, "flex-2")}
               placeholder="KEY"
               value={row.key}
               onChange={(e) => updateRow(i, { key: e.target.value })}
             />
             <select
-              className={cn(inputClass, "flex-[1] bg-background")}
+              className={cn(inputClass, "flex-1 bg-background")}
               value={row.source}
               onChange={(e) =>
                 updateRow(i, {
@@ -1293,7 +1293,7 @@ function EnvVarEditor({
             {row.source === "secret" ? (
               <>
                 <select
-                  className={cn(inputClass, "flex-[3] bg-background")}
+                  className={cn(inputClass, "flex-3 bg-background")}
                   value={row.secretId}
                   onChange={(e) => updateRow(i, { secretId: e.target.value })}
                 >
@@ -1317,7 +1317,7 @@ function EnvVarEditor({
             ) : (
               <>
                 <input
-                  className={cn(inputClass, "flex-[3]")}
+                  className={cn(inputClass, "flex-3")}
                   placeholder="value"
                   value={row.plainValue}
                   onChange={(e) => updateRow(i, { plainValue: e.target.value })}
@@ -1342,7 +1342,7 @@ function EnvVarEditor({
                 <X className="h-3.5 w-3.5" />
               </button>
             ) : (
-              <div className="w-[26px] shrink-0" />
+              <div className="w-6.5 shrink-0" />
             )}
           </div>
         );
@@ -1431,7 +1431,7 @@ function ModelDropdown({
             <ChevronDown className="h-3 w-3 text-muted-foreground" />
           </button>
         </PopoverTrigger>
-        <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-1" align="start">
+        <PopoverContent className="w-(--radix-popover-trigger-width) p-1" align="start">
           <input
             className="w-full px-2 py-1.5 text-xs bg-transparent outline-none border-b border-border mb-1 placeholder:text-muted-foreground/50"
             placeholder="Search models..."
@@ -1439,7 +1439,7 @@ function ModelDropdown({
             onChange={(e) => setModelSearch(e.target.value)}
             autoFocus
           />
-          <div className="max-h-[240px] overflow-y-auto">
+          <div className="max-h-60 overflow-y-auto">
             {allowDefault && (
               <button
                 className={cn(
@@ -1514,7 +1514,7 @@ function ThinkingEffortDropdown({
             <ChevronDown className="h-3 w-3 text-muted-foreground" />
           </button>
         </PopoverTrigger>
-        <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-1" align="start">
+        <PopoverContent className="w-(--radix-popover-trigger-width) p-1" align="start">
           {options.map((option) => (
             <button
               key={option.id || "auto"}

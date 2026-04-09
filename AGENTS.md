@@ -59,27 +59,27 @@ pnpm dev
 ## 5. Core Engineering Rules
 
 1. Keep changes company-scoped.
-Every domain entity should be scoped to a company and company boundaries must be enforced in routes/services.
+   Every domain entity should be scoped to a company and company boundaries must be enforced in routes/services.
 
 2. Keep contracts synchronized.
-If you change schema/API behavior, update all impacted layers:
-- `packages/db` schema and exports
-- `packages/shared` types/constants/validators
-- `server` routes/services
-- `ui` API clients and pages
+   If you change schema/API behavior, update all impacted layers:
+   - `packages/db` schema and exports
+   - `packages/shared` types/constants/validators
+   - `server` routes/services
+   - `ui` API clients and pages
 
 3. Preserve control-plane invariants.
-- Single-assignee task model
-- Atomic issue checkout semantics
-- Approval gates for governed actions
-- Budget hard-stop auto-pause behavior
-- Activity logging for mutating actions
+   - Single-assignee task model
+   - Atomic issue checkout semantics
+   - Approval gates for governed actions
+   - Budget hard-stop auto-pause behavior
+   - Activity logging for mutating actions
 
 4. Do not replace strategic docs wholesale unless asked.
-Prefer additive updates. Keep `doc/SPEC.md` and `doc/SPEC-implementation.md` aligned.
+   Prefer additive updates. Keep `doc/SPEC.md` and `doc/SPEC-implementation.md` aligned.
 
 5. Keep plan docs dated and centralized.
-New plan documents belong in `doc/plans/` and should use `YYYY-MM-DD-slug.md` filenames.
+   New plan documents belong in `doc/plans/` and should use `YYYY-MM-DD-slug.md` filenames.
 
 ## 6. Database Change Workflow
 
@@ -89,17 +89,18 @@ When changing data model:
 2. Ensure new tables are exported from `packages/db/src/schema/index.ts`
 3. Generate migration:
 
-```sh
-pnpm db:generate
-```
+   ```sh
+   pnpm db:generate
+   ```
 
 4. Validate compile:
 
-```sh
-pnpm -r typecheck
-```
+   ```sh
+   pnpm -r typecheck
+   ```
 
 Notes:
+
 - `packages/db/drizzle.config.ts` reads compiled schema from `dist/schema/*.js`
 - `pnpm db:generate` compiles `packages/db` first
 
@@ -144,19 +145,60 @@ A change is done when all are true:
 3. Contracts are synced across db/shared/server/ui
 4. Docs updated when behavior or commands change
 
-## 11. Landing the Plane
+## 11. Git workflow
+
+ALL work requiring edit permission MUST be done in a git worktree.
+
+1. Create a new worktree for your branch:
+
+   ```sh
+   git worktree add ../paperclip-worktrees branch-name
+   cd ../paperclip-worktrees/branch-name
+   ```
+
+2. Make commits to the branch as needed.
+3. When ready, rebase interactively to clean up commits:
+
+   ```sh
+   git pull --rebase
+   git rebase -i origin/master
+   ```
+
+4. Push directly to origin master:
+
+   ```sh
+   git push origin HEAD:master
+   ```
+
+5. Verify that push succeeded and branch is up to date with origin/master.
+6. Delete the worktree:
+
+   ```sh
+   cd ..
+   git worktree remove paperclip-worktrees/branch-name
+   ```
+
+IMPORTANT RULES:
+
+- NEVER push to upstream branches or create PRs in this repo. All changes must go directly to master.
+
+## 12. Landing the Plane
 
 Work is NOT complete until `git push` succeeds.
 
 1. File issues for any remaining or follow-up work
 2. Run quality gates if code changed:
+
    ```sh
    pnpm -r typecheck
    pnpm test:run
    pnpm build
    ```
+
 3. Push:
+
    ```sh
    git pull --rebase && git push
    ```
+
 4. Verify: `git status` must show "up to date with origin"

@@ -63,7 +63,18 @@ const HEARTBEAT_MAX_CONCURRENT_RUNS_DEFAULT = 1;
 const HEARTBEAT_MAX_CONCURRENT_RUNS_MAX = 10;
 const DEFERRED_WAKE_CONTEXT_KEY = "_paperclipWakeContext";
 const DETACHED_PROCESS_ERROR_CODE = "process_detached";
-const CIRCUIT_BREAKER_THRESHOLD = 10;
+// Consecutive-failure backoff for "* Health" agents.
+// After BACKOFF_FAILURE_WINDOW consecutive failures the heartbeat interval
+// is progressively increased so the health probe doesn't burn budget on a
+// down adapter.  Non-health agents are left alone — the pcli team-optimiser
+// handles adapter switching and interval management for them.
+const BACKOFF_FAILURE_WINDOW = 3;
+const HEALTH_BACKOFF_INTERVALS_SEC = [
+  3_600,   // 1 hour   – after  3 consecutive failures
+  14_400,  // 4 hours  – after  6
+  28_800,  // 8 hours  – after  9
+  86_400,  // 24 hours – after 12+ (stays here until recovery)
+];
 
 // Error codes eligible for automatic retry, with max attempts and delay before retry
 const RETRY_POLICY: Record<string, { maxRetries: number; delayMs: number }> = {
@@ -1769,61 +1780,110 @@ export function heartbeatService(db: Db) {
 
     const runningCount = await countRunningRunsForAgent(agentId);
 
-    // Circuit breaker: auto-pause after consecutive failures
+    // Backoff: for "* Health" agents, progressively increase the heartbeat
+    // interval after consecutive failures so we don't burn budget probing a
+    // down adapter.  Non-health agents are left to the pcli team-optimiser.
     if (outcome === "failed" && runningCount === 0) {
-      const recentRuns = await db
-        .select({ status: heartbeatRuns.status })
-        .from(heartbeatRuns)
-        .where(
-          and(
-            eq(heartbeatRuns.agentId, agentId),
-            // Only look at terminal runs (not queued/running) so newly queued retries don't dilute the window.
-            // NULL startedAt (queued rows) would otherwise sort first on DESC and corrupt the check.
-            inArray(heartbeatRuns.status, ["failed", "succeeded", "cancelled", "timed_out"]),
-            isNotNull(heartbeatRuns.startedAt),
-          ),
-        )
-        .orderBy(desc(heartbeatRuns.startedAt))
-        .limit(CIRCUIT_BREAKER_THRESHOLD);
+      const isHealthAgent = existing.name?.endsWith(" Health") ?? false;
 
-      const allFailed =
-        recentRuns.length >= CIRCUIT_BREAKER_THRESHOLD &&
-        recentRuns.every((r) => r.status === "failed");
+      if (isHealthAgent) {
+        // Count consecutive failures from the most recent terminal runs
+        const maxWindow = BACKOFF_FAILURE_WINDOW * HEALTH_BACKOFF_INTERVALS_SEC.length;
+        const recentRuns = await db
+          .select({ status: heartbeatRuns.status })
+          .from(heartbeatRuns)
+          .where(
+            and(
+              eq(heartbeatRuns.agentId, agentId),
+              inArray(heartbeatRuns.status, ["failed", "succeeded", "cancelled", "timed_out"]),
+              isNotNull(heartbeatRuns.startedAt),
+            ),
+          )
+          .orderBy(desc(heartbeatRuns.startedAt))
+          .limit(maxWindow);
 
-      if (allFailed) {
-        logger.warn(
-          { agentId, agentName: existing.name, threshold: CIRCUIT_BREAKER_THRESHOLD },
-          `circuit breaker: auto-pausing agent after ${CIRCUIT_BREAKER_THRESHOLD} consecutive failures`,
+        let consecutiveFailures = 0;
+        for (const r of recentRuns) {
+          if (r.status !== "failed") break;
+          consecutiveFailures++;
+        }
+
+        if (consecutiveFailures >= BACKOFF_FAILURE_WINDOW) {
+          const tier = Math.min(
+            Math.floor(consecutiveFailures / BACKOFF_FAILURE_WINDOW) - 1,
+            HEALTH_BACKOFF_INTERVALS_SEC.length - 1,
+          );
+          const newIntervalSec = HEALTH_BACKOFF_INTERVALS_SEC[tier];
+
+          // Read current interval to avoid redundant writes
+          const runtimeConfig = parseObject(existing.runtimeConfig);
+          const heartbeat = parseObject(runtimeConfig.heartbeat);
+          const currentIntervalSec = asNumber(heartbeat.intervalSec, 0);
+
+          if (currentIntervalSec < newIntervalSec) {
+            // Preserve the original interval on first backoff so we can restore it on recovery
+            const hasDefault = heartbeat.defaultIntervalSec != null;
+            logger.info(
+              { agentId, agentName: existing.name, consecutiveFailures, newIntervalSec },
+              `health backoff: increasing heartbeat interval to ${newIntervalSec}s after ${consecutiveFailures} consecutive failures`,
+            );
+            const setExpr = hasDefault
+              ? sql`jsonb_set(
+                  COALESCE(${agents.runtimeConfig}, '{}'::jsonb),
+                  '{heartbeat,intervalSec}',
+                  ${newIntervalSec}::text::jsonb,
+                  true
+                )`
+              : sql`jsonb_set(
+                  jsonb_set(
+                    COALESCE(${agents.runtimeConfig}, '{}'::jsonb),
+                    '{heartbeat,defaultIntervalSec}',
+                    ${currentIntervalSec || 300}::text::jsonb,
+                    true
+                  ),
+                  '{heartbeat,intervalSec}',
+                  ${newIntervalSec}::text::jsonb,
+                  true
+                )`;
+            await db
+              .update(agents)
+              .set({ runtimeConfig: setExpr, updatedAt: new Date() })
+              .where(eq(agents.id, agentId));
+          }
+        }
+      }
+      // Non-health agents: no automatic action — the pcli team-optimiser
+      // handles adapter switching and interval backoff for them.
+    }
+
+    // On success for health agents, reset interval back to the default
+    // so probes resume at normal cadence once the adapter recovers.
+    if (outcome === "succeeded" && existing.name?.endsWith(" Health")) {
+      const runtimeConfig = parseObject(existing.runtimeConfig);
+      const heartbeat = parseObject(runtimeConfig.heartbeat);
+      const currentIntervalSec = asNumber(heartbeat.intervalSec, 0);
+      const defaultIntervalSec = asNumber(heartbeat.defaultIntervalSec, 0);
+
+      if (defaultIntervalSec > 0 && currentIntervalSec > defaultIntervalSec) {
+        logger.info(
+          { agentId, agentName: existing.name, restoredIntervalSec: defaultIntervalSec },
+          `health recovery: restoring heartbeat interval to ${defaultIntervalSec}s after successful run`,
         );
-        const paused = await db
+        // Restore original interval and remove the saved default in one write
+        await db
           .update(agents)
           .set({
-            status: "paused",
-            pauseReason: `circuit_breaker: ${CIRCUIT_BREAKER_THRESHOLD} consecutive failures`,
-            pausedAt: new Date(),
-            lastHeartbeatAt: new Date(),
+            runtimeConfig: sql`(
+              jsonb_set(
+                COALESCE(${agents.runtimeConfig}, '{}'::jsonb),
+                '{heartbeat,intervalSec}',
+                ${defaultIntervalSec}::text::jsonb,
+                true
+              )
+            ) #- '{heartbeat,defaultIntervalSec}'`,
             updatedAt: new Date(),
           })
-          .where(eq(agents.id, agentId))
-          .returning()
-          .then((rows) => rows[0] ?? null);
-
-        if (paused) {
-          publishLiveEvent({
-            companyId: paused.companyId,
-            type: "agent.status",
-            payload: {
-              agentId: paused.id,
-              status: paused.status,
-              lastHeartbeatAt: paused.lastHeartbeatAt
-                ? new Date(paused.lastHeartbeatAt).toISOString()
-                : null,
-              outcome,
-              pauseReason: paused.pauseReason,
-            },
-          });
-        }
-        return;
+          .where(eq(agents.id, agentId));
       }
     }
 
@@ -3085,7 +3145,10 @@ export function heartbeatService(db: Db) {
             }).catch(() => undefined);
 
             // Attempt automatic retry before releasing the issue lock
-            const retried = await enqueueRetry(failedRun, agent, "adapter_failed", new Date()).catch(() => null);
+            const agentForRetry = await getAgent(run.agentId).catch(() => null);
+            const retried = agentForRetry
+              ? await enqueueRetry(failedRun, agentForRetry, "adapter_failed", new Date()).catch(() => null)
+              : null;
             if (!retried) {
               await releaseIssueExecutionAndPromote(failedRun).catch(() => undefined);
             }

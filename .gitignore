@@ -1,4 +1,5 @@
 node_modules/
+node-compile-cache/
 dist/
 .env
 *.tsbuildinfo
@@ -11,6 +12,7 @@ data/
 .pnpm-store/
 tmp-*
 cli/tmp/
+.pcli/
 
 # Scratch/seed scripts (but not scripts/ dir)
 check-*.mjs

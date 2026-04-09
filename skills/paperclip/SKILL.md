@@ -12,6 +12,14 @@ description: >
 
 You run in **heartbeats** — short execution windows triggered by Paperclip. Each heartbeat, you wake up, check your work, do something useful, and exit. You do not run continuously.
 
+## If the Paperclip server isn't running
+
+```bash
+cd /Users/$USER$/Projects/paperclip && pnpm dev:tailscale
+```
+
+NOTE: This runs the Paperclip server in auth mode which requires the `paperclip-ctx-auth` skill for API access. The server MUST ALWAYS be run in auth mode.
+
 ## API Access — Use `paperclipRequest` via `ctx_execute`
 
 **Always use `paperclipRequest` via `ctx_execute` for Paperclip API calls.** It mints a valid JWT, sets auth and run-ID headers automatically.
@@ -19,36 +27,36 @@ You run in **heartbeats** — short execution windows triggered by Paperclip. Ea
 ```javascript
 // Import the helper (required at the top of every ctx_execute block)
 const { paperclipRequest } =
-  await import("file:///path/to/paperclip-ctx-auth/scripts/paperclip_context_mode_request.mjs");
+  await import('file:///path/to/paperclip-ctx-auth/scripts/paperclip_context_mode_request.mjs')
 
 // Read endpoints
-const { response, identity } = await paperclipRequest("/agents/me");
-const me = await response.json();
+const { response, identity } = await paperclipRequest('/agents/me')
+const me = await response.json()
 
-const { response: inboxRes } = await paperclipRequest("/agents/me/inbox-lite");
-const { response: ctxRes } = await paperclipRequest(`/issues/${issueId}/heartbeat-context`);
+const { response: inboxRes } = await paperclipRequest('/agents/me/inbox-lite')
+const { response: ctxRes } = await paperclipRequest(`/issues/${issueId}/heartbeat-context`)
 const { response: issuesRes } = await paperclipRequest(
   `/companies/${identity.companyId}/issues?assigneeAgentId=${me.id}&status=todo,in_progress`
-);
+)
 
 // Write endpoints (auth + run-ID header injected automatically)
 await paperclipRequest(`/issues/${issueId}/checkout`, {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ agentId: me.id }),
-});
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ agentId: me.id })
+})
 
 await paperclipRequest(`/issues/${issueId}`, {
-  method: "PATCH",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ status: "done", comment: "Done." }),
-});
+  method: 'PATCH',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ status: 'done', comment: 'Done.' })
+})
 
 await paperclipRequest(`/issues/${issueId}/comments`, {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ body: "Update here." }),
-});
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ body: 'Update here.' })
+})
 ```
 
 All endpoints are under `/api` (omit the `/api` prefix — the helper adds it). All JSON.
@@ -58,63 +66,6 @@ All endpoints are under `/api` (omit the `/api` prefix — the helper adds it). 
 Env vars auto-injected: `PAPERCLIP_AGENT_ID`, `PAPERCLIP_COMPANY_ID`, `PAPERCLIP_API_URL`, `PAPERCLIP_RUN_ID`. Optional wake-context vars may also be present: `PAPERCLIP_TASK_ID` (issue/task that triggered this wake), `PAPERCLIP_WAKE_REASON` (why this run was triggered), `PAPERCLIP_WAKE_COMMENT_ID` (specific comment that triggered this wake), `PAPERCLIP_APPROVAL_ID`, `PAPERCLIP_APPROVAL_STATUS`, and `PAPERCLIP_LINKED_ISSUE_IDS` (comma-separated). `paperclipRequest` handles auth by reading `PAPERCLIP_AGENT_JWT_SECRET` from `~/.paperclip/instances/default/.env` and minting an HS256 JWT. It resolves identity from `PAPERCLIP_AGENT_ID` / `PAPERCLIP_COMPANY_ID` env vars, or accepts an explicit `identity` option.
 
 Manual local CLI mode (outside heartbeat runs): use `paperclipai agent local-cli <agent-id-or-shortname> --company-id <company-id>` to install Paperclip skills for Claude/Codex and print/export the required `PAPERCLIP_*` environment variables for that agent identity.
-
-## Troubleshooting Auth Failures
-
-`paperclipRequest` handles JWT minting automatically. If you still get 401/403 errors, work through this checklist:
-
-### 1. Check deployment mode
-
-```javascript
-const res = await fetch('http://localhost:3100/api/health');
-const health = await res.json();
-console.log(health.deploymentMode); // "local_trusted" or "authenticated"
-```
-
-- `local_trusted` (plain `pnpm dev`): auth is implicit — 401s should not happen. Check the API base URL.
-- `authenticated` (`pnpm dev:tailscale`): every request needs a valid JWT. Continue to step 2.
-
-### 2. Verify the JWT secret exists
-
-The server needs `PAPERCLIP_AGENT_JWT_SECRET` in `~/.paperclip/instances/default/.env` to mint and verify JWTs.
-
-```bash
-pnpm paperclipai doctor        # Check if secret exists
-pnpm paperclipai doctor --repair  # Generate if missing, then restart the server
-```
-
-If the server was already running when the secret was created, restart it — the secret is loaded at startup.
-
-### 3. Verify identity resolution
-
-`paperclipRequest` resolves identity from env vars (`PAPERCLIP_AGENT_ID`, `PAPERCLIP_COMPANY_ID`, `PAPERCLIP_ADAPTER_TYPE`) or falls back to a DB lookup for an active agent. If identity resolution fails, pass it explicitly:
-
-```javascript
-const { response } = await paperclipRequest('/agents/me', {
-  identity: { agentId: '...', companyId: '...', adapterType: 'claude_local' },
-});
-```
-
-### 4. Check adapter JWT support
-
-In `server/src/adapters/registry.ts`, the adapter entry must include `supportsLocalAgentJwt: true`. Without this, the heartbeat service skips JWT minting and agents run without `PAPERCLIP_API_KEY`.
-
-### 5. Tailscale hostname not allowed
-
-When accessing via a Tailscale hostname, register it:
-
-```bash
-pnpm paperclipai allowed-hostname <your-tailscale-hostname>
-```
-
-### Common error messages
-
-| Error | Cause | Fix |
-|---|---|---|
-| `401 Agent authentication required` | JWT missing or invalid | Use `paperclipRequest` — it mints a fresh JWT per call |
-| `PAPERCLIP_AGENT_JWT_SECRET missing` | Secret not in instance env file | `pnpm paperclipai doctor --repair` + restart server |
-| `No active agent found for adapter_type=...` | Identity resolution failed | Pass explicit `identity` option |
-| `local agent jwt secret missing` (server log) | Secret not loaded | Restart server after `doctor --repair` |
 
 ## The Heartbeat Procedure
 
@@ -146,10 +97,10 @@ If nothing is assigned and there is no valid mention-based ownership handoff, ex
 
 ```javascript
 await paperclipRequest(`/issues/${issueId}/checkout`, {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ agentId: me.id, expectedStatuses: ["todo", "backlog", "blocked"] }),
-});
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ agentId: me.id, expectedStatuses: ['todo', 'backlog', 'blocked'] })
+})
 ```
 
 If already checked out by you, returns normally. If owned by another agent: `409 Conflict` — stop, pick a different task. **Never retry a 409.**
@@ -173,19 +124,19 @@ When writing issue descriptions or comments, follow the ticket-linking rule in *
 
 ```javascript
 await paperclipRequest(`/issues/${issueId}`, {
-  method: "PATCH",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ status: "done", comment: "What was done and why." }),
-});
+  method: 'PATCH',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ status: 'done', comment: 'What was done and why.' })
+})
 
 await paperclipRequest(`/issues/${issueId}`, {
-  method: "PATCH",
-  headers: { "Content-Type": "application/json" },
+  method: 'PATCH',
+  headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({
-    status: "blocked",
-    comment: "What is blocked, why, and who needs to unblock it.",
-  }),
-});
+    status: 'blocked',
+    comment: 'What is blocked, why, and who needs to unblock it.'
+  })
+})
 ```
 
 Status values: `backlog`, `todo`, `in_progress`, `in_review`, `done`, `blocked`, `cancelled`. Priority values: `critical`, `high`, `medium`, `low`. Other updatable fields: `title`, `description`, `priority`, `assigneeAgentId`, `projectId`, `goalId`, `parentId`, `billingCode`.
@@ -194,10 +145,10 @@ Status values: `backlog`, `todo`, `in_progress`, `in_review`, `done`, `blocked`,
 
 ```javascript
 await paperclipRequest(`/companies/${identity.companyId}/issues`, {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ title: "...", parentId: "...", goalId: "..." }),
-});
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ title: '...', parentId: '...', goalId: '...' })
+})
 ```
 
 Always set `parentId` and `goalId`. Set `billingCode` for cross-team work.
@@ -208,25 +159,25 @@ When asked to set up a new project with workspace config (local folder and/or Gi
 
 1. Create the project via `ctx_execute`:
 
-```javascript
-await paperclipRequest(`/companies/${identity.companyId}/projects`, {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({
-    /* project fields */
-  }),
-});
-```
+   ```javascript
+   await paperclipRequest(`/companies/${identity.companyId}/projects`, {
+     method: 'POST',
+     headers: { 'Content-Type': 'application/json' },
+     body: JSON.stringify({
+       /* project fields */
+     })
+   })
+   ```
 
 2. Optionally include `workspace` in that same create call, or add it after:
 
-```javascript
-await paperclipRequest(`/projects/${projectId}/workspaces`, {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ cwd: "/path/to/local", repoUrl: "https://github.com/..." }),
-});
-```
+   ```javascript
+   await paperclipRequest(`/projects/${projectId}/workspaces`, {
+     method: 'POST',
+     headers: { 'Content-Type': 'application/json' },
+     body: JSON.stringify({ cwd: '/path/to/local', repoUrl: 'https://github.com/...' })
+   })
+   ```
 
 Workspace rules:
 
@@ -240,28 +191,26 @@ Use this when asked to invite a new OpenClaw employee.
 
 1. Generate a fresh OpenClaw invite prompt:
 
-```javascript
-const { response } = await paperclipRequest(
-  `/companies/${identity.companyId}/openclaw/invite-prompt`,
-  {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ agentMessage: "optional onboarding note for OpenClaw" }),
-  }
-);
-const data = await response.json();
-```
+   ```javascript
+   const { response } = await paperclipRequest(
+     `/companies/${identity.companyId}/openclaw/invite-prompt`,
+     {
+       method: 'POST',
+       headers: { 'Content-Type': 'application/json' },
+       body: JSON.stringify({ agentMessage: 'optional onboarding note for OpenClaw' })
+     }
+   )
+   const data = await response.json()
+   ```
 
-Access control:
-
-- Board users with invite permission can call it.
-- Agent callers: only the company CEO agent can call it.
+   Access control:
+   - Board users with invite permission can call it.
+   - Agent callers: only the company CEO agent can call it.
 
 2. Build the copy-ready OpenClaw prompt for the board:
-
-- Use `onboardingTextUrl` from the response.
-- Ask the board to paste that prompt into OpenClaw.
-- If the issue includes an OpenClaw URL (for example `ws://127.0.0.1:18789`), include that URL in your comment so the board/OpenClaw uses it in `agentDefaultsPayload.url`.
+   - Use `onboardingTextUrl` from the response.
+   - Ask the board to paste that prompt into OpenClaw.
+   - If the issue includes an OpenClaw URL (for example `ws://127.0.0.1:18789`), include that URL in your comment so the board/OpenClaw uses it in `agentDefaultsPayload.url`.
 
 3. Post the prompt in the issue comment so the human can paste it into OpenClaw.
 
@@ -277,6 +226,30 @@ Authorized managers can install company skills independently of hiring, then ass
 
 If you are asked to install a skill for the company or an agent you MUST read:
 `skills/paperclip/references/company-skills.md`
+
+## MANDATORY git workflow when making edits or writing files
+
+**`pcli` tool usage is explicitly permitted for the git workflow.**
+
+Create git worktree using `pcli worktree <ISSUE-ID>` (`git worktree` is blocked) -> do work inside the worktree -> commit changes -> merge to main -> push -> remove worktree.
+
+```bash
+pcli worktree <ISSUE-ID>  # Create a git worktree for the issue (ALL work MUST have a TIZA-<NNN> issue ID and be tracked in the issue tracker system)
+# Do work inside the worktree directory that was created (e.g. /Users/$USER$/Projects/tizzi-app-worktrees/TIZA-123)
+cd /Users/$USER$/Projects/tizzi-app-worktrees/TIZA-123
+# ... make code changes, run tests, etc. ...
+# When done, commit changes in the worktree
+git add .
+git commit -m "feat(TIZA-123): Implement new login flow"
+# Merge to main in the primary checkout
+cd /Users/$USER$/Projects/tizzi-app
+git merge tiza-123
+git push
+# Remove the worktree
+pcli worktree remove <ISSUE-ID>
+# Confirm the worktree is removed and the branch is cleaned up
+pcli worktree list
+```
 
 ## Critical Rules
 
@@ -353,15 +326,15 @@ Recommended API flow:
 
 ```javascript
 await paperclipRequest(`/issues/${issueId}/documents/plan`, {
-  method: "PUT",
-  headers: { "Content-Type": "application/json" },
+  method: 'PUT',
+  headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({
-    title: "Plan",
-    format: "markdown",
-    body: "# Plan\n\n[your plan here]",
-    baseRevisionId: null,
-  }),
-});
+    title: 'Plan',
+    format: 'markdown',
+    body: '# Plan\n\n[your plan here]',
+    baseRevisionId: null
+  })
+})
 ```
 
 If `plan` already exists, fetch the current document first and send its latest `baseRevisionId` when you update it.
@@ -372,10 +345,10 @@ Use the dedicated route instead of generic `PATCH /api/agents/:id` when you need
 
 ```javascript
 await paperclipRequest(`/agents/${agentId}/instructions-path`, {
-  method: "PATCH",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ path: "agents/cmo/AGENTS.md" }),
-});
+  method: 'PATCH',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ path: 'agents/cmo/AGENTS.md' })
+})
 ```
 
 Rules:
@@ -388,13 +361,13 @@ Rules:
 
 ```javascript
 await paperclipRequest(`/agents/${agentId}/instructions-path`, {
-  method: "PATCH",
-  headers: { "Content-Type": "application/json" },
+  method: 'PATCH',
+  headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({
-    path: "/absolute/path/to/AGENTS.md",
-    adapterConfigKey: "yourAdapterSpecificPathField",
-  }),
-});
+    path: '/absolute/path/to/AGENTS.md',
+    adapterConfigKey: 'yourAdapterSpecificPathField'
+  })
+})
 ```
 
 ## Key Endpoints (Quick Reference)
@@ -466,8 +439,8 @@ For export, preview first and keep tasks explicit:
 Use the `q` query parameter on the issues list endpoint to search across titles, identifiers, descriptions, and comments:
 
 ```javascript
-const { response } = await paperclipRequest(`/companies/${companyId}/issues?q=dockerfile`);
-const results = await response.json();
+const { response } = await paperclipRequest(`/companies/${companyId}/issues?q=dockerfile`)
+const results = await response.json()
 ```
 
 Results are ranked by relevance: title matches first, then identifier, description, and comments. You can combine `q` with other filters (`status`, `assigneeAgentId`, `projectId`, `labelId`).
@@ -478,32 +451,32 @@ Use this when validating Paperclip itself (assignment flow, checkouts, run visib
 
 1. Create a throwaway issue assigned to a known local agent (`claudecoder` or `codexcoder`):
 
-```bash
-pnpm paperclipai issue create \
-  --company-id "$PAPERCLIP_COMPANY_ID" \
-  --title "Self-test: assignment/watch flow" \
-  --description "Temporary validation issue" \
-  --status todo \
-  --assignee-agent-id "$PAPERCLIP_AGENT_ID"
-```
+   ```bash
+   pnpm paperclipai issue create \
+     --company-id "$PAPERCLIP_COMPANY_ID" \
+     --title "Self-test: assignment/watch flow" \
+     --description "Temporary validation issue" \
+     --status todo \
+     --assignee-agent-id "$PAPERCLIP_AGENT_ID"
+   ```
 
 2. Trigger and watch a heartbeat for that assignee:
 
-```bash
-pnpm paperclipai heartbeat run --agent-id "$PAPERCLIP_AGENT_ID"
-```
+   ```bash
+   pnpm paperclipai heartbeat run --agent-id "$PAPERCLIP_AGENT_ID"
+   ```
 
 3. Verify the issue transitions (`todo -> in_progress -> done` or `blocked`) and that comments are posted:
 
-```bash
-pnpm paperclipai issue get <issue-id-or-identifier>
-```
+   ```bash
+   pnpm paperclipai issue get <issue-id-or-identifier>
+   ```
 
 4. Reassignment test (optional): move the same issue between `claudecoder` and `codexcoder` and confirm wake/run behavior:
 
-```bash
-pnpm paperclipai issue update <issue-id> --assignee-agent-id <other-agent-id> --status todo
-```
+   ```bash
+   pnpm paperclipai issue update <issue-id> --assignee-agent-id <other-agent-id> --status todo
+   ```
 
 5. Cleanup: mark temporary issues done/cancelled with a clear note.
 
