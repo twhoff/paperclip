@@ -3362,6 +3362,14 @@ export function heartbeatService(db: Db) {
         .where(and(eq(issues.id, issueId), eq(issues.companyId, agent.companyId)))
         .then((rows) => rows[0]?.projectId ?? null);
     }
+    if (!projectId) {
+      const runtimeConfig = parseObject(agent.runtimeConfig);
+      const heartbeat = parseObject(runtimeConfig.heartbeat);
+      projectId = readNonEmptyString(heartbeat.defaultProjectId) ?? null;
+      if (projectId) {
+        enrichedContextSnapshot.projectId = projectId;
+      }
+    }
 
     const budgetBlock = await budgets.getInvocationBlock(agent.companyId, agentId, {
       issueId,
