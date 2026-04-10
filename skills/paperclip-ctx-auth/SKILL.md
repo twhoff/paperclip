@@ -1,6 +1,6 @@
 ---
 name: paperclip-ctx-auth
-description: "Mint and use a local Paperclip agent JWT from inside `ctx_execute` for authenticated API calls in local or Tailscale/private-network dev mode. Use when `ctx_execute` must call the Paperclip API, `PAPERCLIP_API_KEY` is `pcli-local` or otherwise unusable, the server reports `deploymentMode: authenticated`, or direct sandboxed requests return `401 Agent authentication required`."
+description: "Authenticate to the Paperclip API in authenticated deployment mode. Use when making API calls that return 'Board access required', '401 Agent authentication required', or other auth errors. Covers minting local agent JWTs, board session auth, and the `paperclip_request.mjs` helper for `ctx_execute`. Triggers: `deploymentMode: authenticated`, curl/fetch returning 401/403, `PAPERCLIP_API_KEY` unusable, pausing or managing agents via API, any Paperclip REST call needing auth."
 ---
 
 # Paperclip ctx auth
@@ -15,13 +15,12 @@ The key point: inside `ctx_execute`, `PAPERCLIP_API_KEY` may be the fallback `pc
 Import the bundled helper from `ctx_execute`:
 
 ```javascript
-const { paperclipRequest } = await import(
-  'file:///absolute/path/to/.agents/skills/paperclip-ctx-auth/scripts/paperclip_request.mjs'
-);
+const { paperclipRequest } =
+  await import('file:///absolute/path/to/.agents/skills/paperclip-ctx-auth/scripts/paperclip_request.mjs')
 
-const { response, runId, identity } = await paperclipRequest('/agents/me');
-const body = await response.json();
-console.log(JSON.stringify({ status: response.status, runId, identity, body }, null, 2));
+const { response, runId, identity } = await paperclipRequest('/agents/me')
+const body = await response.json()
+console.log(JSON.stringify({ status: response.status, runId, identity, body }, null, 2))
 ```
 
 If you are working from a worktree, change the absolute prefix but keep the `.agents/skills/paperclip-ctx-auth/...` suffix.
@@ -31,8 +30,8 @@ If you are working from a worktree, change the absolute prefix but keep the `.ag
 1. Confirm the server is reachable:
 
 ```javascript
-const res = await fetch('http://localhost:3100/api/health');
-console.log(await res.text());
+const res = await fetch('http://localhost:3100/api/health')
+console.log(await res.text())
 ```
 
 2. If the health response shows `deploymentMode: authenticated`, do not rely on `PAPERCLIP_API_KEY=pcli-local`.
@@ -46,9 +45,9 @@ const result = await paperclipRequest('/agents/me', {
   identity: {
     agentId: '...',
     companyId: '...',
-    adapterType: 'codex_local',
-  },
-});
+    adapterType: 'codex_local'
+  }
+})
 ```
 
 5. If identity is not provided, the helper resolves it from:
