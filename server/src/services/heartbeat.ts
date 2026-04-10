@@ -2562,6 +2562,9 @@ export function heartbeatService(db: Db) {
         await fs.mkdir(home, { recursive: true });
         return home;
       })(),
+      ...(readNonEmptyString(resolvedConfig.instructionsRootPath)
+        ? { instructionsRootPath: resolvedConfig.instructionsRootPath }
+        : {}),
     };
     context.paperclipWorkspaces = resolvedWorkspace.workspaceHints;
     const runtimeServiceIntents = (() => {
