@@ -61,6 +61,28 @@ function parseRetryAfterHint(errorMessage: string | null | undefined): Date | nu
     }
   }
 
+  // "resets 12pm" / "resets 10pm (Australia/Melbourne)" — 12-hour clock without "at"
+  const resetsAmPm = errorMessage.match(
+    /resets?\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)(?:\s*\(([^)]+)\))?/i,
+  );
+  if (resetsAmPm) {
+    let hour = parseInt(resetsAmPm[1], 10);
+    const min = resetsAmPm[2] ? parseInt(resetsAmPm[2], 10) : 0;
+    const ampm = resetsAmPm[3].toLowerCase();
+    if (ampm === "pm" && hour !== 12) hour += 12;
+    if (ampm === "am" && hour === 12) hour = 0;
+
+    // Build a target date in the local server timezone (best-effort)
+    const now = new Date();
+    const target = new Date(now);
+    target.setHours(hour, min, 0, 0);
+    // If the target time has already passed today, assume tomorrow
+    if (target.getTime() <= now.getTime()) {
+      target.setDate(target.getDate() + 1);
+    }
+    return target;
+  }
+
   return null;
 }
 
@@ -213,6 +235,10 @@ export function adapterStatusService(db: Db) {
     if (!nextCheckAt && newFailures >= OFFLINE_THRESHOLD) {
       const backoffMin = nextBackoffMinutes(newFailures);
       nextCheckAt = new Date(now.getTime() + backoffMin * 60_000);
+    }
+    // Degraded adapters also get a check time so probing can clear stale entries
+    if (!nextCheckAt && newFailures >= DEGRADED_THRESHOLD) {
+      nextCheckAt = new Date(now.getTime() + BACKOFF_TIERS_MIN[0] * 60_000);
     }
 
     const truncatedError = errorMessage ? errorMessage.slice(0, 2000) : null;
