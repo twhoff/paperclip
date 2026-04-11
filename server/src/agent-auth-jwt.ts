@@ -15,6 +15,8 @@ export interface LocalAgentJwtClaims {
   iss?: string;
   aud?: string;
   jti?: string;
+  /** When true the JWT represents a pcli board operator, not an agent. */
+  pcli_board?: boolean;
 }
 
 const JWT_ALGORITHM = "HS256";
@@ -117,7 +119,11 @@ export function verifyLocalAgentJwt(token: string): LocalAgentJwtClaims | null {
   const runId = typeof claims.run_id === "string" ? claims.run_id : null;
   const iat = typeof claims.iat === "number" ? claims.iat : null;
   const exp = typeof claims.exp === "number" ? claims.exp : null;
-  if (!sub || !companyId || !adapterType || !runId || !iat || !exp) return null;
+  const pcliBoardClaim = claims.pcli_board === true;
+
+  // Board JWTs relax the company_id requirement (may be empty during prime).
+  if (!sub || !adapterType || !runId || !iat || !exp) return null;
+  if (!pcliBoardClaim && !companyId) return null;
 
   const now = Math.floor(Date.now() / 1000);
   if (exp < now) return null;
@@ -129,7 +135,7 @@ export function verifyLocalAgentJwt(token: string): LocalAgentJwtClaims | null {
 
   return {
     sub,
-    company_id: companyId,
+    company_id: companyId ?? "",
     adapter_type: adapterType,
     run_id: runId,
     iat,
@@ -137,5 +143,6 @@ export function verifyLocalAgentJwt(token: string): LocalAgentJwtClaims | null {
     ...(issuer ? { iss: issuer } : {}),
     ...(audience ? { aud: audience } : {}),
     jti: typeof claims.jti === "string" ? claims.jti : undefined,
+    ...(pcliBoardClaim ? { pcli_board: true } : {}),
   };
 }

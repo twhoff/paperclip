@@ -94,6 +94,21 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
         return;
       }
 
+      // Board operator JWT — grant board access without agent lookup.
+      // Security: the JWT is signed with PAPERCLIP_AGENT_JWT_SECRET which is
+      // an instance-level secret. Possessing it implies full trust.
+      if (claims.pcli_board) {
+        req.actor = {
+          type: "board",
+          userId: `pcli:${claims.sub}`,
+          isInstanceAdmin: true,
+          runId: runIdHeader || claims.run_id || undefined,
+          source: "local_implicit",
+        };
+        next();
+        return;
+      }
+
       const agentRecord = await db
         .select()
         .from(agents)
