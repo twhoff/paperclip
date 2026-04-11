@@ -3076,6 +3076,9 @@ export function heartbeatService(db: Db) {
                 succeeded: false,
                 errorMessage: message,
                 errorCode: "setup_failed",
+              }).catch((e) => logger.warn({ err: e, runId }, "failed to update adapter status (setup)"));
+            }
+
           await releaseRuntimeServicesForRun(run.id).catch(() => undefined);
           activeRunExecutions.delete(run.id);
           await startNextQueuedRunForAgent(run.agentId);
