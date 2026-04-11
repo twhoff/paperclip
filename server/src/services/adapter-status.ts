@@ -1,6 +1,6 @@
 import type { Db } from "@paperclipai/db";
 import { adapterStatus } from "@paperclipai/db";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, lte, sql } from "drizzle-orm";
 
 /**
  * Thresholds for adapter status transitions based on consecutive failures.
@@ -221,9 +221,31 @@ export function adapterStatusService(db: Db) {
       .then((rows) => rows[0] ?? null);
   }
 
+  async function resetExpiredStatuses(): Promise<string[]> {
+    const now = new Date();
+    const reset = await db
+      .update(adapterStatus)
+      .set({
+        status: "unknown",
+        nextCheckAt: null,
+        statusMessage: "auto-reset after retry window elapsed",
+        updatedAt: now,
+      })
+      .where(
+        and(
+          isNotNull(adapterStatus.nextCheckAt),
+          lte(adapterStatus.nextCheckAt, now),
+          inArray(adapterStatus.status, ["offline", "degraded"]),
+        ),
+      )
+      .returning({ adapterType: adapterStatus.adapterType });
+    return reset.map((r) => r.adapterType);
+  }
+
   return {
     recordRunOutcome,
     listAll,
     getByType,
+    resetExpiredStatuses,
   };
 }

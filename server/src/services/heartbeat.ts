@@ -4070,6 +4070,11 @@ export function heartbeatService(db: Db) {
     resumeQueuedRuns,
 
     tickTimers: async (now = new Date()) => {
+      // Reset adapters whose retry window has elapsed so they become available again.
+      await adapterStatusSvc.resetExpiredStatuses().catch((e) =>
+        logger.warn({ err: e }, "failed to reset expired adapter statuses"),
+      );
+
       const allAgents = await db.select().from(agents);
       let checked = 0;
       let enqueued = 0;

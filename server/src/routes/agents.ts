@@ -699,6 +699,8 @@ export function agentRoutes(db: Db) {
   const adapterStatusSvc = adapterStatusService(db);
 
   router.get("/adapters/status", async (_req, res) => {
+    // Reset adapters past their retry window before returning status.
+    await adapterStatusSvc.resetExpiredStatuses().catch(() => undefined);
     const statuses = await adapterStatusSvc.listAll();
     res.json(statuses);
   });
