@@ -83,6 +83,45 @@ function parseRetryAfterHint(errorMessage: string | null | undefined): Date | nu
     return target;
   }
 
+  // "resets 25 Apr at 10:46am" (absolute date, no year)
+  const resetsAbs = errorMessage.match(
+    /resets?\s+(\d{1,2})\s+([A-Za-z]{3,9})\s+at\s+(\d{1,2}):(\d{2})(am|pm)/i,
+  );
+  if (resetsAbs) {
+    const day = parseInt(resetsAbs[1], 10);
+    const monthStr = resetsAbs[2].toLowerCase();
+    const hourRaw = parseInt(resetsAbs[3], 10);
+    const min = parseInt(resetsAbs[4], 10);
+    const ampm = resetsAbs[5].toLowerCase();
+    const monthMap: Record<string, number> = {
+      jan: 0, january: 0,
+      feb: 1, february: 1,
+      mar: 2, march: 2,
+      apr: 3, april: 3,
+      may: 4,
+      jun: 5, june: 5,
+      jul: 6, july: 6,
+      aug: 7, august: 7,
+      sep: 8, sept: 8, september: 8,
+      oct: 9, october: 9,
+      nov: 10, november: 10,
+      dec: 11, december: 11,
+    };
+    const month = monthMap[monthStr];
+    if (month === undefined) return null;
+    let hour = hourRaw;
+    if (ampm === "pm" && hour !== 12) hour += 12;
+    if (ampm === "am" && hour === 12) hour = 0;
+    const now = new Date();
+    let year = now.getFullYear();
+    let target = new Date(year, month, day, hour, min, 0, 0);
+    // If the date has already passed this year, assume next year
+    if (target.getTime() <= now.getTime()) {
+      target = new Date(year + 1, month, day, hour, min, 0, 0);
+    }
+    return target;
+  }
+
   return null;
 }
 
