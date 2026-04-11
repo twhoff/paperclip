@@ -3065,18 +3065,17 @@ export function heartbeatService(db: Db) {
           // DB calls threw (e.g. a transient DB error in finalizeAgentStatus).
           await finalizeAgentStatus(run.agentId, "failed").catch(() => undefined);
 
-          // Update instance-level adapter status — setup error
-          const agentForAdapterStatus = await getAgent(run.agentId).catch(() => null);
-          if (agentForAdapterStatus) {
-            await adapterStatusSvc.recordRunOutcome({
-              adapterType: agentForAdapterStatus.adapterType,
-              succeeded: false,
-              errorMessage: message,
-              errorCode: "adapter_failed",
-            }).catch(() => undefined);
-          }
-
-        } finally {
+            // Update instance-level adapter status — setup error.
+            // Use "setup_failed" (not "adapter_failed") so that pre-adapter failures
+            // (workspace resolution, ensureRuntimeState, etc.) do NOT increment
+            // consecutive adapter failures or push the adapter to degraded/offline.
+            const agentForAdapterStatus = await getAgent(run.agentId).catch(() => null);
+            if (agentForAdapterStatus) {
+              await adapterStatusSvc.recordRunOutcome({
+                adapterType: agentForAdapterStatus.adapterType,
+                succeeded: false,
+                errorMessage: message,
+                errorCode: "setup_failed",
           await releaseRuntimeServicesForRun(run.id).catch(() => undefined);
           activeRunExecutions.delete(run.id);
           await startNextQueuedRunForAgent(run.agentId);

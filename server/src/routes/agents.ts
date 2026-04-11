@@ -707,6 +707,9 @@ export function agentRoutes(db: Db) {
 
   router.get("/adapters/:type/status", async (req, res) => {
     const type = req.params.type as string;
+    // Reset expired statuses before reading so this endpoint stays consistent
+    // with the collection endpoint after a retry window elapses.
+    await adapterStatusSvc.resetExpiredStatuses().catch(() => undefined);
     const status = await adapterStatusSvc.getByType(type);
     if (!status) {
       res.json({ adapterType: type, status: "unknown" });

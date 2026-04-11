@@ -228,7 +228,10 @@ export function adapterStatusService(db: Db) {
       .set({
         status: "unknown",
         nextCheckAt: null,
-        statusMessage: "auto-reset after retry window elapsed",
+        statusMessage: null,
+        consecutiveFailures: 0,
+        lastError: null,
+        lastErrorCode: null,
         updatedAt: now,
       })
       .where(
