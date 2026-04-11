@@ -79,7 +79,7 @@ const ADAPTER_ERROR_CODES = new Set([
 ]);
 
 function isAdapterLevelFailure(errorCode: string | null | undefined): boolean {
-  if (!errorCode) return true; // default "adapter_failed"
+  if (!errorCode) return false; // unknown error type — don't blame the adapter
   return ADAPTER_ERROR_CODES.has(errorCode);
 }
 
