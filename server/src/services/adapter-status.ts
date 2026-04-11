@@ -186,6 +186,8 @@ export function adapterStatusService(db: Db) {
               set: { updatedAt: now },
             });
         }
+      return;
+    }
 
     // Read current state to compute next consecutive count
     const current = await db
