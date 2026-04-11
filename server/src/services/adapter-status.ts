@@ -132,21 +132,60 @@ export function adapterStatusService(db: Db) {
 
     // Failure path — only count adapter-level failures against the adapter
     if (!isAdapterLevelFailure(errorCode)) {
-      // Agent logic failure: don't change adapter status, just touch updatedAt
-      await db
-        .insert(adapterStatus)
-        .values({
-          adapterType,
-          status: "online",
-          updatedAt: now,
-          createdAt: now,
-        })
-        .onConflictDoUpdate({
-          target: adapterStatus.adapterType,
-          set: { updatedAt: now },
-        });
-      return;
-    }
+        // Agent logic failure: the adapter itself executed fine.  If the adapter
+        // was in "probing" state (retry window just elapsed), promote it to
+        // "online" — the probe confirmed the adapter works.  Otherwise just
+        // touch updatedAt so we don't discard the existing status.
+        const existing = await db
+          .select({ status: adapterStatus.status })
+          .from(adapterStatus)
+          .where(eq(adapterStatus.adapterType, adapterType))
+          .then((rows) => rows[0] ?? null);
+
+        if (existing?.status === "probing") {
+          await db
+            .insert(adapterStatus)
+            .values({
+              adapterType,
+              status: "online",
+              statusMessage: null,
+              lastSuccessAt: now,
+              lastError: null,
+              lastErrorCode: null,
+              consecutiveFailures: 0,
+              consecutiveSuccesses: 1,
+              nextCheckAt: null,
+              updatedAt: now,
+              createdAt: now,
+            })
+            .onConflictDoUpdate({
+              target: adapterStatus.adapterType,
+              set: {
+                status: "online",
+                statusMessage: null,
+                lastSuccessAt: now,
+                lastError: null,
+                lastErrorCode: null,
+                consecutiveFailures: 0,
+                consecutiveSuccesses: sql`${adapterStatus.consecutiveSuccesses} + 1`,
+                nextCheckAt: null,
+                updatedAt: now,
+              },
+            });
+        } else {
+          await db
+            .insert(adapterStatus)
+            .values({
+              adapterType,
+              status: "online",
+              updatedAt: now,
+              createdAt: now,
+            })
+            .onConflictDoUpdate({
+              target: adapterStatus.adapterType,
+              set: { updatedAt: now },
+            });
+        }
 
     // Read current state to compute next consecutive count
     const current = await db
@@ -221,34 +260,57 @@ export function adapterStatusService(db: Db) {
       .then((rows) => rows[0] ?? null);
   }
 
-  async function resetExpiredStatuses(): Promise<string[]> {
-    const now = new Date();
-    const reset = await db
-      .update(adapterStatus)
-      .set({
-        status: "unknown",
-        nextCheckAt: null,
-        statusMessage: null,
-        consecutiveFailures: 0,
-        lastError: null,
-        lastErrorCode: null,
-        updatedAt: now,
-      })
-      .where(
-        and(
-          isNotNull(adapterStatus.nextCheckAt),
-          lte(adapterStatus.nextCheckAt, now),
-          inArray(adapterStatus.status, ["offline", "degraded"]),
-        ),
-      )
-      .returning({ adapterType: adapterStatus.adapterType });
-    return reset.map((r) => r.adapterType);
-  }
+/**
+     * For every offline/degraded adapter whose retry window has elapsed, transition
+     * the status to "probing" so a lightweight probe run can be enqueued.
+     *
+     * Returns the adapter types that were transitioned.
+     *
+     * Formerly called resetExpiredStatuses — retained as an alias for callers that
+     * only need the list of adapters whose windows elapsed.
+     */
+    async function markExpiredForProbing(): Promise<string[]> {
+      const now = new Date();
+      const reset = await db
+        .update(adapterStatus)
+        .set({
+          status: "probing",
+          nextCheckAt: null,
+          statusMessage: "probing adapter after retry window",
+          consecutiveFailures: 0,
+          lastError: null,
+          lastErrorCode: null,
+          updatedAt: now,
+        })
+        .where(
+          and(
+            isNotNull(adapterStatus.nextCheckAt),
+            lte(adapterStatus.nextCheckAt, now),
+            inArray(adapterStatus.status, ["offline", "degraded"]),
+          ),
+        )
+        .returning({ adapterType: adapterStatus.adapterType });
+      return reset.map((r) => r.adapterType);
+    }
 
-  return {
-    recordRunOutcome,
-    listAll,
-    getByType,
-    resetExpiredStatuses,
+    /** Back-compat alias used by the API routes that just need to surface fresh status. */
+    const resetExpiredStatuses = markExpiredForProbing;
+
+    /** Return all adapters currently in "probing" state. */
+    async function listProbing(): Promise<string[]> {
+      const rows = await db
+        .select({ adapterType: adapterStatus.adapterType })
+        .from(adapterStatus)
+        .where(eq(adapterStatus.status, "probing"));
+      return rows.map((r) => r.adapterType);
+    }
+
+    return {
+      recordRunOutcome,
+      listAll,
+      getByType,
+      markExpiredForProbing,
+      resetExpiredStatuses,
+      listProbing,
   };
 }
