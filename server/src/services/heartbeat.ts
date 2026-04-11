@@ -57,6 +57,7 @@ import {
   resolveSessionCompactionPolicy,
   type SessionCompactionPolicy,
 } from "@paperclipai/adapter-utils";
+import { adapterStatusService } from "./adapter-status.js";
 
 const MAX_LIVE_LOG_CHUNK_BYTES = 8 * 1024;
 const HEARTBEAT_MAX_CONCURRENT_RUNS_DEFAULT = 1;
@@ -804,6 +805,7 @@ export function heartbeatService(db: Db) {
     cancelWorkForScope: cancelBudgetScopeWork,
   };
   const budgets = budgetService(db, budgetHooks);
+  const adapterStatusSvc = adapterStatusService(db);
 
   async function getAgent(agentId: string) {
     return db
@@ -3052,6 +3054,15 @@ export function heartbeatService(db: Db) {
         }
       }
       await finalizeAgentStatus(agent.id, outcome);
+
+      // Update instance-level adapter status based on run outcome
+      await adapterStatusSvc.recordRunOutcome({
+        adapterType: agent.adapterType,
+        succeeded: outcome === "succeeded",
+        errorMessage: adapterResult.errorMessage,
+        errorCode: outcome === "failed" ? (adapterResult.errorCode ?? "adapter_failed") : null,
+      }).catch((e) => logger.warn({ err: e, runId }, "failed to update adapter status"));
+
     } catch (err) {
       const message = redactCurrentUserText(
         err instanceof Error ? err.message : "Unknown adapter failure",
@@ -3121,6 +3132,15 @@ export function heartbeatService(db: Db) {
       }
 
       await finalizeAgentStatus(agent.id, "failed");
+
+      // Update instance-level adapter status — caught adapter error
+      await adapterStatusSvc.recordRunOutcome({
+        adapterType: agent.adapterType,
+        succeeded: false,
+        errorMessage: message,
+        errorCode: "adapter_failed",
+      }).catch((e) => logger.warn({ err: e, runId }, "failed to update adapter status"));
+
     }
     } catch (outerErr) {
           // Setup code before adapter.execute threw (e.g. ensureRuntimeState, resolveWorkspaceForRun).
@@ -3159,6 +3179,18 @@ export function heartbeatService(db: Db) {
           // Ensure the agent is not left stuck in "running" if the inner catch handler's
           // DB calls threw (e.g. a transient DB error in finalizeAgentStatus).
           await finalizeAgentStatus(run.agentId, "failed").catch(() => undefined);
+
+          // Update instance-level adapter status — setup error
+          const agentForAdapterStatus = await getAgent(run.agentId).catch(() => null);
+          if (agentForAdapterStatus) {
+            await adapterStatusSvc.recordRunOutcome({
+              adapterType: agentForAdapterStatus.adapterType,
+              succeeded: false,
+              errorMessage: message,
+              errorCode: "adapter_failed",
+            }).catch(() => undefined);
+          }
+
         } finally {
           await releaseRuntimeServicesForRun(run.id).catch(() => undefined);
           activeRunExecutions.delete(run.id);

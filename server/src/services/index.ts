@@ -30,3 +30,4 @@ export { publishLiveEvent, subscribeCompanyLiveEvents } from "./live-events.js";
 export { reconcilePersistedRuntimeServicesOnStartup } from "./workspace-runtime.js";
 export { createStorageServiceFromConfig, getStorageService } from "../storage/index.js";
 export { createBatchJobService } from "./batch-job-service.js";
+export { adapterStatusService } from "./adapter-status.js";

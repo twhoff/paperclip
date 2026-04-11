@@ -41,6 +41,7 @@ import {
   secretService,
   syncInstructionsBundleConfigFromFilePath,
   workspaceOperationService,
+  adapterStatusService,
 } from "../services/index.js";
 import { conflict, forbidden, notFound, unprocessable } from "../errors.js";
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
@@ -693,6 +694,24 @@ export function agentRoutes(db: Db) {
       res.json(result);
     },
   );
+
+  // Instance-level adapter health status — populated passively by heartbeat runs.
+  const adapterStatusSvc = adapterStatusService(db);
+
+  router.get("/adapters/status", async (_req, res) => {
+    const statuses = await adapterStatusSvc.listAll();
+    res.json(statuses);
+  });
+
+  router.get("/adapters/:type/status", async (req, res) => {
+    const type = req.params.type as string;
+    const status = await adapterStatusSvc.getByType(type);
+    if (!status) {
+      res.json({ adapterType: type, status: "unknown" });
+      return;
+    }
+    res.json(status);
+  });
 
   router.get("/agents/:id/skills", async (req, res) => {
     const id = req.params.id as string;
