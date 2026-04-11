@@ -876,6 +876,15 @@ export function issueService(db: Db) {
       if (issueData.status && issueData.status !== "in_progress") {
         patch.checkoutRunId = null;
       }
+      if (issueData.status === "blocked") {
+        // Gate-held blocked work must not retain active execution metadata.
+        // Clear execution ownership so blocked lanes do not appear active or
+        // reserved in PM/EM operational reads (TIZA-820).
+        // startedAt is preserved as historical-only audit metadata.
+        patch.executionRunId = null;
+        patch.executionAgentNameKey = null;
+        patch.executionLockedAt = null;
+      }
       if (
         (issueData.assigneeAgentId !== undefined && issueData.assigneeAgentId !== existing.assigneeAgentId) ||
         (issueData.assigneeUserId !== undefined && issueData.assigneeUserId !== existing.assigneeUserId)
