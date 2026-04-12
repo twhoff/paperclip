@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import os from "node:os";
 import { buildPaperclipEnv } from "../adapters/utils.js";
 
 const ORIGINAL_PAPERCLIP_API_URL = process.env.PAPERCLIP_API_URL;
@@ -43,7 +44,7 @@ describe("buildPaperclipEnv", () => {
 
     const env = buildPaperclipEnv({ id: "agent-1", companyId: "company-1" });
 
-    expect(env.PAPERCLIP_API_URL).toBe("http://localhost:3101");
+    expect(env.PAPERCLIP_API_URL).toBe(`http://${os.hostname()}:3101`);
   });
 
   it("formats IPv6 hosts safely in fallback URL generation", () => {

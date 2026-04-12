@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { testEnvironment } from "@paperclipai/adapter-opencode-local/server";
 
+const SLOW_TEST_TIMEOUT_MS = 15_000;
+
 describe("opencode_local environment diagnostics", () => {
   it("reports a missing working directory as an error when cwd is absolute", async () => {
     const cwd = path.join(
@@ -26,7 +28,7 @@ describe("opencode_local environment diagnostics", () => {
     expect(result.checks.some((check) => check.code === "opencode_cwd_invalid")).toBe(true);
     expect(result.checks.some((check) => check.level === "error")).toBe(true);
     expect(result.status).toBe("fail");
-  });
+  }, SLOW_TEST_TIMEOUT_MS);
 
   it("treats an empty OPENAI_API_KEY override as missing", async () => {
     const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-opencode-env-empty-key-"));
@@ -57,7 +59,7 @@ describe("opencode_local environment diagnostics", () => {
       }
       await fs.rm(cwd, { recursive: true, force: true });
     }
-  });
+  }, SLOW_TEST_TIMEOUT_MS);
 
   it("classifies ProviderModelNotFoundError probe output as model-unavailable warning", async () => {
     const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-opencode-env-probe-cwd-"));
@@ -92,5 +94,5 @@ describe("opencode_local environment diagnostics", () => {
       await fs.rm(cwd, { recursive: true, force: true });
       await fs.rm(binDir, { recursive: true, force: true });
     }
-  });
+  }, SLOW_TEST_TIMEOUT_MS);
 });

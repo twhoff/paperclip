@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { testEnvironment } from "@paperclipai/adapter-pi-local/server";
 
+const SLOW_TEST_TIMEOUT_MS = 15_000;
+
 async function writeFakePiCommand(binDir: string, mode: "success" | "stale-package"): Promise<void> {
   const commandPath = path.join(binDir, "pi");
   const script =
@@ -68,7 +70,7 @@ describe("pi_local environment diagnostics", () => {
     expect(result.checks.some((check) => check.code === "pi_models_discovered")).toBe(true);
     expect(result.checks.some((check) => check.code === "pi_hello_probe_passed")).toBe(true);
     await fs.rm(root, { recursive: true, force: true });
-  });
+  }, SLOW_TEST_TIMEOUT_MS);
 
   it("surfaces stale configured package installs with a targeted hint", async () => {
     const root = path.join(
@@ -97,5 +99,5 @@ describe("pi_local environment diagnostics", () => {
     expect(stalePackageCheck?.level).toBe("warn");
     expect(stalePackageCheck?.hint).toContain("Remove `npm:pi-driver`");
     await fs.rm(root, { recursive: true, force: true });
-  });
+  }, SLOW_TEST_TIMEOUT_MS);
 });

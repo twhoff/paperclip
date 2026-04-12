@@ -44,6 +44,20 @@ interface BatchQueueResponse {
   }>;
 }
 
+const EMPTY_BATCH_QUEUE: BatchQueueResponse = {
+  summary: {
+    total: 0,
+    pending: 0,
+    submitted: 0,
+    completed: 0,
+    failed: 0,
+    expired: 0,
+    cancelled: 0,
+  },
+  entries: [],
+  jobs: [],
+};
+
 function formatQueueTable(data: BatchQueueResponse): string {
   const lines: string[] = [];
 
@@ -177,12 +191,13 @@ export function registerBatchCommands(program: Command): void {
       .option("--watch", "Watch mode - refresh every 5 seconds")
       .action(async (opts: BatchQueueOptions & { watch?: boolean }) => {
         const ctx = resolveCommandContext(opts);
+        const limit = String(opts.limit ?? "20");
 
         const queryParams = new URLSearchParams();
         if (opts.status) queryParams.append("status", opts.status);
         if (opts.agent) queryParams.append("agentId", opts.agent);
         if (opts.company) queryParams.append("companyId", opts.company);
-        queryParams.append("limit", opts.limit || "20");
+        queryParams.append("limit", limit);
 
         const url = `/api/admin/batch/queue?${queryParams.toString()}`;
 
@@ -194,7 +209,7 @@ export function registerBatchCommands(program: Command): void {
             try {
               console.clear();
               console.log(pc.cyan("🔄 Batch Queue Monitor (watching - press Ctrl+C to exit)\n"));
-              const data = await ctx.api.get<BatchQueueResponse>(url);
+              const data = (await ctx.api.get<BatchQueueResponse>(url)) ?? EMPTY_BATCH_QUEUE;
               console.log(formatQueueTable(data));
               console.log(pc.gray(`\nLast updated: ${new Date().toLocaleTimeString()}`));
             } catch (err) {
@@ -205,7 +220,7 @@ export function registerBatchCommands(program: Command): void {
           }, 5000);
 
           try {
-            const data = await ctx.api.get<BatchQueueResponse>(url);
+            const data = (await ctx.api.get<BatchQueueResponse>(url)) ?? EMPTY_BATCH_QUEUE;
             console.log(formatQueueTable(data));
             console.log(pc.gray(`\nLast updated: ${new Date().toLocaleTimeString()}`));
           } catch (err) {
@@ -215,7 +230,7 @@ export function registerBatchCommands(program: Command): void {
           }
         } else {
           try {
-            const data = await ctx.api.get<BatchQueueResponse>(url);
+            const data = (await ctx.api.get<BatchQueueResponse>(url)) ?? EMPTY_BATCH_QUEUE;
 
             if (opts.json) {
               printOutput(data, { json: true });

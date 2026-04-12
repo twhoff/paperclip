@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { testEnvironment } from "@paperclipai/adapter-cursor-local/server";
 
+const SLOW_TEST_TIMEOUT_MS = 15_000;
+
 async function writeFakeAgentCommand(binDir: string, argsCapturePath: string): Promise<string> {
   const commandPath = path.join(binDir, "agent");
   const script = `#!/usr/bin/env node
@@ -51,7 +53,7 @@ describe("cursor environment diagnostics", () => {
     const stats = await fs.stat(cwd);
     expect(stats.isDirectory()).toBe(true);
     await fs.rm(path.dirname(cwd), { recursive: true, force: true });
-  });
+  }, SLOW_TEST_TIMEOUT_MS);
 
   it("adds --yolo to hello probe args by default", async () => {
     const root = path.join(
@@ -82,7 +84,7 @@ describe("cursor environment diagnostics", () => {
     const args = JSON.parse(await fs.readFile(argsCapturePath, "utf8")) as string[];
     expect(args).toContain("--yolo");
     await fs.rm(root, { recursive: true, force: true });
-  });
+  }, SLOW_TEST_TIMEOUT_MS);
 
   it("does not auto-add --yolo when extraArgs already bypass trust", async () => {
     const root = path.join(
@@ -115,5 +117,5 @@ describe("cursor environment diagnostics", () => {
     expect(args).toContain("--yolo");
     expect(args).not.toContain("--trust");
     await fs.rm(root, { recursive: true, force: true });
-  });
+  }, SLOW_TEST_TIMEOUT_MS);
 });

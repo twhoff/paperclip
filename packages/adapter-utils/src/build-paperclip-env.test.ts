@@ -3,6 +3,7 @@ import os from "node:os";
 import { buildPaperclipEnv } from "./server-utils.js";
 
 const agent = { id: "agent-1", companyId: "company-1" };
+const agentWithAdapter = { id: "agent-1", companyId: "company-1", adapterType: "copilot_cli" };
 
 describe("buildPaperclipEnv", () => {
   const originalEnv = { ...process.env };
@@ -72,5 +73,20 @@ describe("buildPaperclipEnv", () => {
     const env = buildPaperclipEnv(agent);
     expect(env.PAPERCLIP_AGENT_ID).toBe("agent-1");
     expect(env.PAPERCLIP_COMPANY_ID).toBe("company-1");
+  });
+
+  it("sets PAPERCLIP_ADAPTER_TYPE when adapterType is provided", () => {
+    const env = buildPaperclipEnv(agentWithAdapter);
+    expect(env.PAPERCLIP_ADAPTER_TYPE).toBe("copilot_cli");
+  });
+
+  it("omits PAPERCLIP_ADAPTER_TYPE when adapterType is absent", () => {
+    const env = buildPaperclipEnv(agent);
+    expect(env.PAPERCLIP_ADAPTER_TYPE).toBeUndefined();
+  });
+
+  it("omits PAPERCLIP_ADAPTER_TYPE when adapterType is null", () => {
+    const env = buildPaperclipEnv({ id: "agent-1", companyId: "company-1", adapterType: null });
+    expect(env.PAPERCLIP_ADAPTER_TYPE).toBeUndefined();
   });
 });

@@ -9,6 +9,10 @@ function asNumber(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
+function asString(value: unknown, fallback = ""): string {
+  return typeof value === "string" ? value : fallback;
+}
+
 function errorText(value: unknown): string {
   if (typeof value === "string") return value;
   const rec = asRecord(value);
@@ -34,22 +38,76 @@ function safeJsonParse(text: string): unknown {
   }
 }
 
+function readHookName(parsed: Record<string, unknown>): string {
+  return asString(parsed.hook_name) || asString(parsed.hook_event) || asString(parsed.hook_id) || "hook";
+}
+
+function parsePaperclipLine(line: string, ts: string): TranscriptEntry[] | null {
+  if (!line.startsWith("[paperclip]")) return null;
+  return [{ kind: "system", ts, text: line }];
+}
+
+function parseSystemEvent(parsed: Record<string, unknown>, ts: string): TranscriptEntry[] {
+  const subtype = asString(parsed.subtype);
+
+  if (subtype === "init") {
+    return [
+      {
+        kind: "init",
+        ts,
+        model: asString(parsed.model, "unknown"),
+        sessionId: asString(parsed.session_id),
+      },
+    ];
+  }
+
+  if (subtype === "hook_started") {
+    return [{ kind: "system", ts, text: `Hook started: ${readHookName(parsed)}` }];
+  }
+
+  if (subtype === "hook_response") {
+    const exitCode = asNumber(parsed.exit_code);
+    const label = exitCode > 0 ? "Hook failed" : "Hook completed";
+    const detail = exitCode > 0 ? ` (exit ${exitCode})` : "";
+    return [{ kind: "system", ts, text: `${label}: ${readHookName(parsed)}${detail}` }];
+  }
+
+  if (subtype) {
+    return [{ kind: "system", ts, text: `System: ${subtype}` }];
+  }
+
+  return [];
+}
+
+function parseRateLimitEvent(parsed: Record<string, unknown>, ts: string): TranscriptEntry[] {
+  const info = asRecord(parsed.rate_limit_info) ?? {};
+  const status = asString(info.status);
+  if (!status || status === "allowed") return [];
+
+  const rateLimitType = asString(info.rateLimitType);
+  const suffix = rateLimitType ? ` (${rateLimitType})` : "";
+  return [{ kind: "system", ts, text: `Claude rate limit: ${status}${suffix}` }];
+}
+
 export function parseClaudeStdoutLine(line: string, ts: string): TranscriptEntry[] {
+  const paperclipEntries = parsePaperclipLine(line, ts);
+  if (paperclipEntries) return paperclipEntries;
+
   const parsed = asRecord(safeJsonParse(line));
   if (!parsed) {
     return [{ kind: "stdout", ts, text: line }];
   }
 
-  const type = typeof parsed.type === "string" ? parsed.type : "";
-  if (type === "system" && parsed.subtype === "init") {
-    return [
-      {
-        kind: "init",
-        ts,
-        model: typeof parsed.model === "string" ? parsed.model : "unknown",
-        sessionId: typeof parsed.session_id === "string" ? parsed.session_id : "",
-      },
-    ];
+  const type = asString(parsed.type);
+  if (type === "system") {
+    const entries = parseSystemEvent(parsed, ts);
+    if (entries.length > 0) return entries;
+  }
+
+  if (type === "rate_limit_event") {
+    const entries = parseRateLimitEvent(parsed, ts);
+    if (entries.length > 0) return entries;
+    return [];
   }
 
   if (type === "assistant") {

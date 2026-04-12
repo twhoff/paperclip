@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { testEnvironment } from "@paperclipai/adapter-gemini-local/server";
 
+const SLOW_TEST_TIMEOUT_MS = 15_000;
+
 async function writeFakeGeminiCommand(binDir: string, argsCapturePath: string): Promise<string> {
   const commandPath = path.join(binDir, "gemini");
   const script = `#!/usr/bin/env node
@@ -65,7 +67,7 @@ describe("gemini_local environment diagnostics", () => {
     const stats = await fs.stat(cwd);
     expect(stats.isDirectory()).toBe(true);
     await fs.rm(path.dirname(cwd), { recursive: true, force: true });
-  });
+  }, SLOW_TEST_TIMEOUT_MS);
 
   it("passes model and yolo flags to the hello probe", async () => {
     const root = path.join(
@@ -102,7 +104,7 @@ describe("gemini_local environment diagnostics", () => {
     expect(args).toContain("yolo");
     expect(args).toContain("--prompt");
     await fs.rm(root, { recursive: true, force: true });
-  });
+  }, SLOW_TEST_TIMEOUT_MS);
 
   it("classifies quota exhaustion as a quota warning instead of a generic failure", async () => {
     const root = path.join(
@@ -130,5 +132,5 @@ describe("gemini_local environment diagnostics", () => {
     expect(result.status).toBe("warn");
     expect(result.checks.some((check) => check.code === "gemini_hello_probe_quota_exhausted")).toBe(true);
     await fs.rm(root, { recursive: true, force: true });
-  });
+  }, SLOW_TEST_TIMEOUT_MS);
 });

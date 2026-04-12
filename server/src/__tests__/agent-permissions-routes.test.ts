@@ -76,6 +76,12 @@ const mockSecretService = vi.hoisted(() => ({
   resolveAdapterConfigForRuntime: vi.fn(),
 }));
 
+const mockAdapterStatusService = vi.hoisted(() => ({
+  resetExpiredStatuses: vi.fn(),
+  listAll: vi.fn(),
+  getByType: vi.fn(),
+}));
+
 const mockAgentInstructionsService = vi.hoisted(() => ({
   materializeManagedBundle: vi.fn(),
 }));
@@ -87,6 +93,7 @@ const mockWorkspaceOperationService = vi.hoisted(() => ({}));
 const mockLogActivity = vi.hoisted(() => vi.fn());
 
 vi.mock("../services/index.js", () => ({
+  adapterStatusService: () => mockAdapterStatusService,
   agentService: () => mockAgentService,
   agentInstructionsService: () => mockAgentInstructionsService,
   accessService: () => mockAccessService,

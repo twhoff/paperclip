@@ -342,7 +342,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     : null;
   contextLines.push(
     ``,
-    `Environment variables injected: PAPERCLIP_API_URL, PAPERCLIP_API_KEY, PAPERCLIP_AGENT_ID, PAPERCLIP_COMPANY_ID, PAPERCLIP_RUN_ID${ctxTaskId ? ", PAPERCLIP_TASK_ID" : ""}`,
+    `Environment variables injected: PAPERCLIP_API_URL, PAPERCLIP_API_KEY, PAPERCLIP_AGENT_ID, PAPERCLIP_COMPANY_ID, PAPERCLIP_ADAPTER_TYPE, PAPERCLIP_RUN_ID${ctxTaskId ? ", PAPERCLIP_TASK_ID" : ""}`,
     ``,
     `[Paperclip API Usage]`,
     `Call the Paperclip API from inside the context-mode MCP sandbox using the bundled paperclip-ctx-auth skill helper. Do NOT use curl, pcurl, or pcli directly — curl/pcurl bypass ctx_execute (flooding context with raw responses), and the injected PAPERCLIP_API_KEY may be the fallback "pcli-local" which is rejected in authenticated deployment mode. paperclipRequest mints a real local agent JWT, sets Authorization + X-Paperclip-Run-Id, and posts to PAPERCLIP_API_URL.`,

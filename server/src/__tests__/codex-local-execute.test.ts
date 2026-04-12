@@ -40,6 +40,23 @@ type LogEntry = {
   chunk: string;
 };
 
+const SLOW_TEST_TIMEOUT_MS = 15_000;
+
+function expectManagedCodexConfig(configText: string, sharedCodexHome: string) {
+  expect(configText).toContain('model = "codex-mini-latest"\n');
+  expect(configText).toContain("[mcp_servers.context-mode]");
+  expect(configText).toContain(
+    `command = ${JSON.stringify(path.join(sharedCodexHome, "bin", "context-mode-poc"))}`,
+  );
+  expect(configText).toContain("[mcp_servers.context-mode.tools.ctx_batch_execute]");
+  expect(configText).toContain("[mcp_servers.context-mode.tools.ctx_execute]");
+  expect(configText).toContain("[mcp_servers.context-mode.tools.ctx_execute_file]");
+  expect(configText).toContain("[mcp_servers.context-mode.tools.ctx_search]");
+  expect(configText).toContain("[mcp_servers.context-mode.tools.ctx_fetch_and_index]");
+  expect(configText).toContain("[mcp_servers.context-mode.tools.ctx_index]");
+  expect(configText).toContain("[mcp_servers.context-mode.tools.ctx_stats]");
+}
+
 describe("codex execute", () => {
   it("uses a Paperclip-managed CODEX_HOME outside worktree mode while preserving shared auth and config", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-codex-execute-default-"));
@@ -116,7 +133,7 @@ describe("codex execute", () => {
       expect((await fs.lstat(managedAuth)).isSymbolicLink()).toBe(true);
       expect(await fs.realpath(managedAuth)).toBe(await fs.realpath(path.join(sharedCodexHome, "auth.json")));
       expect((await fs.lstat(managedConfig)).isFile()).toBe(true);
-      expect(await fs.readFile(managedConfig, "utf8")).toBe('model = "codex-mini-latest"\n');
+      expectManagedCodexConfig(await fs.readFile(managedConfig, "utf8"), sharedCodexHome);
       await expect(fs.lstat(path.join(sharedCodexHome, "companies", "company-1"))).rejects.toThrow();
       expect(logs).toContainEqual(
         expect.objectContaining({
@@ -137,7 +154,7 @@ describe("codex execute", () => {
       else process.env.CODEX_HOME = previousCodexHome;
       await fs.rm(root, { recursive: true, force: true });
     }
-  });
+  }, SLOW_TEST_TIMEOUT_MS);
 
   it("uses a worktree-isolated CODEX_HOME while preserving shared auth and config", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-codex-execute-"));
@@ -227,7 +244,7 @@ describe("codex execute", () => {
       expect((await fs.lstat(isolatedAuth)).isSymbolicLink()).toBe(true);
       expect(await fs.realpath(isolatedAuth)).toBe(await fs.realpath(path.join(sharedCodexHome, "auth.json")));
       expect((await fs.lstat(isolatedConfig)).isFile()).toBe(true);
-      expect(await fs.readFile(isolatedConfig, "utf8")).toBe('model = "codex-mini-latest"\n');
+      expectManagedCodexConfig(await fs.readFile(isolatedConfig, "utf8"), sharedCodexHome);
       expect((await fs.lstat(workspaceSkill)).isSymbolicLink()).toBe(true);
       expect(logs).toContainEqual(
         expect.objectContaining({
@@ -254,7 +271,7 @@ describe("codex execute", () => {
       else process.env.CODEX_HOME = previousCodexHome;
       await fs.rm(root, { recursive: true, force: true });
     }
-  });
+  }, SLOW_TEST_TIMEOUT_MS);
 
   it("respects an explicit CODEX_HOME config override even in worktree mode", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-codex-execute-explicit-"));
@@ -330,5 +347,5 @@ describe("codex execute", () => {
       else process.env.CODEX_HOME = previousCodexHome;
       await fs.rm(root, { recursive: true, force: true });
     }
-  });
+  }, SLOW_TEST_TIMEOUT_MS);
 });

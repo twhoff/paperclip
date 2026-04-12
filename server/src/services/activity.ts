@@ -46,12 +46,13 @@ export function activityService(db: Db) {
             ),
           ),
         )
-        .orderBy(desc(activityLog.createdAt));
+        .orderBy(desc(activityLog.createdAt))
+        .$dynamic();
 
-      if (filters.limit) {
+      if (filters.limit !== undefined) {
         query = query.limit(filters.limit);
       }
-      if (filters.offset) {
+      if (filters.offset !== undefined) {
         query = query.offset(filters.offset);
       }
 

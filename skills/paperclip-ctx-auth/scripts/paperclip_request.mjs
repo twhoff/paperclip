@@ -120,7 +120,8 @@ export function resolveLocalAgentIdentity() {
 }
 
 export async function paperclipRequest(apiPath, options = {}) {
-  const apiBase = readEnv("PAPERCLIP_API_URL", "http://localhost:3100/api").replace(/\/$/, "");
+  const rawBase = readEnv("PAPERCLIP_API_URL", "http://localhost:3100/api").replace(/\/$/, "");
+  const apiBase = rawBase.endsWith("/api") ? rawBase : `${rawBase}/api`;
   const identity = options.identity || resolveLocalAgentIdentity();
   const { token, runId } = mintLocalAgentJwt({
     agentId: identity.agentId,
@@ -144,8 +145,10 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const apiPath = process.argv[2] || "/agents/me";
   const { response, runId, identity } = await paperclipRequest(apiPath);
   const body = await response.text();
+  const cliRawBase = readEnv("PAPERCLIP_API_URL", "http://localhost:3100/api").replace(/\/$/, "");
+  const cliApiBase = cliRawBase.endsWith("/api") ? cliRawBase : `${cliRawBase}/api`;
   console.log(JSON.stringify({
-    url: `${readEnv("PAPERCLIP_API_URL", "http://localhost:3100/api").replace(/\/$/, "")}${apiPath}`,
+    url: `${cliApiBase}${apiPath}`,
     status: response.status,
     ok: response.ok,
     runId,

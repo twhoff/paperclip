@@ -69,6 +69,7 @@ export interface Config {
   storageS3ForcePathStyle: boolean;
   heartbeatSchedulerEnabled: boolean;
   heartbeatSchedulerIntervalMs: number;
+  heartbeatMaxRunDurationMs: number;
   companyDeletionEnabled: boolean;
 }
 

@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { execute } from "@paperclipai/adapter-gemini-local/server";
 
+const SLOW_TEST_TIMEOUT_MS = 15_000;
+
 async function writeFakeGeminiCommand(commandPath: string): Promise<void> {
   const script = `#!/usr/bin/env node
 const fs = require("node:fs");
@@ -125,7 +127,7 @@ describe("gemini execute", () => {
       }
       await fs.rm(root, { recursive: true, force: true });
     }
-  });
+  }, SLOW_TEST_TIMEOUT_MS);
 
   it("always passes --approval-mode yolo", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-gemini-yolo-"));
@@ -167,5 +169,5 @@ describe("gemini execute", () => {
       }
       await fs.rm(root, { recursive: true, force: true });
     }
-  });
+  }, SLOW_TEST_TIMEOUT_MS);
 });

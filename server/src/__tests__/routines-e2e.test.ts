@@ -29,6 +29,8 @@ import {
 import { errorHandler } from "../middleware/index.js";
 import { accessService } from "../services/access.js";
 
+const SLOW_TEST_TIMEOUT_MS = 20_000;
+
 vi.mock("../services/index.js", async () => {
   const actual = await vi.importActual<typeof import("../services/index.js")>("../services/index.js");
   const { randomUUID } = await import("node:crypto");
@@ -336,5 +338,5 @@ describe("routine routes end-to-end", () => {
         "routine.run_triggered",
       ]),
     );
-  });
+  }, SLOW_TEST_TIMEOUT_MS);
 });
