@@ -1,6 +1,9 @@
 import type { Db } from "@paperclipai/db";
-import { adapterStatus } from "@paperclipai/db";
-import { and, eq, inArray, isNotNull, lte, sql } from "drizzle-orm";
+import { adapterStatus, agents } from "@paperclipai/db";
+import { and, desc, eq, inArray, isNotNull, lte, sql } from "drizzle-orm";
+import type { AdapterEnvironmentTestResult } from "@paperclipai/adapter-utils";
+import { findServerAdapter } from "../adapters/index.js";
+import { logger } from "../middleware/logger.js";
 
 /**
  * Thresholds for adapter status transitions based on consecutive failures.
@@ -171,6 +174,7 @@ export function adapterStatusService(db: Db) {
           consecutiveFailures: 0,
           consecutiveSuccesses: 1,
           nextCheckAt: null,
+          probeSource: "run_outcome",
           updatedAt: now,
           createdAt: now,
         })
@@ -185,6 +189,7 @@ export function adapterStatusService(db: Db) {
             consecutiveFailures: 0,
             consecutiveSuccesses: sql`${adapterStatus.consecutiveSuccesses} + 1`,
             nextCheckAt: null,
+            probeSource: "run_outcome",
             updatedAt: now,
           },
         });
@@ -216,6 +221,7 @@ export function adapterStatusService(db: Db) {
               consecutiveFailures: 0,
               consecutiveSuccesses: 1,
               nextCheckAt: null,
+              probeSource: "run_outcome",
               updatedAt: now,
               createdAt: now,
             })
@@ -230,6 +236,7 @@ export function adapterStatusService(db: Db) {
                 consecutiveFailures: 0,
                 consecutiveSuccesses: sql`${adapterStatus.consecutiveSuccesses} + 1`,
                 nextCheckAt: null,
+                probeSource: "run_outcome",
                 updatedAt: now,
               },
             });
@@ -294,6 +301,7 @@ export function adapterStatusService(db: Db) {
         consecutiveFailures: newFailures,
         consecutiveSuccesses: 0,
         nextCheckAt,
+        probeSource: "run_outcome",
         updatedAt: now,
         createdAt: now,
       })
@@ -308,6 +316,7 @@ export function adapterStatusService(db: Db) {
           consecutiveFailures: newFailures,
           consecutiveSuccesses: 0,
           nextCheckAt,
+          probeSource: "run_outcome",
           updatedAt: now,
         },
       });
@@ -372,6 +381,234 @@ export function adapterStatusService(db: Db) {
       return rows.map((r) => r.adapterType);
     }
 
+    /**
+     * Run a dedicated environment health check for a single adapter type.
+     *
+     * Resolves a representative adapter config from any agent (regardless of
+     * status) and calls the adapter's `testEnvironment()` directly — no agent
+     * wakeup or process spawn required.
+     */
+    async function probeAdapterHealth(adapterType: string): Promise<AdapterEnvironmentTestResult | null> {
+      const adapter = findServerAdapter(adapterType);
+      if (!adapter || !adapter.testEnvironment) return null;
+
+      // Find a representative agent to source a company ID and config from.
+      // Prefer the most recently successful agent, fall back to any agent.
+      const representativeAgent = await db
+        .select({
+          companyId: agents.companyId,
+          adapterConfig: agents.adapterConfig,
+        })
+        .from(agents)
+        .where(eq(agents.adapterType, adapterType))
+        .orderBy(desc(agents.lastHeartbeatAt))
+        .limit(1)
+        .then((rows) => rows[0] ?? null);
+
+      if (!representativeAgent) {
+        // No agents use this adapter type at all — nothing to probe against.
+        return null;
+      }
+
+      const config = (representativeAgent.adapterConfig ?? {}) as Record<string, unknown>;
+      const companyId = representativeAgent.companyId;
+      const now = new Date();
+
+      let result: AdapterEnvironmentTestResult;
+      try {
+        result = await Promise.race([
+          adapter.testEnvironment({
+            companyId,
+            adapterType,
+            config,
+          }),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("adapter probe timed out after 30s")), 30_000),
+          ),
+        ]);
+      } catch (err) {
+        // testEnvironment threw or timed out — record as a probe failure.
+        const message = err instanceof Error ? err.message : String(err);
+        result = {
+          adapterType,
+          status: "fail",
+          checks: [{ code: "probe_error", level: "error", message }],
+          testedAt: now.toISOString(),
+        };
+      }
+
+      const probeMessage = result.checks
+        .map((c) => `[${c.level}] ${c.message}`)
+        .join("; ")
+        .slice(0, 2000) || null;
+
+      if (result.status === "pass") {
+        await db
+          .insert(adapterStatus)
+          .values({
+            adapterType,
+            status: "online",
+            statusMessage: null,
+            lastSuccessAt: now,
+            lastError: null,
+            lastErrorCode: null,
+            consecutiveFailures: 0,
+            consecutiveSuccesses: 1,
+            nextCheckAt: null,
+            lastProbeAt: now,
+            lastProbeStatus: "pass",
+            lastProbeMessage: probeMessage,
+            probeSource: "dedicated",
+            updatedAt: now,
+            createdAt: now,
+          })
+          .onConflictDoUpdate({
+            target: adapterStatus.adapterType,
+            set: {
+              status: "online",
+              statusMessage: null,
+              lastSuccessAt: now,
+              lastError: null,
+              lastErrorCode: null,
+              consecutiveFailures: 0,
+              consecutiveSuccesses: sql`${adapterStatus.consecutiveSuccesses} + 1`,
+              nextCheckAt: null,
+              lastProbeAt: now,
+              lastProbeStatus: "pass",
+              lastProbeMessage: probeMessage,
+              probeSource: "dedicated",
+              updatedAt: now,
+            },
+          });
+      } else if (result.status === "warn") {
+        await db
+          .insert(adapterStatus)
+          .values({
+            adapterType,
+            status: "degraded",
+            statusMessage: probeMessage,
+            lastProbeAt: now,
+            lastProbeStatus: "warn",
+            lastProbeMessage: probeMessage,
+            probeSource: "dedicated",
+            consecutiveFailures: 1,
+            consecutiveSuccesses: 0,
+            nextCheckAt: new Date(now.getTime() + BACKOFF_TIERS_MIN[0] * 60_000),
+            updatedAt: now,
+            createdAt: now,
+          })
+          .onConflictDoUpdate({
+            target: adapterStatus.adapterType,
+            set: {
+              status: "degraded",
+              statusMessage: probeMessage,
+              lastProbeAt: now,
+              lastProbeStatus: "warn",
+              lastProbeMessage: probeMessage,
+              probeSource: "dedicated",
+              consecutiveFailures: 1,
+              consecutiveSuccesses: 0,
+              nextCheckAt: new Date(now.getTime() + BACKOFF_TIERS_MIN[0] * 60_000),
+              updatedAt: now,
+            },
+          });
+      } else {
+        // fail
+        const errorHint = result.checks.find((c) => c.level === "error")?.message ?? null;
+        const nextCheckAt = parseRetryAfterHint(errorHint)
+          ?? new Date(now.getTime() + BACKOFF_TIERS_MIN[0] * 60_000);
+
+        await db
+          .insert(adapterStatus)
+          .values({
+            adapterType,
+            status: "offline",
+            statusMessage: probeMessage,
+            lastFailureAt: now,
+            lastError: probeMessage,
+            lastErrorCode: "probe_failed",
+            consecutiveFailures: OFFLINE_THRESHOLD,
+            consecutiveSuccesses: 0,
+            nextCheckAt,
+            lastProbeAt: now,
+            lastProbeStatus: "fail",
+            lastProbeMessage: probeMessage,
+            probeSource: "dedicated",
+            updatedAt: now,
+            createdAt: now,
+          })
+          .onConflictDoUpdate({
+            target: adapterStatus.adapterType,
+            set: {
+              status: "offline",
+              statusMessage: probeMessage,
+              lastFailureAt: now,
+              lastError: probeMessage,
+              lastErrorCode: "probe_failed",
+              consecutiveFailures: OFFLINE_THRESHOLD,
+              consecutiveSuccesses: 0,
+              nextCheckAt,
+              lastProbeAt: now,
+              lastProbeStatus: "fail",
+              lastProbeMessage: probeMessage,
+              probeSource: "dedicated",
+              updatedAt: now,
+            },
+          });
+      }
+
+      return result;
+    }
+
+    /**
+     * Run dedicated health probes for all adapters currently in "probing" state.
+     *
+     * Called from the heartbeat scheduler's `tickTimers()` after
+     * `markExpiredForProbing()` has transitioned eligible adapters.
+     *
+     * Probes run sequentially to avoid resource contention on the local machine.
+     */
+    async function runScheduledProbes(): Promise<{ probed: string[]; failed: string[] }> {
+      const probingTypes = await listProbing();
+      const probed: string[] = [];
+      const failed: string[] = [];
+
+      for (const adapterType of probingTypes) {
+        try {
+          const result = await probeAdapterHealth(adapterType);
+          if (result) {
+            probed.push(adapterType);
+            if (result.status === "fail") {
+              failed.push(adapterType);
+            }
+          } else {
+            // No adapter module or no agents — clear the probing state to offline
+            // so it doesn't sit in "probing" forever.
+            const now = new Date();
+            await db
+              .update(adapterStatus)
+              .set({
+                status: "offline",
+                statusMessage: "no agents configured for this adapter type",
+                lastProbeAt: now,
+                lastProbeStatus: "fail",
+                lastProbeMessage: "no agents configured for this adapter type",
+                probeSource: "dedicated",
+                nextCheckAt: new Date(now.getTime() + BACKOFF_TIERS_MIN[BACKOFF_TIERS_MIN.length - 1] * 60_000),
+                updatedAt: now,
+              })
+              .where(eq(adapterStatus.adapterType, adapterType));
+            failed.push(adapterType);
+          }
+        } catch (err) {
+          logger.warn({ err, adapterType }, "adapter health probe threw unexpectedly");
+          failed.push(adapterType);
+        }
+      }
+
+      return { probed, failed };
+    }
+
     return {
       recordRunOutcome,
       listAll,
@@ -379,5 +616,7 @@ export function adapterStatusService(db: Db) {
       markExpiredForProbing,
       resetExpiredStatuses,
       listProbing,
+      probeAdapterHealth,
+      runScheduledProbes,
   };
 }

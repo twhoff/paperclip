@@ -1,15 +1,17 @@
 import { pgTable, text, timestamp, integer } from "drizzle-orm/pg-core";
 
 /**
- * Instance-level adapter health status, updated passively as agents run.
+ * Instance-level adapter health status, updated by two independent paths:
+ *
+ * 1. **Run outcomes** — the heartbeat service updates this table after every
+ *    agent run completes (success resets failures; adapter-level failure
+ *    increments consecutive_failures and may degrade/offline the adapter).
+ *
+ * 2. **Dedicated health probes** — the scheduler periodically calls each
+ *    adapter's `testEnvironment()` directly (no agent wakeup required) and
+ *    records the result in the `last_probe_*` columns.
  *
  * Each row represents one adapter type (e.g. `claude_local`, `copilot_cli`).
- * The heartbeat service updates this table after every run completes:
- *   - On success: status → online, consecutive_failures reset
- *   - On failure: consecutive_failures++, status → degraded/offline
- *
- * The `next_check_at` column supports retry scheduling when an adapter is
- * offline — parsed from rate-limit error messages or set via exponential backoff.
  */
 export const adapterStatus = pgTable("adapter_status", {
   adapterType: text("adapter_type").primaryKey(),
@@ -22,6 +24,14 @@ export const adapterStatus = pgTable("adapter_status", {
   consecutiveFailures: integer("consecutive_failures").notNull().default(0),
   consecutiveSuccesses: integer("consecutive_successes").notNull().default(0),
   nextCheckAt: timestamp("next_check_at", { withTimezone: true }),
+  /** When the last dedicated health probe ran. */
+  lastProbeAt: timestamp("last_probe_at", { withTimezone: true }),
+  /** Result of the last dedicated probe: "pass", "warn", or "fail". */
+  lastProbeStatus: text("last_probe_status"),
+  /** Human-readable summary from the last probe's environment checks. */
+  lastProbeMessage: text("last_probe_message"),
+  /** What produced the current status value: "dedicated" or "run_outcome". */
+  probeSource: text("probe_source"),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });

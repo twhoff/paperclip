@@ -330,6 +330,13 @@
       "when": 1744358400000,
       "tag": "0046_adapter_status",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1744531200000,
+      "tag": "0047_adapter_status_probes",
+      "breakpoints": true
     }
   ]
 }

@@ -4132,51 +4132,24 @@ export function heartbeatService(db: Db) {
     resumeQueuedRuns,
 
     tickTimers: async (now = new Date()) => {
-        // Mark adapters whose retry window has elapsed as "probing", then pick
-        // one active agent per adapter and enqueue a lightweight probe run.
-        const probingAdapters = await adapterStatusSvc.markExpiredForProbing().catch((e) => {
+        // Mark adapters whose retry window has elapsed as "probing", then run
+        // dedicated health probes via testEnvironment() — no agent wakeup needed.
+        await adapterStatusSvc.markExpiredForProbing().catch((e) => {
           logger.warn({ err: e }, "failed to mark expired adapter statuses for probing");
-          return [] as string[];
         });
 
-        if (probingAdapters.length > 0) {
-          const allActiveAgents = await db
-            .select()
-            .from(agents)
-            .where(
-              and(
-                inArray(agents.adapterType, probingAdapters),
-                inArray(agents.status, ["idle", "running"]),
-              ),
-            );
+        const probeResult = await adapterStatusSvc.runScheduledProbes().catch((e) => {
+          logger.warn({ err: e }, "failed to run scheduled adapter probes");
+          return { probed: [] as string[], failed: [] as string[] };
+        });
 
-          // One probe per adapter type — pick the first idle agent, falling back to any running one.
-          const probeAgentByAdapter = new Map<string, (typeof allActiveAgents)[number]>();
-          for (const a of allActiveAgents) {
-            const existing = probeAgentByAdapter.get(a.adapterType);
-            if (!existing || (existing.status !== "idle" && a.status === "idle")) {
-              probeAgentByAdapter.set(a.adapterType, a);
-            }
-          }
-
-          for (const [adapterType, agent] of probeAgentByAdapter) {
-            await enqueueWakeup(agent.id, {
-              source: "on_demand",
-              triggerDetail: "adapter_probe",
-              reason: "adapter_probe",
-              requestedByActorType: "system",
-              requestedByActorId: "heartbeat_scheduler",
-              contextSnapshot: {
-                source: "adapter_probe",
-                adapterType,
-                reason: "retry_window_elapsed",
-                now: now.toISOString(),
-              },
-            }).catch((e) =>
-              logger.warn({ err: e, agentId: agent.id, adapterType }, "failed to enqueue adapter probe"),
-            );
-          }
+        if (probeResult.probed.length > 0) {
+          logger.info(
+            { probed: probeResult.probed, failed: probeResult.failed },
+            "adapter health probes completed",
+          );
         }
+
       const allAgents = await db.select().from(agents);
       let checked = 0;
       let enqueued = 0;
