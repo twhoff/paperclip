@@ -6,6 +6,7 @@ import {
   prioritizeProjectWorkspaceCandidatesForRun,
   parseSessionCompactionPolicy,
   resolveRuntimeSessionParamsForWorkspace,
+  resolveRuntimeSessionFallback,
   shouldResetTaskSessionForWake,
   type ResolvedWorkspaceForRun,
 } from "../services/heartbeat.ts";
@@ -276,5 +277,37 @@ describe("parseSessionCompactionPolicy", () => {
       maxRawInputTokens: 500_000,
       maxSessionAgeHours: 0,
     });
+  });
+});
+
+describe("resolveRuntimeSessionFallback", () => {
+  it("returns session id when adapter type matches", () => {
+    expect(
+      resolveRuntimeSessionFallback({ sessionId: "abc-123", adapterType: "codex_local" }, "codex_local"),
+    ).toBe("abc-123");
+  });
+
+  it("returns null when adapter type differs (copilot_cli → codex_local)", () => {
+    expect(
+      resolveRuntimeSessionFallback({ sessionId: "copilot-thread-id", adapterType: "copilot_cli" }, "codex_local"),
+    ).toBeNull();
+  });
+
+  it("returns null when adapter type differs (codex_local → claude_local)", () => {
+    expect(
+      resolveRuntimeSessionFallback({ sessionId: "codex-thread-id", adapterType: "codex_local" }, "claude_local"),
+    ).toBeNull();
+  });
+
+  it("returns null when session id is null even if adapter type matches", () => {
+    expect(
+      resolveRuntimeSessionFallback({ sessionId: null, adapterType: "codex_local" }, "codex_local"),
+    ).toBeNull();
+  });
+
+  it("handles empty string session id as null", () => {
+    expect(
+      resolveRuntimeSessionFallback({ sessionId: "", adapterType: "codex_local" }, "codex_local"),
+    ).toBe("");
   });
 });

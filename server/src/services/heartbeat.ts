@@ -626,6 +626,20 @@ export function formatRuntimeWorkspaceWarningLog(warning: string) {
   };
 }
 
+/**
+ * Returns the legacy session ID from runtime state only when the stored adapter
+ * type matches the current adapter type. If the adapter family has changed, the
+ * persisted session ID is incompatible and must not be forwarded to the new
+ * adapter as a resume target.
+ */
+export function resolveRuntimeSessionFallback(
+  runtime: { sessionId: string | null; adapterType: string },
+  currentAdapterType: string,
+): string | null {
+  if (runtime.adapterType !== currentAdapterType) return null;
+  return runtime.sessionId;
+}
+
 function describeSessionResetReason(
   contextSnapshot: Record<string, unknown> | null | undefined,
 ) {
@@ -1101,7 +1115,7 @@ export function heartbeatService(db: Db) {
     }
 
     const runtimeForRun = await getRuntimeState(agent.id);
-    return runtimeForRun?.sessionId ?? null;
+    return runtimeForRun ? resolveRuntimeSessionFallback(runtimeForRun, agent.adapterType) : null;
   }
 
   async function resolveWorkspaceForRun(
@@ -2525,7 +2539,8 @@ export function heartbeatService(db: Db) {
     if (executionWorkspace.projectId && !readNonEmptyString(context.projectId)) {
       context.projectId = executionWorkspace.projectId;
     }
-    const runtimeSessionFallback = taskKey || resetTaskSession ? null : runtime.sessionId;
+    const runtimeSessionFallback =
+      taskKey || resetTaskSession ? null : resolveRuntimeSessionFallback(runtime, agent.adapterType);
     let previousSessionDisplayId = truncateDisplayId(
       taskSessionForRun?.sessionDisplayId ??
         (sessionCodec.getDisplayId ? sessionCodec.getDisplayId(runtimeSessionParams) : null) ??
