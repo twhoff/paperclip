@@ -168,13 +168,14 @@ export function isCopilotMaxTurnsResult(result: Record<string, unknown>): boolea
 }
 
 /**
- * Check if the failure is due to an unknown or expired session ID.
- * When --resume is passed with a session that no longer exists, Copilot CLI
- * emits an error containing session-not-found language.
+ * Check if the failure is due to an unknown, expired, or otherwise missing
+ * resume session/thread. Copilot CLI sometimes reports this as "unknown
+ * session", and sometimes as a stderr-only "thread/resume ... no rollout
+ * found" error before it emits a final result event.
  */
 export function isCopilotUnknownSessionError(result: Record<string, unknown>): boolean {
   const resultStr = JSON.stringify(result).toLowerCase();
-  return /unknown.*session|session.*not found|session.*expired|invalid.*session|session.*invalid/i.test(resultStr);
+  return /unknown.*session|session.*not found|session.*expired|invalid.*session|session.*invalid|thread\/resume.*no rollout found|no rollout found.*thread id/i.test(resultStr);
 }
 
 /**

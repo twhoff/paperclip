@@ -228,6 +228,14 @@ describe("isCopilotUnknownSessionError", () => {
     ).toBe(true);
   });
 
+  it("detects missing rollout resume errors", () => {
+    expect(
+      isCopilotUnknownSessionError({
+        stderr: "Error: thread/resume: thread/resume failed: no rollout found for thread id a225c422-b9ad-4fd5-8bf0-64c30619ebc3",
+      }),
+    ).toBe(true);
+  });
+
   it("returns false for unrelated errors", () => {
     expect(
       isCopilotUnknownSessionError({ error: "network timeout" }),
