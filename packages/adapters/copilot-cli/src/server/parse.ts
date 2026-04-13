@@ -175,7 +175,7 @@ export function isCopilotMaxTurnsResult(result: Record<string, unknown>): boolea
  */
 export function isCopilotUnknownSessionError(result: Record<string, unknown>): boolean {
   const resultStr = JSON.stringify(result).toLowerCase();
-  return /unknown.*session|session.*not found|session.*expired|invalid.*session|session.*invalid|thread\/resume.*no rollout found|no rollout found.*thread id/i.test(resultStr);
+  return /unknown.*session|session.*not found|session.*expired|invalid.*session|session.*invalid|thread\/resume.*no rollout found|no rollout found.*thread id|no tool call found for function call output/i.test(resultStr);
 }
 
 /**

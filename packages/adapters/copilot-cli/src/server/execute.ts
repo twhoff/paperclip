@@ -582,13 +582,13 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     const initial = await runAttempt(sessionId ?? null);
     if (
       sessionId &&
-      isCopilotUnknownSessionError(
-        initial.parsedStream.resultJson ?? {
-          latestError: initial.parsedStream.latestError,
+      isCopilotUnknownSessionError({
+        ...(initial.parsedStream.resultJson ?? {
           stderr: initial.proc.stderr,
           stdout: initial.proc.stdout,
-        },
-      )
+        }),
+        latestError: initial.parsedStream.latestError,
+      })
     ) {
       await onLog(
         "stdout",

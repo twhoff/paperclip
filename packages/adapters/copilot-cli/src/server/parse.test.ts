@@ -5,6 +5,7 @@ import {
   detectCopilotLoginRequired,
   detectCopilotRateLimit,
   isCopilotMaxTurnsResult,
+  isCopilotUnknownSessionError,
   mapCopilotJsonlLineToLog,
   stripSkillFrontmatter,
 } from "./parse.js";
@@ -179,6 +180,60 @@ describe("detectCopilotRateLimit", () => {
 describe("isCopilotMaxTurnsResult", () => {
   it("returns false for normal results", () => {
     expect(isCopilotMaxTurnsResult({ exitCode: 0 })).toBe(false);
+  });
+});
+
+// ─── isCopilotUnknownSessionError ─────────────────────────────────────────────
+
+describe("isCopilotUnknownSessionError", () => {
+  it("returns false for a clean successful result", () => {
+    expect(isCopilotUnknownSessionError({ exitCode: 0, sessionId: "abc" })).toBe(false);
+  });
+
+  it("detects classic unknown-session text", () => {
+    expect(isCopilotUnknownSessionError({ error: "unknown session" })).toBe(true);
+  });
+
+  it("detects thread/resume no rollout found (stderr path)", () => {
+    expect(
+      isCopilotUnknownSessionError({ stderr: "thread/resume failed: no rollout found for thread id abc" }),
+    ).toBe(true);
+  });
+
+  it("detects CAPIError 400 - no tool call found for function call output (stale session state)", () => {
+    // This is the error seen when a resumed session has an orphaned pending tool call
+    // that Anthropic no longer recognises — e.g. after a process_lost interruption.
+    expect(
+      isCopilotUnknownSessionError({
+        latestError: {
+          errorType: "query",
+          message:
+            "Execution failed: CAPIError: 400 No tool call found for function call output with call_id tooluse_ABC123.",
+          statusCode: 400,
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("detects no-tool-call error embedded in session.error message string", () => {
+    expect(
+      isCopilotUnknownSessionError({
+        message:
+          "Execution failed: CAPIError: 400 No tool call found for function call output with call_id tooluse_XYZ.",
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false for unrelated errors", () => {
+    expect(
+      isCopilotUnknownSessionError({
+        latestError: {
+          errorType: "rate_limit",
+          message: "Rate limit exceeded. Please retry later.",
+          statusCode: 429,
+        },
+      }),
+    ).toBe(false);
   });
 });
 
