@@ -111,4 +111,87 @@ describe("copilot execute", () => {
       usage: { premiumRequests: 1 },
     });
   });
+
+  it("retries without session when resume fails before a result event is emitted", async () => {
+    runChildProcessMock
+      .mockResolvedValueOnce({
+        exitCode: 1,
+        signal: null,
+        timedOut: false,
+        stdout: "[paperclip] Loaded agent instructions file: /tmp/agent/AGENTS.md\n",
+        stderr: "Error: thread/resume: thread/resume failed: no rollout found for thread id stale-thread\n",
+      })
+      .mockResolvedValueOnce({
+        exitCode: 0,
+        signal: null,
+        timedOut: false,
+        stdout: [
+          JSON.stringify({
+            type: "assistant.message",
+            data: {
+              messageId: "m2",
+              content: "Recovered with a fresh session.",
+              toolRequests: [],
+              interactionId: "i2",
+              outputTokens: 5,
+            },
+          }),
+          JSON.stringify({
+            type: "result",
+            timestamp: "2026-04-13T00:38:34.804Z",
+            sessionId: "fresh-session-123",
+            exitCode: 0,
+            usage: {
+              premiumRequests: 0,
+              totalApiDurationMs: 1000,
+              sessionDurationMs: 1000,
+              codeChanges: {
+                linesAdded: 0,
+                linesRemoved: 0,
+                filesModified: [],
+              },
+            },
+          }),
+        ].join("\n"),
+        stderr: "",
+      });
+
+    const onLog = vi.fn(async () => {});
+
+    const result = await execute({
+      runId: "run-456",
+      agent: {
+        id: "agent-123",
+        name: "Implementation Reviewer",
+        companyId: "company-123",
+      },
+      runtime: {
+        sessionId: "stale-thread",
+        sessionDisplayId: "stale-thread",
+        sessionParams: { sessionId: "stale-thread", cwd: "/tmp/paperclip-copilot-test" },
+      },
+      config: {
+        command: "copilot",
+        cwd: "/tmp/paperclip-copilot-test",
+        allowAll: false,
+        skillsEnabled: false,
+      },
+      context: {},
+      onLog,
+      onMeta: async () => {},
+      onSpawn: async () => {},
+    } as never);
+
+    expect(runChildProcessMock).toHaveBeenCalledTimes(2);
+    expect(runChildProcessMock.mock.calls[0]?.[2]).toContain("--resume=stale-thread");
+    expect(runChildProcessMock.mock.calls[1]?.[2]).not.toContain("--resume=stale-thread");
+    expect(result.exitCode).toBe(0);
+    expect(result.errorMessage).toBeNull();
+    expect(result.sessionId).toBe("fresh-session-123");
+    expect(result.clearSession).toBe(true);
+    expect(onLog).toHaveBeenCalledWith(
+      "stdout",
+      '[paperclip] Copilot session "stale-thread" not found, retrying without session.\n',
+    );
+  });
 });
