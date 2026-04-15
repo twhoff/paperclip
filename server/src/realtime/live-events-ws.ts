@@ -237,7 +237,13 @@ export function setupLiveEventsWebSocketServer(
     // Attach an error handler immediately to prevent unhandled ECONNRESET crashes
     // if the client disconnects during the async authorization window.
     socket.on("error", (err: Error) => {
-      logger.warn({ err, path: req.url }, "upgrade socket error");
+      // ECONNRESET is normal when clients disconnect during the auth window (e.g.
+      // page navigation or server restart); only warn for unexpected errors.
+      if ((err as NodeJS.ErrnoException).code === "ECONNRESET") {
+        logger.debug({ path: req.url }, "upgrade socket closed by client");
+      } else {
+        logger.warn({ err, path: req.url }, "upgrade socket error");
+      }
     });
 
     if (!req.url) {
@@ -257,6 +263,9 @@ export function setupLiveEventsWebSocketServer(
       resolveSessionFromHeaders: opts.resolveSessionFromHeaders,
     })
       .then((context) => {
+        // Client disconnected during async authorization — nothing to upgrade.
+        if (socket.destroyed) return;
+
         if (!context) {
           rejectUpgrade(socket, "403 Forbidden", "forbidden");
           return;
@@ -271,7 +280,9 @@ export function setupLiveEventsWebSocketServer(
       })
       .catch((err) => {
         logger.error({ err, path: req.url }, "failed websocket upgrade authorization");
-        rejectUpgrade(socket, "500 Internal Server Error", "upgrade failed");
+        if (!socket.destroyed) {
+          rejectUpgrade(socket, "500 Internal Server Error", "upgrade failed");
+        }
       });
   });
 
