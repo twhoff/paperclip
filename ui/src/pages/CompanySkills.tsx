@@ -52,6 +52,7 @@ import {
   RefreshCw,
   Save,
   Search,
+  Trash2,
 } from "lucide-react";
 
 type SkillTreeNode = {
@@ -505,6 +506,8 @@ function SkillPane({
   installUpdatePending,
   onSave,
   savePending,
+  onDelete,
+  deletePending,
 }: {
   loading: boolean;
   detail: CompanySkillDetail | null | undefined;
@@ -524,6 +527,8 @@ function SkillPane({
   installUpdatePending: boolean;
   onSave: () => void;
   savePending: boolean;
+  onDelete: () => void;
+  deletePending: boolean;
 }) {
   const { pushToast } = useToast();
 
@@ -559,17 +564,27 @@ function SkillPane({
               <p className="mt-2 max-w-3xl text-sm text-muted-foreground">{detail.description}</p>
             )}
           </div>
-          {detail.editable ? (
+          <div className="flex items-center gap-3">
+            {detail.editable ? (
+              <button
+                className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground"
+                onClick={() => setEditMode(!editMode)}
+              >
+                <Pencil className="h-3.5 w-3.5" />
+                {editMode ? "Stop editing" : "Edit"}
+              </button>
+            ) : (
+              <div className="text-sm text-muted-foreground">{detail.editableReason}</div>
+            )}
             <button
-              className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground"
-              onClick={() => setEditMode(!editMode)}
+              className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-destructive disabled:opacity-50"
+              onClick={onDelete}
+              disabled={deletePending}
             >
-              <Pencil className="h-3.5 w-3.5" />
-              {editMode ? "Stop editing" : "Edit"}
+              <Trash2 className="h-3.5 w-3.5" />
+              Delete
             </button>
-          ) : (
-            <div className="text-sm text-muted-foreground">{detail.editableReason}</div>
-          )}
+          </div>
         </div>
 
         <div className="mt-4 space-y-3 border-t border-border pt-4 text-sm">
@@ -743,6 +758,7 @@ export function CompanySkills() {
   const [source, setSource] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
   const [emptySourceHelpOpen, setEmptySourceHelpOpen] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [expandedSkillId, setExpandedSkillId] = useState<string | null>(null);
   const [expandedDirs, setExpandedDirs] = useState<Record<string, Set<string>>>({});
   const [viewMode, setViewMode] = useState<"preview" | "code">("preview");
@@ -962,6 +978,28 @@ export function CompanySkills() {
     },
   });
 
+  const deleteSkill = useMutation({
+    mutationFn: () => companySkillsApi.deleteSkill(selectedCompanyId!, selectedSkillId!),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.companySkills.list(selectedCompanyId!) });
+      setDeleteConfirmOpen(false);
+      navigate("/skills");
+      pushToast({
+        tone: "success",
+        title: "Skill deleted",
+        body: activeDetail?.name ? `${activeDetail.name} has been removed.` : "Skill removed.",
+      });
+    },
+    onError: (error) => {
+      setDeleteConfirmOpen(false);
+      pushToast({
+        tone: "error",
+        title: "Delete failed",
+        body: error instanceof Error ? error.message : "Failed to delete skill.",
+      });
+    },
+  });
+
   const installUpdate = useMutation({
     mutationFn: () => companySkillsApi.installUpdate(selectedCompanyId!, selectedSkillId!),
     onSuccess: async (skill) => {
@@ -1002,6 +1040,25 @@ export function CompanySkills() {
 
   return (
     <>
+      <Dialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Delete skill</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete <strong>{activeDetail?.name}</strong>? This cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteConfirmOpen(false)} disabled={deleteSkill.isPending}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={() => deleteSkill.mutate()} disabled={deleteSkill.isPending}>
+              {deleteSkill.isPending ? "Deleting..." : "Delete"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={emptySourceHelpOpen} onOpenChange={setEmptySourceHelpOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
@@ -1162,6 +1219,8 @@ export function CompanySkills() {
             installUpdatePending={installUpdate.isPending}
             onSave={() => saveFile.mutate()}
             savePending={saveFile.isPending}
+            onDelete={() => setDeleteConfirmOpen(true)}
+            deletePending={deleteSkill.isPending}
           />
         </div>
       </div>

@@ -99,6 +99,29 @@ Index your personal folder: `qmd index $AGENT_HOME`
 
 Vectors + BM25 + reranking finds things even when the wording differs.
 
+## Committing Daily Notes
+
+Daily notes modify tracked files, so the worktree mandate applies. Use the
+`daily-note` shortcut instead of creating a Paperclip issue:
+
+```bash
+pcli worktree daily-note
+cd ../groceries-system-worktrees/daily-note-$(date +%Y-%m-%d)
+
+# write your daily note, then commit
+git add .
+git commit -m "daily note: <url-key> $(date +%Y-%m-%d)"
+
+# merge back
+cd /path/to/groceries-system
+git merge daily-note-$(date +%Y-%m-%d)
+git push
+pcli worktree remove daily-note
+```
+
+Never skip daily notes because of the worktree requirement. The `daily-note`
+shortcut exists specifically to make this frictionless.
+
 ## Planning
 
 Keep plans in timestamped files in `plans/` at the project root (outside personal memory so other agents can access them). Use `qmd` to search plans. Plans go stale -- if a newer plan exists, do not confuse yourself with an older version. If you notice staleness, update the file to note what it is supersededBy.
