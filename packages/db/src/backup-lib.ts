@@ -1,5 +1,6 @@
-import { existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from "node:fs";
-import { readFile, writeFile } from "node:fs/promises";
+import { createWriteStream, existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { finished } from "node:stream/promises";
 import { basename, resolve } from "node:path";
 import postgres from "postgres";
 
@@ -150,11 +151,14 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
   const nullifiedColumnsByTable = normalizeNullifyColumnMap(opts.nullifyColumns);
   const sql = postgres(opts.connectionString, { max: 1, connect_timeout: connectTimeout });
 
+  mkdirSync(opts.backupDir, { recursive: true });
+  const backupFile = resolve(opts.backupDir, `${filenamePrefix}-${timestamp()}.sql`);
+  const outStream = createWriteStream(backupFile, "utf8");
+
   try {
     await sql`SELECT 1`;
 
-    const lines: string[] = [];
-    const emit = (line: string) => lines.push(line);
+    const emit = (line: string) => { outStream.write(line + "\n"); };
     const emitStatement = (statement: string) => {
       emit(statement);
       emit(STATEMENT_BREAKPOINT);
@@ -503,10 +507,8 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
     emitStatement("COMMIT;");
     emit("");
 
-    // Write the backup file
-    mkdirSync(opts.backupDir, { recursive: true });
-    const backupFile = resolve(opts.backupDir, `${filenamePrefix}-${timestamp()}.sql`);
-    await writeFile(backupFile, lines.join("\n"), "utf8");
+    outStream.end();
+    await finished(outStream);
 
     const sizeBytes = statSync(backupFile).size;
     const prunedCount = pruneOldBackups(opts.backupDir, retentionDays, filenamePrefix);
@@ -517,6 +519,7 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
       prunedCount,
     };
   } finally {
+    if (!outStream.writableEnded) outStream.destroy();
     await sql.end();
   }
 }
