@@ -23,6 +23,7 @@ export const modelEffortSupport: Record<string, readonly string[]> = {
 };
 
 export const models = [
+  { id: "auto", label: "Auto" },
   { id: "gpt-5.4", label: "GPT 5.4" },
   { id: "gpt-5.3-codex", label: "GPT 5.3 Codex" },
   { id: "gpt-5.2-codex", label: "GPT 5.2 Codex" },
