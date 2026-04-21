@@ -11,15 +11,10 @@ export const modelEffortSupport: Record<string, readonly string[]> = {
   "gpt-5.3-codex": ["low", "medium", "high", "xhigh"],
   "gpt-5.2-codex": ["low", "medium", "high", "xhigh"],
   "gpt-5.2": ["low", "medium", "high"],
-  "gpt-5.1-codex-max": ["low", "medium", "high", "xhigh"],
-  "gpt-5.1-codex": ["low", "medium", "high"],
-  "gpt-5.1": ["low", "medium", "high"],
   "gpt-5.4-mini": ["low", "medium", "high", "xhigh"],
-  "gpt-5.1-codex-mini": ["low", "medium", "high"],
   "gpt-5-mini": ["low", "medium", "high"],
   "claude-sonnet-4.6": ["low", "medium", "high"],
-  "claude-opus-4.6": ["low", "medium", "high"],
-  "claude-opus-4.6-fast": ["low", "medium", "high"],
+  "claude-opus-4.7": ["low", "medium", "high"],
 };
 
 export const models = [
@@ -28,22 +23,14 @@ export const models = [
   { id: "gpt-5.3-codex", label: "GPT 5.3 Codex" },
   { id: "gpt-5.2-codex", label: "GPT 5.2 Codex" },
   { id: "gpt-5.2", label: "GPT 5.2" },
-  { id: "gpt-5.1-codex-max", label: "GPT 5.1 Codex Max" },
-  { id: "gpt-5.1-codex", label: "GPT 5.1 Codex" },
-  { id: "gpt-5.1", label: "GPT 5.1" },
   { id: "gpt-5.4-mini", label: "GPT 5.4 Mini" },
-  { id: "gpt-5.1-codex-mini", label: "GPT 5.1 Codex Mini" },
   { id: "gpt-5-mini", label: "GPT 5 Mini" },
   { id: "gpt-4.1", label: "GPT 4.1" },
   { id: "claude-sonnet-4.6", label: "Claude Sonnet 4.6" },
   { id: "claude-sonnet-4.5", label: "Claude Sonnet 4.5" },
   { id: "claude-haiku-4.5", label: "Claude Haiku 4.5" },
-  { id: "claude-opus-4.6", label: "Claude Opus 4.6" },
-  { id: "claude-opus-4.6-fast", label: "Claude Opus 4.6 (fast)" },
-  { id: "claude-opus-4.6-1m", label: "Claude Opus 4.6 (1M)" },
-  { id: "claude-opus-4.5", label: "Claude Opus 4.5" },
+  { id: "claude-opus-4.7", label: "Claude Opus 4.7" },
   { id: "claude-sonnet-4", label: "Claude Sonnet 4" },
-  { id: "gemini-3-pro-preview", label: "Gemini 3 Pro" },
 ];
 
 export const agentConfigurationDoc = `# copilot_cli agent configuration
