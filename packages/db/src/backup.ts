@@ -11,6 +11,7 @@ type PartialConfig = {
     backup?: {
       dir?: string;
       retentionDays?: number;
+      retentionCount?: number;
     };
   };
 };
@@ -88,22 +89,28 @@ function resolveRetentionDays(config: PartialConfig | null): number {
   return asPositiveInt(config?.database?.backup?.retentionDays) ?? 30;
 }
 
+function resolveRetentionCount(config: PartialConfig | null): number {
+  return asPositiveInt(config?.database?.backup?.retentionCount) ?? 48;
+}
+
 async function main() {
   const configPath = resolveDefaultConfigPath();
   const config = readConfig(configPath);
   const connectionString = resolveConnectionString(config);
   const backupDir = resolveBackupDir(config);
   const retentionDays = resolveRetentionDays(config);
+  const retentionCount = resolveRetentionCount(config);
 
   console.log(`Config path: ${configPath}`);
   console.log(`Backing up database to: ${backupDir}`);
-  console.log(`Retention window: ${retentionDays} day(s)`);
+  console.log(`Retention window: ${retentionDays} day(s), max ${retentionCount} file(s)`);
 
   try {
     const result = await runDatabaseBackup({
       connectionString,
       backupDir,
       retentionDays,
+      retentionCount,
       filenamePrefix: "paperclip",
     });
 
