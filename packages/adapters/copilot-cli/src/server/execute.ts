@@ -34,14 +34,29 @@ import { modelEffortSupport } from "../index.js";
 const __moduleDir = path.dirname(fileURLToPath(import.meta.url));
 
 /**
- * Create a tmpdir with `.agents/skills/` containing symlinks to desired
- * Paperclip runtime skills, so Copilot CLI discovers them as individual
- * skills through its native `.agents/skills/` scan.
+ * Resolve the stable directory used to hold Copilot CLI skill symlinks.
+ * Uses ~/.paperclip/instances/{instanceId}/codex-skills so the path
+ * survives across invocations and macOS temp-dir cleanup.
+ */
+function resolveCopilotSkillsStableDir(): string {
+  const paperclipHome = process.env.PAPERCLIP_HOME ?? path.join(os.homedir(), ".paperclip");
+  const instanceId = process.env.PAPERCLIP_INSTANCE_ID ?? "default";
+  return path.join(paperclipHome, "instances", instanceId, "codex-skills");
+}
+
+/**
+ * Populate a stable `.agents/skills/` directory with symlinks to desired
+ * Paperclip runtime skills, so Copilot CLI discovers them through its
+ * native `.agents/skills/` scan.
  *
- * The tmpdir is passed via COPILOT_CUSTOM_INSTRUCTIONS_DIRS.
+ * Unlike the previous mkdtemp approach, the directory persists across runs
+ * so agent scripts that hard-code the resolved path stay valid. Broken
+ * symlinks from a previous run are repaired automatically.
+ *
+ * The stable dir is passed via COPILOT_CUSTOM_INSTRUCTIONS_DIRS.
  * Returns null if no desired skills are found.
  */
-async function buildCopilotSkillsTmpDir(
+async function buildCopilotSkillsDir(
   config: Record<string, unknown>,
   onLog?: (stream: "stdout" | "stderr", chunk: string) => Promise<void>,
 ): Promise<string | null> {
@@ -51,14 +66,31 @@ async function buildCopilotSkillsTmpDir(
 
   if (desiredEntries.length === 0) return null;
 
-  const tmpdir = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-copilot-skills-"));
-  const skillsDir = path.join(tmpdir, ".agents", "skills");
+  const stableDir = resolveCopilotSkillsStableDir();
+  const skillsDir = path.join(stableDir, ".agents", "skills");
   await fs.mkdir(skillsDir, { recursive: true });
 
   let linked = 0;
   for (const entry of desiredEntries) {
+    const target = path.join(skillsDir, entry.runtimeName);
     try {
-      await fs.symlink(entry.source, path.join(skillsDir, entry.runtimeName));
+      const existing = await fs.lstat(target).catch(() => null);
+      if (existing?.isSymbolicLink()) {
+        const linkedPath = await fs.readlink(target).catch(() => null);
+        const resolvedLinked = linkedPath ? path.resolve(path.dirname(target), linkedPath) : null;
+        const stillValid = resolvedLinked
+          ? await fs.access(resolvedLinked).then(() => true, () => false)
+          : false;
+        if (stillValid) {
+          linked++;
+          continue;
+        }
+        // Broken symlink — remove and re-create below.
+        await fs.unlink(target);
+      } else if (existing) {
+        await fs.rm(target, { recursive: true, force: true });
+      }
+      await fs.symlink(entry.source, target);
       linked++;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -66,12 +98,7 @@ async function buildCopilotSkillsTmpDir(
     }
   }
 
-  if (linked === 0) {
-    await fs.rm(tmpdir, { recursive: true, force: true });
-    return null;
-  }
-
-  return tmpdir;
+  return linked > 0 ? stableDir : null;
 }
 
 interface CopilotExecutionInput {
@@ -257,7 +284,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     extraArgs,
   } = runtimeConfig;
 
-  const skillsTmpDir = skillsEnabled && !skipSkills ? await buildCopilotSkillsTmpDir(config, onLog) : null;
+  const skillsTmpDir = skillsEnabled && !skipSkills ? await buildCopilotSkillsDir(config, onLog) : null;
   if (skillsTmpDir) {
     const existing = env.COPILOT_CUSTOM_INSTRUCTIONS_DIRS ?? "";
     env.COPILOT_CUSTOM_INSTRUCTIONS_DIRS = existing
