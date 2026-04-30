@@ -9,6 +9,7 @@ export {
   isCopilotUnknownSessionError,
 } from "./parse.js";
 export { listCopilotCliSkills, syncCopilotCliSkills } from "./skills.js";
+export { listCopilotCliModels } from "./models.js";
 import type { AdapterSessionCodec } from "@paperclipai/adapter-utils";
 
 function readNonEmptyString(value: unknown): string | null {

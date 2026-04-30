@@ -40,6 +40,12 @@ export interface CanonicalEffortLevel {
  */
 export const CANONICAL_MODELS: Record<string, CanonicalModel> = {
   // ── Claude ──────────────────────────────────────────────────────────────
+  "claude-opus-4.7": {
+    label: "Claude Opus 4.7",
+    adapters: {
+      claude_local: "claude-opus-4-7",
+    },
+  },
   "claude-opus-4.6": {
     label: "Claude Opus 4.6",
     adapters: {

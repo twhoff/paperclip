@@ -81,6 +81,7 @@ import {
   syncCopilotCliSkills,
   testEnvironment as copilotCliTestEnvironment,
   sessionCodec as copilotCliSessionCodec,
+  listCopilotCliModels,
 } from "@paperclipai/adapter-copilot-cli/server";
 import {
   agentConfigurationDoc as copilotCliAgentConfigurationDoc,
@@ -213,6 +214,7 @@ const copilotCliAdapter: ServerAdapterModule = {
   sessionCodec: copilotCliSessionCodec,
   sessionManagement: getAdapterSessionManagement("copilot_cli") ?? undefined,
   models: copilotCliModels,
+  listModels: listCopilotCliModels,
   supportsLocalAgentJwt: true,
   agentConfigurationDoc: copilotCliAgentConfigurationDoc,
 };

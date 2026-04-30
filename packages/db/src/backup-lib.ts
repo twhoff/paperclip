@@ -8,6 +8,7 @@ export type RunDatabaseBackupOptions = {
   connectionString: string;
   backupDir: string;
   retentionDays: number;
+  retentionCount?: number;
   filenamePrefix?: string;
   connectTimeoutSeconds?: number;
   includeMigrationJournal?: boolean;
@@ -70,23 +71,37 @@ function timestamp(date: Date = new Date()): string {
   return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
 }
 
-function pruneOldBackups(backupDir: string, retentionDays: number, filenamePrefix: string): number {
+function pruneOldBackups(
+  backupDir: string,
+  retentionDays: number,
+  filenamePrefix: string,
+  retentionCount: number | null,
+): number {
   if (!existsSync(backupDir)) return 0;
   const safeRetention = Math.max(1, Math.trunc(retentionDays));
   const cutoff = Date.now() - safeRetention * 24 * 60 * 60 * 1000;
-  let pruned = 0;
 
+  const entries: { path: string; mtimeMs: number }[] = [];
   for (const name of readdirSync(backupDir)) {
     if (!name.startsWith(`${filenamePrefix}-`) || !name.endsWith(".sql")) continue;
     const fullPath = resolve(backupDir, name);
-    const stat = statSync(fullPath);
-    if (stat.mtimeMs < cutoff) {
-      unlinkSync(fullPath);
-      pruned++;
+    entries.push({ path: fullPath, mtimeMs: statSync(fullPath).mtimeMs });
+  }
+
+  const toDelete = new Set<string>();
+  for (const entry of entries) {
+    if (entry.mtimeMs < cutoff) toDelete.add(entry.path);
+  }
+
+  if (retentionCount !== null && entries.length > retentionCount) {
+    const sortedNewestFirst = [...entries].sort((a, b) => b.mtimeMs - a.mtimeMs);
+    for (const entry of sortedNewestFirst.slice(retentionCount)) {
+      toDelete.add(entry.path);
     }
   }
 
-  return pruned;
+  for (const path of toDelete) unlinkSync(path);
+  return toDelete.size;
 }
 
 function formatBackupSize(sizeBytes: number): string {
@@ -145,6 +160,9 @@ function tableKey(schemaName: string, tableName: string): string {
 export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise<RunDatabaseBackupResult> {
   const filenamePrefix = opts.filenamePrefix ?? "paperclip";
   const retentionDays = Math.max(1, Math.trunc(opts.retentionDays));
+  const retentionCount = opts.retentionCount != null && Number.isFinite(opts.retentionCount)
+    ? Math.max(1, Math.trunc(opts.retentionCount))
+    : null;
   const connectTimeout = Math.max(1, Math.trunc(opts.connectTimeoutSeconds ?? 5));
   const includeMigrationJournal = opts.includeMigrationJournal === true;
   const excludedTableNames = normalizeTableNameSet(opts.excludeTables);
@@ -511,7 +529,7 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
     await finished(outStream);
 
     const sizeBytes = statSync(backupFile).size;
-    const prunedCount = pruneOldBackups(opts.backupDir, retentionDays, filenamePrefix);
+    const prunedCount = pruneOldBackups(opts.backupDir, retentionDays, filenamePrefix, retentionCount);
 
     return {
       backupFile,

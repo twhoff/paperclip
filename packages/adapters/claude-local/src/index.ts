@@ -4,6 +4,7 @@ export const label = "Claude Code (local)";
 export const models = [
   { id: "claude-opus-4-7[1m]", label: "Claude Opus 4.7 (1M context)" },
   { id: "claude-opus-4-7", label: "Claude Opus 4.7" },
+  { id: "claude-opus-4-6", label: "Claude Opus 4.6" },
   { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
   { id: "claude-sonnet-4-6[1m]", label: "Claude Sonnet 4.6 (1M context)" },
   { id: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5" },
@@ -45,4 +46,6 @@ Operational fields:
 Notes:
 - When Paperclip realizes a workspace/runtime for a run, it injects PAPERCLIP_WORKSPACE_* and PAPERCLIP_RUNTIME_* env vars for agent-side tooling.
 - Batch API mode is single-turn (no multi-turn agentic loops or tool callbacks). Best for analysis, reports, summarization, data processing.
+- claude-opus-4-7 is a BURST-MODE-ONLY model. It must be switched off immediately after the task is successfully delivered.
+  Use only for: critical-priority tasks, highly complex reasoning, or agents struggling to pass review gates.
 `;
