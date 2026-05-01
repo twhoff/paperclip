@@ -27,6 +27,7 @@ function createTempConfig(): string {
         enabled: true,
         intervalMinutes: 60,
         retentionDays: 30,
+        retentionCount: 12,
         dir: path.join(runtimeRoot, "backups"),
       },
     },

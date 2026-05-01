@@ -54,6 +54,7 @@ export interface Config {
   databaseBackupEnabled: boolean;
   databaseBackupIntervalMinutes: number;
   databaseBackupRetentionDays: number;
+  databaseBackupRetentionCount: number;
   databaseBackupDir: string;
   serveUi: boolean;
   uiDevMiddleware: boolean;
@@ -205,6 +206,12 @@ export function loadConfig(): Config {
       fileDatabaseBackup?.retentionDays ||
       30,
   );
+  const databaseBackupRetentionCount = Math.max(
+    1,
+    Number(process.env.PAPERCLIP_DB_BACKUP_RETENTION_COUNT) ||
+      fileDatabaseBackup?.retentionCount ||
+      12,
+  );
   const databaseBackupDir = resolveHomeAwarePath(
     process.env.PAPERCLIP_DB_BACKUP_DIR ??
       fileDatabaseBackup?.dir ??
@@ -229,6 +236,7 @@ export function loadConfig(): Config {
     databaseBackupEnabled,
     databaseBackupIntervalMinutes,
     databaseBackupRetentionDays,
+    databaseBackupRetentionCount,
     databaseBackupDir,
     serveUi:
       process.env.SERVE_UI !== undefined

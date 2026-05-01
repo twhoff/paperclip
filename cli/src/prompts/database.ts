@@ -18,6 +18,7 @@ export async function promptDatabase(current?: DatabaseConfig): Promise<Database
       enabled: true,
       intervalMinutes: 60,
       retentionDays: 30,
+      retentionCount: 12,
       dir: defaultBackupDir,
     },
   };
@@ -142,6 +143,22 @@ export async function promptDatabase(current?: DatabaseConfig): Promise<Database
     process.exit(0);
   }
 
+  const backupRetentionCountInput = await p.text({
+    message: "Maximum number of backup files to keep",
+    defaultValue: String(base.backup.retentionCount ?? 12),
+    placeholder: "12",
+    validate: (val) => {
+      const n = Number(val);
+      if (!Number.isInteger(n) || n < 1) return "Count must be a positive integer";
+      if (n > 10000) return "Count must be 10000 or less";
+      return undefined;
+    },
+  });
+  if (p.isCancel(backupRetentionCountInput)) {
+    p.cancel("Setup cancelled.");
+    process.exit(0);
+  }
+
   return {
     mode,
     connectionString,
@@ -151,6 +168,7 @@ export async function promptDatabase(current?: DatabaseConfig): Promise<Database
       enabled: backupEnabled,
       intervalMinutes: Number(backupIntervalInput || "60"),
       retentionDays: Number(backupRetentionInput || "30"),
+      retentionCount: Number(backupRetentionCountInput || "12"),
       dir: backupDirInput || defaultBackupDir,
     },
   };

@@ -25,6 +25,7 @@ function writeBaseConfig(configPath: string) {
         enabled: true,
         intervalMinutes: 60,
         retentionDays: 30,
+        retentionCount: 12,
         dir: "/tmp/paperclip-backups",
       },
     },
