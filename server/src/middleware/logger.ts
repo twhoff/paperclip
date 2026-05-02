@@ -19,32 +19,97 @@ const logDir = resolveServerLogDir();
 fs.mkdirSync(logDir, { recursive: true });
 
 const logFile = path.join(logDir, "server.log");
+export const serverLogDir = logDir;
+export const serverLogFile = logFile;
 
-const sharedOpts = {
+function resolveServerLogConfig() {
+  const fileServerLog = readConfigFile()?.serverLog;
+  const SERVER_LOG_LEVELS = ["trace", "debug", "info", "warn", "error", "fatal"] as const;
+  type Level = (typeof SERVER_LOG_LEVELS)[number];
+  const envLevel = process.env.PAPERCLIP_SERVER_LOG_LEVEL?.trim() as Level | undefined;
+  const level: Level =
+    envLevel && SERVER_LOG_LEVELS.includes(envLevel)
+      ? envLevel
+      : (fileServerLog?.level ?? "info");
+  const maxFileBytes = Math.max(
+    1024,
+    Number(process.env.PAPERCLIP_SERVER_LOG_MAX_FILE_BYTES) ||
+      fileServerLog?.maxFileBytes ||
+      50_000_000,
+  );
+  const maxFiles = Math.max(
+    1,
+    Number(process.env.PAPERCLIP_SERVER_LOG_MAX_FILES) ||
+      fileServerLog?.maxFiles ||
+      5,
+  );
+  return { level, maxFileBytes, maxFiles };
+}
+
+const { level: fileLogLevel, maxFileBytes, maxFiles } = resolveServerLogConfig();
+
+const sharedPrettyOpts = {
   translateTime: "HH:MM:ss",
   ignore: "pid,hostname",
   singleLine: true,
 };
 
-export const logger = pino({
-  level: "debug",
-}, pino.transport({
-  targets: [
-    {
-      target: "pino-pretty",
-      options: { ...sharedOpts, ignore: "pid,hostname,req,res,responseTime", colorize: true, destination: 1 },
-      level: "info",
+export const logger = pino(
+  {
+    level: "debug",
+    redact: {
+      paths: [
+        'req.headers.cookie',
+        'req.headers.authorization',
+        'req.headers["x-api-key"]',
+        'res.headers["set-cookie"]',
+      ],
+      remove: true,
     },
-    {
-      target: "pino-pretty",
-      options: { ...sharedOpts, colorize: false, destination: logFile, mkdir: true },
-      level: "debug",
-    },
-  ],
-}));
+  },
+  pino.transport({
+    targets: [
+      {
+        target: "pino-pretty",
+        options: {
+          ...sharedPrettyOpts,
+          ignore: "pid,hostname,req,res,responseTime",
+          colorize: true,
+          destination: 1,
+        },
+        level: "info",
+      },
+      {
+        target: "pino-roll",
+        options: {
+          file: logFile,
+          frequency: "daily",
+          size: `${Math.max(1, Math.ceil(maxFileBytes / (1024 * 1024)))}m`,
+          dateFormat: "yyyy-MM-dd",
+          extension: ".log",
+          mkdir: true,
+          limit: { count: maxFiles },
+        },
+        level: fileLogLevel,
+      },
+    ],
+  }),
+);
 
 export const httpLogger = pinoHttp({
   logger,
+  serializers: {
+    req(req: any) {
+      return {
+        id: req.id,
+        method: req.method,
+        url: req.url,
+      };
+    },
+    res(res: any) {
+      return { statusCode: res.statusCode };
+    },
+  },
   customLogLevel(_req, res, err) {
     if (err || res.statusCode >= 500) return "error";
     if (res.statusCode >= 400) return "warn";

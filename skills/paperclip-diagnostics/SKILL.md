@@ -115,6 +115,55 @@ If a run log file is missing, fall back to `stdout_excerpt`,
 `stderr_excerpt`, and `heartbeat_run_events` (which always live in
 the database).
 
+## Server Log
+
+Pino-formatted server log lives alongside `data/`:
+
+```
+~/.paperclip/instances/<instanceId>/logs/server.log              # current
+~/.paperclip/instances/<instanceId>/logs/server.YYYY-MM-DD.log    # rotated, plain
+~/.paperclip/instances/<instanceId>/logs/server.YYYY-MM-DD.log.gz # rotated, compressed
+```
+
+Override the directory with `PAPERCLIP_LOG_DIR`. The current `server.log`
+is pretty-printed text; rotated files are JSON (one object per line — pipe
+through `pino-pretty` for human reading).
+
+```bash
+LOG_DIR="${PAPERCLIP_LOG_DIR:-$HOME/.paperclip/instances/default/logs}"
+
+# Live tail
+tail -f "$LOG_DIR/server.log"
+
+# Search across rotated history (gz + plain)
+{ zcat "$LOG_DIR"/server.*.log.gz 2>/dev/null; cat "$LOG_DIR"/server.log; } \
+  | grep -i 'error\|warn'
+
+# Pretty-print yesterday's JSON file
+zcat "$LOG_DIR/server.$(date -v-1d +%F).log.gz" | npx pino-pretty | tail -100
+
+# Total disk usage
+du -sh "$LOG_DIR"
+```
+
+### Server-log retention defaults
+
+The server rotates `server.log` daily and on size, gzips rotated files
+hourly, and prunes anything older than `retentionDays`. Defaults
+(configurable under `serverLog.*` in `config.json` or via
+`PAPERCLIP_SERVER_LOG_*` env vars):
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `level` | `info` | File log level (HTTP request payloads now stripped to `method url status responseTime`) |
+| `maxFileBytes` | 50_000_000 | Rotate the live file once it reaches this size |
+| `maxFiles` | 5 | Max rotated files retained by pino-roll |
+| `retentionDays` | 14 | Older rotated files deleted by the prune sweep |
+| `compressRotated` | true | Gzip rotated files (`.log` → `.log.gz`) |
+
+Cookies, `authorization`, and `set-cookie` headers are redacted out
+of the log even if some pathway tries to log them.
+
 ## Instructions
 
 When a user asks about errors, failures, or diagnostics:

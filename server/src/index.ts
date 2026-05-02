@@ -24,10 +24,11 @@ import {
 import detectPort from "detect-port";
 import { createApp } from "./app.js";
 import { loadConfig } from "./config.js";
-import { logger } from "./middleware/logger.js";
+import { logger, serverLogDir, serverLogFile } from "./middleware/logger.js";
 import { setupLiveEventsWebSocketServer } from "./realtime/live-events-ws.js";
 import { createBatchJobService, heartbeatService, reconcilePersistedRuntimeServicesOnStartup, routineService } from "./services/index.js";
 import { configureRunLogStore, getConfiguredRunLogBasePath, pruneRunLogs } from "./services/run-log-store.js";
+import { pruneServerLogs } from "./services/server-log-store.js";
 import { createStorageServiceFromConfig } from "./storage/index.js";
 import { printStartupBanner } from "./startup-banner.js";
 import { getBoardClaimWarningUrl, initializeBoardClaimChallenge } from "./board-claim.js";
@@ -684,6 +685,55 @@ export async function startServer(): Promise<StartedServer> {
     }, runLogPruneIntervalMs);
     // Kick off an immediate prune on startup so we don't wait an hour to clean up.
     void runScheduledRunLogPrune();
+  }
+
+  {
+    const serverLogPruneIntervalMs = 60 * 60 * 1000; // hourly
+    let pruneInFlight = false;
+    const runScheduledServerLogPrune = async () => {
+      if (pruneInFlight) return;
+      pruneInFlight = true;
+      try {
+        const result = await pruneServerLogs({
+          logDir: serverLogDir,
+          liveFile: serverLogFile,
+          retentionDays: config.serverLogRetentionDays,
+          compressRotated: config.serverLogCompressRotated,
+        });
+        if (result.deletedFiles > 0 || result.gzippedFiles > 0) {
+          logger.info(
+            {
+              gzippedFiles: result.gzippedFiles,
+              deletedFiles: result.deletedFiles,
+              deletedBytes: result.deletedBytes,
+              retentionDays: config.serverLogRetentionDays,
+              logDir: serverLogDir,
+            },
+            `Server-log maintenance: gzipped ${result.gzippedFiles}, deleted ${result.deletedFiles} (${result.deletedBytes.toLocaleString()} bytes)`,
+          );
+        }
+      } catch (err) {
+        logger.error({ err }, "Server-log prune failed");
+      } finally {
+        pruneInFlight = false;
+      }
+    };
+
+    logger.info(
+      {
+        level: config.serverLogLevel,
+        maxFileBytes: config.serverLogMaxFileBytes,
+        maxFiles: config.serverLogMaxFiles,
+        retentionDays: config.serverLogRetentionDays,
+        compressRotated: config.serverLogCompressRotated,
+        logDir: serverLogDir,
+      },
+      "Server-log retention enabled",
+    );
+    setInterval(() => {
+      void runScheduledServerLogPrune();
+    }, serverLogPruneIntervalMs);
+    void runScheduledServerLogPrune();
   }
   
   await new Promise<void>((resolveListen, rejectListen) => {

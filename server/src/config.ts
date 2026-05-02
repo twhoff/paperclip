@@ -60,6 +60,11 @@ export interface Config {
   runLogMaxRunBytes: number;
   runLogCompressOnFinalize: boolean;
   runLogPruneIntervalMinutes: number;
+  serverLogLevel: "trace" | "debug" | "info" | "warn" | "error" | "fatal";
+  serverLogMaxFileBytes: number;
+  serverLogMaxFiles: number;
+  serverLogRetentionDays: number;
+  serverLogCompressRotated: boolean;
   serveUi: boolean;
   uiDevMiddleware: boolean;
   secretsProvider: SecretProvider;
@@ -246,6 +251,38 @@ export function loadConfig(): Config {
       60,
   );
 
+  const fileServerLog = fileConfig?.serverLog;
+  const SERVER_LOG_LEVELS = ["trace", "debug", "info", "warn", "error", "fatal"] as const;
+  const envServerLogLevel = process.env.PAPERCLIP_SERVER_LOG_LEVEL?.trim() as
+    | (typeof SERVER_LOG_LEVELS)[number]
+    | undefined;
+  const serverLogLevel: (typeof SERVER_LOG_LEVELS)[number] =
+    envServerLogLevel && SERVER_LOG_LEVELS.includes(envServerLogLevel)
+      ? envServerLogLevel
+      : (fileServerLog?.level ?? "info");
+  const serverLogMaxFileBytes = Math.max(
+    1024,
+    Number(process.env.PAPERCLIP_SERVER_LOG_MAX_FILE_BYTES) ||
+      fileServerLog?.maxFileBytes ||
+      50_000_000,
+  );
+  const serverLogMaxFiles = Math.max(
+    1,
+    Number(process.env.PAPERCLIP_SERVER_LOG_MAX_FILES) ||
+      fileServerLog?.maxFiles ||
+      5,
+  );
+  const serverLogRetentionDays = Math.max(
+    1,
+    Number(process.env.PAPERCLIP_SERVER_LOG_RETENTION_DAYS) ||
+      fileServerLog?.retentionDays ||
+      14,
+  );
+  const serverLogCompressRotated =
+    process.env.PAPERCLIP_SERVER_LOG_COMPRESS_ROTATED !== undefined
+      ? process.env.PAPERCLIP_SERVER_LOG_COMPRESS_ROTATED === "true"
+      : (fileServerLog?.compressRotated ?? true);
+
   return {
     deploymentMode,
     deploymentExposure,
@@ -270,6 +307,11 @@ export function loadConfig(): Config {
     runLogMaxRunBytes,
     runLogCompressOnFinalize,
     runLogPruneIntervalMinutes,
+    serverLogLevel,
+    serverLogMaxFileBytes,
+    serverLogMaxFiles,
+    serverLogRetentionDays,
+    serverLogCompressRotated,
     serveUi:
       process.env.SERVE_UI !== undefined
         ? process.env.SERVE_UI === "true"

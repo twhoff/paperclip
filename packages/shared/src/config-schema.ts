@@ -52,6 +52,14 @@ export const runLogsConfigSchema = z.object({
   pruneIntervalMinutes: z.number().int().min(1).max(7 * 24 * 60).default(60),
 });
 
+export const serverLogConfigSchema = z.object({
+  level: z.enum(["trace", "debug", "info", "warn", "error", "fatal"]).default("info"),
+  maxFileBytes: z.number().int().min(1024).max(10 * 1024 * 1024 * 1024).default(50_000_000),
+  maxFiles: z.number().int().min(1).max(1000).default(5),
+  retentionDays: z.number().int().min(1).max(3650).default(14),
+  compressRotated: z.boolean().default(true),
+});
+
 export const serverConfigSchema = z.object({
   deploymentMode: z.enum(DEPLOYMENT_MODES).default("local_trusted"),
   exposure: z.enum(DEPLOYMENT_EXPOSURES).default("private"),
@@ -115,6 +123,13 @@ export const paperclipConfigSchema = z
       maxRunBytes: 50_000_000,
       compressOnFinalize: true,
       pruneIntervalMinutes: 60,
+    }),
+    serverLog: serverLogConfigSchema.default({
+      level: "info",
+      maxFileBytes: 50_000_000,
+      maxFiles: 5,
+      retentionDays: 14,
+      compressRotated: true,
     }),
     server: serverConfigSchema,
     auth: authConfigSchema.default({
@@ -192,3 +207,4 @@ export type AuthConfig = z.infer<typeof authConfigSchema>;
 export type ConfigMeta = z.infer<typeof configMetaSchema>;
 export type DatabaseBackupConfig = z.infer<typeof databaseBackupConfigSchema>;
 export type RunLogsConfig = z.infer<typeof runLogsConfigSchema>;
+export type ServerLogConfig = z.infer<typeof serverLogConfigSchema>;

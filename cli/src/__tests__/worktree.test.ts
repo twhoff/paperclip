@@ -69,6 +69,13 @@ function buildSourceConfig(): PaperclipConfig {
       compressOnFinalize: true,
       pruneIntervalMinutes: 60,
     },
+    serverLog: {
+      level: "info",
+      maxFileBytes: 50_000_000,
+      maxFiles: 5,
+      retentionDays: 14,
+      compressRotated: true,
+    },
     server: {
       deploymentMode: "authenticated",
       exposure: "private",

@@ -43,7 +43,7 @@ type OnboardOptions = {
   invokedByRun?: boolean;
 };
 
-type OnboardDefaults = Pick<PaperclipConfig, "database" | "logging" | "runLogs" | "server" | "auth" | "storage" | "secrets">;
+type OnboardDefaults = Pick<PaperclipConfig, "database" | "logging" | "runLogs" | "serverLog" | "server" | "auth" | "storage" | "secrets">;
 
 const ONBOARD_ENV_KEYS = [
   "PAPERCLIP_PUBLIC_URL",
@@ -182,6 +182,13 @@ function quickstartDefaultsFromEnv(): {
       compressOnFinalize: true,
       pruneIntervalMinutes: 60,
     },
+    serverLog: {
+      level: "info",
+      maxFileBytes: 50_000_000,
+      maxFiles: 5,
+      retentionDays: 14,
+      compressRotated: true,
+    },
     server: {
       deploymentMode,
       exposure: deploymentExposure,
@@ -298,6 +305,7 @@ export async function onboard(opts: OnboardOptions): Promise<void> {
     database,
     logging,
     runLogs,
+    serverLog,
     server,
     auth,
     storage,
@@ -424,6 +432,7 @@ export async function onboard(opts: OnboardOptions): Promise<void> {
     database,
     logging,
     runLogs,
+    serverLog,
     server,
     auth,
     storage,
