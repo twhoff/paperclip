@@ -63,6 +63,12 @@ function buildSourceConfig(): PaperclipConfig {
       mode: "file",
       logDir: "/tmp/main/logs",
     },
+    runLogs: {
+      retentionDays: 14,
+      maxRunBytes: 50_000_000,
+      compressOnFinalize: true,
+      pruneIntervalMinutes: 60,
+    },
     server: {
       deploymentMode: "authenticated",
       exposure: "private",

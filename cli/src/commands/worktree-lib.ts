@@ -212,6 +212,12 @@ export function buildWorktreeConfig(input: {
       mode: source?.logging.mode ?? "file",
       logDir: paths.logDir,
     },
+    runLogs: {
+      retentionDays: source?.runLogs?.retentionDays ?? 14,
+      maxRunBytes: source?.runLogs?.maxRunBytes ?? 50_000_000,
+      compressOnFinalize: source?.runLogs?.compressOnFinalize ?? true,
+      pruneIntervalMinutes: source?.runLogs?.pruneIntervalMinutes ?? 60,
+    },
     server: {
       deploymentMode: source?.server.deploymentMode ?? "local_trusted",
       exposure: source?.server.exposure ?? "private",

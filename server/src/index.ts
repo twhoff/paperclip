@@ -27,6 +27,7 @@ import { loadConfig } from "./config.js";
 import { logger } from "./middleware/logger.js";
 import { setupLiveEventsWebSocketServer } from "./realtime/live-events-ws.js";
 import { createBatchJobService, heartbeatService, reconcilePersistedRuntimeServicesOnStartup, routineService } from "./services/index.js";
+import { configureRunLogStore, getConfiguredRunLogBasePath, pruneRunLogs } from "./services/run-log-store.js";
 import { createStorageServiceFromConfig } from "./storage/index.js";
 import { printStartupBanner } from "./startup-banner.js";
 import { getBoardClaimWarningUrl, initializeBoardClaimChallenge } from "./board-claim.js";
@@ -79,6 +80,11 @@ export async function startServer(): Promise<StartedServer> {
   if (process.env.PAPERCLIP_SECRETS_MASTER_KEY_FILE === undefined) {
     process.env.PAPERCLIP_SECRETS_MASTER_KEY_FILE = config.secretsMasterKeyFilePath;
   }
+
+  configureRunLogStore({
+    maxRunBytes: config.runLogMaxRunBytes,
+    compressOnFinalize: config.runLogCompressOnFinalize,
+  });
   
   type MigrationSummary =
     | "skipped"
@@ -631,6 +637,53 @@ export async function startServer(): Promise<StartedServer> {
     setInterval(() => {
       void runScheduledBackup();
     }, backupIntervalMs);
+  }
+
+  {
+    const runLogPruneIntervalMs = config.runLogPruneIntervalMinutes * 60 * 1000;
+    let pruneInFlight = false;
+    const runScheduledRunLogPrune = async () => {
+      if (pruneInFlight) return;
+      pruneInFlight = true;
+      try {
+        const result = await pruneRunLogs({
+          basePath: getConfiguredRunLogBasePath(),
+          retentionDays: config.runLogRetentionDays,
+        });
+        if (result.deletedFiles > 0 || result.removedDirs > 0) {
+          logger.info(
+            {
+              deletedFiles: result.deletedFiles,
+              deletedBytes: result.deletedBytes,
+              removedDirs: result.removedDirs,
+              retentionDays: config.runLogRetentionDays,
+              basePath: getConfiguredRunLogBasePath(),
+            },
+            `Pruned run logs: removed ${result.deletedFiles} file(s) (${result.deletedBytes.toLocaleString()} bytes)`,
+          );
+        }
+      } catch (err) {
+        logger.error({ err }, "Run-log prune failed");
+      } finally {
+        pruneInFlight = false;
+      }
+    };
+
+    logger.info(
+      {
+        retentionDays: config.runLogRetentionDays,
+        maxRunBytes: config.runLogMaxRunBytes,
+        compressOnFinalize: config.runLogCompressOnFinalize,
+        pruneIntervalMinutes: config.runLogPruneIntervalMinutes,
+        basePath: getConfiguredRunLogBasePath(),
+      },
+      "Run-log retention enabled",
+    );
+    setInterval(() => {
+      void runScheduledRunLogPrune();
+    }, runLogPruneIntervalMs);
+    // Kick off an immediate prune on startup so we don't wait an hour to clean up.
+    void runScheduledRunLogPrune();
   }
   
   await new Promise<void>((resolveListen, rejectListen) => {

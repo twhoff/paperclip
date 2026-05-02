@@ -45,6 +45,13 @@ export const loggingConfigSchema = z.object({
   logDir: z.string().default("~/.paperclip/instances/default/logs"),
 });
 
+export const runLogsConfigSchema = z.object({
+  retentionDays: z.number().int().min(1).max(3650).default(14),
+  maxRunBytes: z.number().int().min(1024).max(10 * 1024 * 1024 * 1024).default(50_000_000),
+  compressOnFinalize: z.boolean().default(true),
+  pruneIntervalMinutes: z.number().int().min(1).max(7 * 24 * 60).default(60),
+});
+
 export const serverConfigSchema = z.object({
   deploymentMode: z.enum(DEPLOYMENT_MODES).default("local_trusted"),
   exposure: z.enum(DEPLOYMENT_EXPOSURES).default("private"),
@@ -103,6 +110,12 @@ export const paperclipConfigSchema = z
     llm: llmConfigSchema.optional(),
     database: databaseConfigSchema,
     logging: loggingConfigSchema,
+    runLogs: runLogsConfigSchema.default({
+      retentionDays: 14,
+      maxRunBytes: 50_000_000,
+      compressOnFinalize: true,
+      pruneIntervalMinutes: 60,
+    }),
     server: serverConfigSchema,
     auth: authConfigSchema.default({
       baseUrlMode: "auto",
@@ -178,3 +191,4 @@ export type SecretsLocalEncryptedConfig = z.infer<typeof secretsLocalEncryptedCo
 export type AuthConfig = z.infer<typeof authConfigSchema>;
 export type ConfigMeta = z.infer<typeof configMetaSchema>;
 export type DatabaseBackupConfig = z.infer<typeof databaseBackupConfigSchema>;
+export type RunLogsConfig = z.infer<typeof runLogsConfigSchema>;

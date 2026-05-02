@@ -52,6 +52,12 @@ function defaultConfig(): PaperclipConfig {
       mode: "file",
       logDir: resolveDefaultLogsDir(instanceId),
     },
+    runLogs: {
+      retentionDays: 14,
+      maxRunBytes: 50_000_000,
+      compressOnFinalize: true,
+      pruneIntervalMinutes: 60,
+    },
     server: {
       deploymentMode: "local_trusted",
       exposure: "private",

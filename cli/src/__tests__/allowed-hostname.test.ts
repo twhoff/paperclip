@@ -33,6 +33,12 @@ function writeBaseConfig(configPath: string) {
       mode: "file",
       logDir: "/tmp/paperclip-logs",
     },
+    runLogs: {
+      retentionDays: 14,
+      maxRunBytes: 50_000_000,
+      compressOnFinalize: true,
+      pruneIntervalMinutes: 60,
+    },
     server: {
       deploymentMode: "authenticated",
       exposure: "private",

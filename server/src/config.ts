@@ -56,6 +56,10 @@ export interface Config {
   databaseBackupRetentionDays: number;
   databaseBackupRetentionCount: number;
   databaseBackupDir: string;
+  runLogRetentionDays: number;
+  runLogMaxRunBytes: number;
+  runLogCompressOnFinalize: boolean;
+  runLogPruneIntervalMinutes: number;
   serveUi: boolean;
   uiDevMiddleware: boolean;
   secretsProvider: SecretProvider;
@@ -218,6 +222,30 @@ export function loadConfig(): Config {
       resolveDefaultBackupDir(),
   );
 
+  const fileRunLogs = fileConfig?.runLogs;
+  const runLogRetentionDays = Math.max(
+    1,
+    Number(process.env.PAPERCLIP_RUN_LOG_RETENTION_DAYS) ||
+      fileRunLogs?.retentionDays ||
+      14,
+  );
+  const runLogMaxRunBytes = Math.max(
+    1024,
+    Number(process.env.PAPERCLIP_RUN_LOG_MAX_RUN_BYTES) ||
+      fileRunLogs?.maxRunBytes ||
+      50_000_000,
+  );
+  const runLogCompressOnFinalize =
+    process.env.PAPERCLIP_RUN_LOG_COMPRESS_ON_FINALIZE !== undefined
+      ? process.env.PAPERCLIP_RUN_LOG_COMPRESS_ON_FINALIZE === "true"
+      : (fileRunLogs?.compressOnFinalize ?? true);
+  const runLogPruneIntervalMinutes = Math.max(
+    1,
+    Number(process.env.PAPERCLIP_RUN_LOG_PRUNE_INTERVAL_MINUTES) ||
+      fileRunLogs?.pruneIntervalMinutes ||
+      60,
+  );
+
   return {
     deploymentMode,
     deploymentExposure,
@@ -238,6 +266,10 @@ export function loadConfig(): Config {
     databaseBackupRetentionDays,
     databaseBackupRetentionCount,
     databaseBackupDir,
+    runLogRetentionDays,
+    runLogMaxRunBytes,
+    runLogCompressOnFinalize,
+    runLogPruneIntervalMinutes,
     serveUi:
       process.env.SERVE_UI !== undefined
         ? process.env.SERVE_UI === "true"

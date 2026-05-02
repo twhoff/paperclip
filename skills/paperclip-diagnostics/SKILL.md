@@ -73,23 +73,47 @@ Always pipe through `| cat` to avoid pager issues.
 
 ## Log Files (Filesystem)
 
-Runs store full ndjson logs on the Paperclip server filesystem. The path is:
+Runs store full ndjson logs on the Paperclip server filesystem under
+the per-instance run-logs root. The default path is:
 
 ```
-$PAPERCLIP_LOG_DIR/{companyId}/{agentId}/{runId}.ndjson
+~/.paperclip/instances/<instanceId>/data/run-logs/<companyId>/<agentId>/<runId>.ndjson[.gz]
 ```
 
-The `log_ref` column in `heartbeat_runs` contains the relative path. To read:
+(Override with the `RUN_LOG_BASE_PATH` env var.) The `log_ref` column
+in `heartbeat_runs` contains the **relative** path inside that root,
+and `log_compressed` indicates whether the file is gzipped.
 
 ```bash
-# Find the log directory (usually on the Paperclip server host)
-find ~/Projects/paperclip -name "*.ndjson" -path "*/logs/*" -type f 2>/dev/null | head -3
+# Resolve the active run-logs root for the default instance
+RUN_LOG_ROOT="${RUN_LOG_BASE_PATH:-$HOME/.paperclip/instances/default/data/run-logs}"
 
-# If found, read a specific run's log
-cat "$PAPERCLIP_LOG_DIR/$LOG_REF" | head -50
+# Read a specific run's log (handles either .ndjson or .ndjson.gz)
+LOG_REF=$(PGPASSWORD=paperclip psql -h 127.0.0.1 -p 54329 -U paperclip -d paperclip -tA \
+  -c "SELECT log_ref FROM heartbeat_runs WHERE id = '<run-id>'")
+F="$RUN_LOG_ROOT/$LOG_REF"
+[ -f "$F.gz" ] && zcat "$F.gz" | head -50 || cat "$F" | head -50
+
+# Inspect total disk usage
+du -sh "$RUN_LOG_ROOT"
 ```
 
-If the log files are not on the local machine, fall back to `stdout_excerpt`, `stderr_excerpt`, and `heartbeat_run_events` for diagnostics.
+Each line is a JSON object: `{ts, stream: "stdout"|"stderr"|"system", chunk}`.
+
+### Retention defaults
+
+The server prunes run logs hourly. Defaults (configurable under
+`runLogs.*` in `config.json` or via `PAPERCLIP_RUN_LOG_*` env vars):
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `retentionDays` | 14 | Files older than N days are deleted |
+| `maxRunBytes` | 50_000_000 | Per-run cap; runaway logs are truncated with a sentinel line |
+| `compressOnFinalize` | true | Gzip the file when the run finishes |
+
+If a run log file is missing, fall back to `stdout_excerpt`,
+`stderr_excerpt`, and `heartbeat_run_events` (which always live in
+the database).
 
 ## Instructions
 
@@ -178,10 +202,11 @@ ORDER BY created_at;
 ### 3. Check log files (if available)
 
 ```bash
-# Check if log files exist locally
+RUN_LOG_ROOT="${RUN_LOG_BASE_PATH:-$HOME/.paperclip/instances/default/data/run-logs}"
 LOG_REF=$(PGPASSWORD=paperclip psql -h 127.0.0.1 -p 54329 -U paperclip -d paperclip -tA \
   -c "SELECT log_ref FROM heartbeat_runs WHERE id = '<run-id>'")
-find ~/Projects/paperclip -name "$(basename "$LOG_REF")" -type f 2>/dev/null
+F="$RUN_LOG_ROOT/$LOG_REF"
+[ -f "$F.gz" ] && zcat "$F.gz" || cat "$F"
 ```
 
 ### 4. Summarize findings
