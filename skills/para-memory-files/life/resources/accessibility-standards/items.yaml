@@ -1,0 +1,53 @@
+- id: a11y-001
+  fact: "Form controls must have label+id pairing (htmlFor + id attributes). Every label points to one input, every input has an id matching a label's htmlFor."
+  category: standard
+  timestamp: "2026-04-22"
+  source: "GRO-393"
+  status: active
+  last_accessed: "2026-04-22"
+  access_count: 1
+
+- id: a11y-002
+  fact: "Mobile touch targets must be at least 44px. Use min-h-[44px] flex items-center in Tailwind for buttons and suggestion items."
+  category: standard
+  timestamp: "2026-04-22"
+  source: "GRO-393"
+  status: active
+  last_accessed: "2026-04-22"
+  access_count: 1
+
+- id: a11y-003
+  fact: "Autocomplete workflows require ARIA combobox semantics: aria-autocomplete, aria-controls, aria-expanded on search input; role=listbox/option on suggestions."
+  category: standard
+  timestamp: "2026-04-22"
+  source: "GRO-393"
+  status: active
+  last_accessed: "2026-04-22"
+  access_count: 1
+
+- id: a11y-004
+  fact: "File inputs must never be hidden with hidden class. Use sr-only instead so they remain accessible to screen readers. Wrap in a proper <label htmlFor> and give the input aria-label and aria-describedby."
+  category: standard
+  timestamp: "2026-04-22"
+  source: "GRO-393"
+  status: active
+  last_accessed: "2026-04-22"
+  access_count: 1
+
+- id: a11y-005
+  fact: "Decorative icons and SVGs must have aria-hidden=true. This prevents them from becoming pseudo-controls and reduces noise for screen reader users."
+  category: standard
+  timestamp: "2026-04-22"
+  source: "GRO-393"
+  status: active
+  last_accessed: "2026-04-22"
+  access_count: 1
+
+- id: a11y-006
+  fact: "All accessibility fixes must include: live Playwright proof (build + test in real browser), DOM verification table (both viewports), 5-viewport screenshots (390/640/768/1100/1280), acceptance criteria checklist."
+  category: standard
+  timestamp: "2026-04-22"
+  source: "GRO-393"
+  status: active
+  last_accessed: "2026-04-22"
+  access_count: 1

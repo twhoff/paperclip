@@ -45,8 +45,8 @@ describe("buildCopilotCliConfig", () => {
   });
 
   it("includes model when set", () => {
-    const ac = buildCopilotCliConfig(baseValues({ model: "gpt-5.4" }));
-    expect(ac.model).toBe("gpt-5.4");
+    const ac = buildCopilotCliConfig(baseValues({ model: "gpt-5.5" }));
+    expect(ac.model).toBe("gpt-5.5");
   });
 
   it("maps thinkingEffort to reasoningEffort", () => {

@@ -34,7 +34,7 @@ describe("prepareManagedCodexHome", () => {
     await fs.writeFile(
       path.join(sharedHome, "config.toml"),
       [
-        'model = "gpt-5.4"',
+        'model = "gpt-5.5"',
         '[mcp_servers.context-mode]',
         `command = ${JSON.stringify(path.join(sharedHome, "bin", "context-mode-poc"))}`,
         "",
@@ -44,7 +44,7 @@ describe("prepareManagedCodexHome", () => {
       ].join("\n"),
       "utf8",
     );
-    await fs.writeFile(path.join(targetHome, "config.toml"), 'model = "gpt-5.4"\n', "utf8");
+    await fs.writeFile(path.join(targetHome, "config.toml"), 'model = "gpt-5.5"\n', "utf8");
 
     await prepareManagedCodexHome(
       {

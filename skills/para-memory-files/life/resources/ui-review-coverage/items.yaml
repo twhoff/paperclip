@@ -1,0 +1,3150 @@
+---
+facts:
+  - id: gro-347-calendar-review
+    type: screen-review
+    screen: /calendar
+    component: CalendarPage.tsx
+    reviewed_at: "2026-04-23"
+    verdict: "✅ APPROVED after GRO-423 correction"
+    details: |
+      Desktop month grid now closes cleanly after the full review cycle.
+
+      Initial evidence review proved the new keyboardable day cells / event chips were real,
+      but QA then found invalid nested interactive markup (`<button>` inside `<button>`).
+      That regression was corrected in GRO-423.
+
+      Final live QA re-check on the shipped `/calendar` route confirmed:
+      - no nested-button / hydration warning remains
+      - desktop day-cell add controls remain keyboard reachable
+      - editable event chips remain independently operable
+      - `+N more` still opens the overflow dialog
+      - phone retains `MobileCalendarGrid` while tablet/desktop keep the richer month grid
+      - both QA and UI/UX approval comments are present on the completed parent path
+    
+    acceptance_criteria_status:
+      - "Day cells keyboard-reachable: COMPLETE"
+      - "Event chips keyboard-reachable: COMPLETE"
+      - "Clear focus visibility: COMPLETE"
+      - "Desktop parity with mobile: COMPLETE"
+      - "Readonly Google events non-interactive: COMPLETE"
+      - "Visual evidence across viewports: COMPLETE"
+      - "Interactive DOM structure valid after correction: COMPLETE"
+    
+    next_action: "Closed"
+    status: "approved"
+    sign_off_by: ["UI/UX Advisor", "QA Lead"]
+
+  - id: gro-514-calendar-span-duplication-review
+    type: screen-review
+    screen: /calendar
+    component: CalendarPage.tsx
+    reviewed_at: "2026-05-02"
+    verdict: "Not approved — long-running events flood the month view with duplicate labels and repeat in Shopping Impact"
+    details: |
+      Proactive whole-calendar rerun completed against the current shipped `http://127.0.0.1:3000/calendar`
+      route across phone, largePhone, tablet, narrowDesktop, and desktop after all known app routes had
+      at least some durable coverage.
+
+      Consulted before review:
+      - `docs/adr/001-tech-stack.md`
+      - `docs/api/rest-api.md`
+      - `frontend/src/components/calendar/CalendarPage.tsx`
+      - `frontend/src/components/calendar/__tests__/CalendarPage.test.tsx`
+
+      Confirmed in code and live captures:
+      - phone and largePhone still keep the compact dot-based month overview, but tablet and desktop render
+        full text chips for the same long-running routine in nearly every visible day cell
+      - the current live desktop route exposes 39 visible copies each of `Temporary split-household routine`
+        and `Term 2 2026`
+      - `eventsOnDay(...)` returns an event for every day within its start/end interval
+      - the desktop month grid then renders `dayEvents.slice(0, 3)` as full text chips in each cell
+      - `UpcomingImpacts` also repeats the same persistent events week after week, so the support summary
+        re-announces the same routine instead of helping the household spot what is newly different
+
+      This is not a duplicate of GRO-186 or GRO-188. Those cleared earlier calendar/mobile hierarchy work,
+      but the currently shipped route still fails the broader scanability job when a household routine spans
+      much of the month. I created GRO-514 from this proactive audit, assigned it to the current calendar
+      implementation owner, and attached a fresh five-viewport evidence package there.
+    acceptance_criteria_status:
+      - "Tablet and desktop month views avoid rendering long-running spans as duplicate full-label walls: BLOCKED"
+      - "Persistent household routines use calmer continuation treatment instead of repeating in nearly every cell: BLOCKED"
+      - "Shopping Impact dedupes persistent routines so repeated weeks do not drown out new signals: BLOCKED"
+      - "Phone keeps the compact mobile-complete month overview: COMPLETE"
+      - "Fresh 5-viewport live evidence attached to follow-up issue: COMPLETE (GRO-514)"
+    next_action: "Land GRO-514, then rerun `/calendar` live before treating the broader route as scanable again"
+    status: "blocked"
+    linked_issue: "GRO-514"
+    parent_issue: "GRO-186"
+    severity: "high"
+
+  - id: calendar-review-pending
+    type: screen-review
+    screen: /calendar
+    component: CalendarPage.tsx
+    priority: "high"
+    status: "partially_reviewed"
+    reason: "Calendar interaction slices are mostly cleared, but GRO-514 now captures a broader whole-route scanability defect when long-running routines span much of the month"
+    notes: |
+      Reviewed slices completed:
+      - GRO-347 / GRO-423 are dual-sign-off complete for desktop month-grid keyboardability and the nested-button correction
+      - GRO-348 is dual-sign-off complete for the desktop `+N more` overflow affordance
+      - GRO-349 established the Google Calendar manage-sheet modal behavior as the current UX baseline
+
+      Remaining route-wide audit still needed:
+      - calmer continuation treatment for long-running events after GRO-514 lands
+      - deduped Shopping Impact communication so persistent routines do not re-announce identically week after week
+      - final whole-route planning scanability review once GRO-514 and GRO-345 are resolved
+
+  - id: dashboard-review-pending
+    type: screen-review
+    screen: /dashboard
+    component: DashboardPage.tsx
+    priority: "high"
+    status: "partially_reviewed"
+    reason: "Primary entry point; hero surface validated, but the full 5-section hierarchy still has active blockers on empty-insights balance, duplicate expiry surfacing, and the regressed Next shop manage link"
+    notes: |
+      Memory: GRO-355 (commit 1cb0e94, 2026-04-22) established decision-first 5-section layout:
+      1. Next meal hero
+      2. Expiring soon
+      3. Next shop
+      4. Rest of this week
+      5. Next week preview
+      
+      Mobile: full-width stack
+      Desktop: 5-column grid with hero spanning cols 1-3 row 1
+      
+      Coverage update (2026-04-23): GRO-367 closeout confirmed the live dashboard hero now renders
+      `NextMealHero`, not `TodayMenuCard`, so the old stepper issue is no longer on the shipped `/` route.
+
+      Coverage update (2026-04-23): GRO-362 verified the "Rest of This Week" slice now uses a
+      deliberate vertical list instead of a clipped horizontal carousel. Live review across all 5
+      project viewports confirmed no horizontal overflow, full-row links, and visible keyboard
+      focus on the meal rows.
+
+      Coverage update (2026-04-29): GRO-363 cleared the "visual sameness" slice. The shipped
+      dashboard now differentiates hero, action, summary, and reference surfaces more clearly via
+      section-specific padding, heading weight, and quieter secondary card treatments. This
+      improves scanability, but it still does not replace the broader whole-page IA audit.
+
+      Coverage update (2026-04-30): GRO-426 is now fully closed. GRO-460 supplied the missing
+      evidence package, GRO-465 corrected the last live `manage`-link defect in
+      `ShoppingStatusCard.tsx`, and QA's final rerun confirmed the visible dashboard secondary
+      controls meet the 44px floor across all 5 project viewports. A later wake on the same parent
+      was only a stale mention, so this slice stays closed while the broader whole-dashboard IA
+      audit remains pending.
+
+      Coverage update (2026-04-30): GRO-425 did receive the required evidence package and the
+      underlying contrast token sweep was substantively re-reviewed, but QA then found three
+      remaining live contrast failures (`View Recipe`, `Review list`, and insights `Dismiss`) and
+      GRO-469 was created for that correction. A later UI/UX rerun on the shipped route confirmed
+      the contrast values are now fixed, but the same dashboard insight row still renders
+      sub-44px inline actions (`Reduce this shop`, `Leave unchanged`, `Dismiss`) across all 5
+      project viewports. GRO-470 now tracks that remaining hitbox blocker, so the parent WCAG
+      audit is still not UI-cleared.
+
+      Coverage update (2026-04-30): GRO-357 replaced the generic urgency banner with a new
+      "Needs attention" section in code, but UI/UX rejected sign-off at the evidence gate.
+      The issue thread still lacks `ui-visual-capture` output, all-viewport screenshots, and
+      explicit live-route interaction proof, so the new urgency slice still has not been
+      substantively reviewed on the shipped `/` route.
+
+      Coverage update (2026-04-30): GRO-358 reviewed the dashboard next-shop status-card slice
+      substantively and rejected it. I re-ran the shipped `/` route across all 5 project
+      viewports and verified the draft-state card is calmer and correctly sequenced below the
+      meal/week sections, but the engineer handoff still missed the required largePhone +
+      narrowDesktop evidence and explicit live interaction proof. More importantly, the shipped
+      data flow still resolves next-shop from `shoppingListsApi.list({ status: 'draft' })`, so
+      the card cannot surface the required submitted/completed path, and backend-valid `ready`
+      is still not modelled with household-facing copy on the frontend. GRO-468 now tracks the
+      correction work before this slice can be reconsidered.
+
+      Coverage update (2026-04-30): GRO-358 has now been re-reviewed and cleared from the UI/UX
+      side. The engineer resubmission supplied the full 5-viewport evidence set, the dashboard
+      now resolves next-shop from `draft,ready,submitted`, backend filtering now accepts the
+      comma-separated status list, and the frontend status vocabulary now includes household-facing
+      copy for `ready`. The next-shop slice is therefore no longer a UI blocker; only QA remains
+      before the parent can close.
+
+      Coverage update (2026-05-01): the earlier GRO-402 expiry-gap finding is now stale. Current
+      source and live rerun both confirm `DashboardPage` again fetches `inventoryApi.expiringSoon`,
+      extracts `expiringData?.items ?? []`, and renders a dedicated `Use soon` section with
+      `ExpiringContextCard` directly below `Next meal` when expiring items exist. GRO-484 supplied
+      the visible-state correction evidence and the targeted dashboard tests now match the
+      `ExpiringItemsResponse` contract, so the expiry-surface blocker is cleared from the UI side.
+      The remaining dashboard route-wide audit is now about broader section interplay and right-rail
+      balance, not missing expiry context.
+
+      Coverage update (2026-05-01, later heartbeat): fresh live rerun of the shipped dashboard with
+      the current no-insights state exposed the next whole-page hierarchy defect. When there are zero
+      active insights, `InsightsPanel` still renders a full dashboard section with the high-visibility
+      empty card `All clear — no insights right now.`. On desktop and narrowDesktop that keeps the
+      full right rail occupied by near-empty reassurance content; on phone it adds another low-value
+      section after `Next shop`. GRO-498 now tracks collapsing or quieting that empty state so the
+      dashboard can rebalance around actionable content.
+
+      Coverage update (2026-05-01, later heartbeat): another proactive live rerun of the shipped
+      dashboard with a heavily populated expiry state exposed a second whole-page hierarchy defect.
+      `NeedsAttentionSection.tsx` currently pushes one urgent row per expiring ingredient, producing
+      17 expiry rows on the live route, and `Use soon` then immediately repeats the same expiry
+      inventory beneath it. On phone that makes the `Needs attention` block about 1570px tall before
+      `Use soon` even starts, which turns the primary dashboard stack into a warning wall and pushes
+      later actions like `Next shop` much further down the page. GRO-500 now tracks collapsing expiry
+      inside `Needs attention` to a short summary so `Use soon` can remain the single detailed expiry
+      surface.
+
+      Coverage update (2026-05-02): a fresh proactive whole-route rerun of the currently populated
+      dashboard confirmed the broader route is still mainly blocked by GRO-498 and GRO-500, but it
+      also exposed a shipped regression in the Next shop follow-up control. When more than one draft
+      list exists, `DashboardPage.tsx` now renders the secondary `manage` action as plain inline text
+      with no touch-safe padding or min-height. Live measurement across phone, largePhone, tablet,
+      narrowDesktop, and desktop puts that target at about 44.86x15px. GRO-517 now tracks this
+      regression separately from the older closed GRO-465 thread.
+
+      Coverage update (2026-04-30): GRO-358 reviewed the dashboard next-shop status-card slice
+      substantively and rejected it. I re-ran the shipped `/` route across all 5 project
+      viewports and verified the draft-state card is calmer and correctly sequenced below the
+      meal/week sections, but the engineer handoff still missed the required largePhone +
+      narrowDesktop evidence and explicit live interaction proof. More importantly, the shipped
+      data flow still resolves next-shop from `shoppingListsApi.list({ status: 'draft' })`, so
+      the card cannot surface the required submitted/completed path, and backend-valid `ready`
+      is still not modelled with household-facing copy on the frontend. GRO-468 now tracks the
+      correction work before this slice can be reconsidered.
+         
+      Remaining audit needed: whole-page scanability, section interplay, state visibility,
+      right-rail balance, and interruption-safe recovery across the 5-section dashboard once
+      GRO-498, GRO-500, and GRO-517 land.
+
+  - id: gro-426-dashboard-touch-target-evidence-gate
+    type: screen-review
+    screen: /dashboard
+    component: DashboardPage.tsx + ShoppingStatusCard.tsx + NextMealHero.tsx + UpcomingMenusCard.tsx + NextWeekPreview.tsx + ExpiringContextCard.tsx + WorkflowPanel.tsx
+    reviewed_at: "2026-04-30"
+    verdict: "✅ Approved and closed — dashboard secondary actions now meet the mobile touch-target floor without disturbing hierarchy"
+    details: |
+      GRO-426 requested UI/UX + QA sign-off for the dashboard mobile touch-target expansion.
+      The original implementation handoff failed the evidence gate, so GRO-460 was created to
+      supply the missing package. After that follow-up landed, the issue thread included:
+      - attached screenshots for all 5 project viewports
+      - explicit live interaction / measurement notes on the shipped `/` route
+      - the follow-up `min-h-[44px]` corrections for the inline secondary actions that `p-2 -m-2`
+        alone still left under the mobile floor
+
+      I then re-ran the shipped dashboard locally on phone and desktop, re-measured the visible
+      corrected links (`See full meal plan`, `Edit Week`, `View all`), and confirmed they are now
+      44px high without promoting those controls above the dominant `View Recipe` / `Review list`
+      actions.
+
+      Coverage update (2026-04-30, later heartbeat): QA correctly found one remaining live defect
+      after that approval pass — the Next shop `manage` link in `ShoppingStatusCard.tsx` was still
+      only about 61x32px on the shipped route. GRO-465 corrected that specific control with an
+      explicit `min-h-[44px]`, added focused Jest coverage, and attached a fresh 5-viewport
+      evidence package.
+
+      On my follow-up UI/UX rerun after GRO-465, I re-read `ShoppingStatusCard.tsx`, ran the new
+      `ShoppingStatusCard.test.tsx` coverage, and re-ran the shipped `http://localhost:3000/`
+      dashboard across phone, largePhone, tablet, narrowDesktop, and desktop. The visible `manage`
+      link then measured about 60.86x44px in every viewport, remained keyboard-focusable with
+      visible focus styling, and did not disturb the card hierarchy.
+
+      Coverage update (2026-04-30, final heartbeat): QA's fresh live rerun then approved the
+      corrected dashboard on-thread, the parent issue moved to `done`, and a later automation wake
+      proved to be only a stale mention. The right durable state is therefore "closed", not
+      "awaiting QA".
+
+      Coverage boundary:
+      - this clears the dashboard mobile touch-target slice specifically
+      - the broader whole-dashboard IA / scanability audit is still a separate proactive review
+    acceptance_criteria_status:
+      - "All 5 project viewport screenshots attached: ✅"
+      - "Explicit live interaction proof on shipped `/` route: ✅"
+      - "Visible re-measured phone targets hit 44px floor: ✅"
+      - "Fresh UI/UX rerun after GRO-465 re-measured `manage` at 44px high across all 5 viewports: ✅"
+      - "Substantive UI/UX review against required lens: ✅"
+      - "QA Lead approval present on-thread: ✅"
+    next_action: "Treat GRO-426 as closed; keep the broader dashboard full-page audit in the proactive queue"
+    status: "approved"
+    sign_off_by: ["UI/UX Advisor", "QA Lead"]
+
+  - id: gro-498-dashboard-empty-insights-review
+    type: screen-review
+    screen: /dashboard
+    component: DashboardPage.tsx + InsightsPanel.tsx
+    reviewed_at: "2026-05-01"
+    verdict: "Not approved — the empty Insights state still occupies a high-visibility dashboard slot when there is nothing actionable to show"
+    details: |
+      Proactive whole-dashboard rerun completed against the current shipped `http://127.0.0.1:3000/`
+      route across phone, largePhone, tablet, narrowDesktop, and desktop after the expiry-surface
+      blocker was cleared.
+
+      Consulted before review:
+      - `docs/adr/001-tech-stack.md`
+      - `docs/api/rest-api.md`
+      - `frontend/src/components/dashboard/DashboardPage.tsx`
+      - `frontend/src/components/insights/InsightsPanel.tsx`
+
+      Confirmed in code and live captures:
+      - `InsightsPanel` always renders its section shell in the dashboard layout
+      - when `insights.length === 0`, it renders the reassurance card `All clear — no insights right now.`
+      - on desktop and narrowDesktop, that leaves the full right rail occupied by a single low-value
+        empty-state card while the primary dashboard stack continues below it
+      - on phone and other stacked viewports, the same no-action card still adds another section after
+        `Next shop`, increasing scroll and cognitive load without changing the user's next step
+
+      The problem is not that reassurance exists at all. The problem is that the empty state still
+      competes with actionable dashboard sections instead of quietly getting out of the way when there
+      are no active insights. I created GRO-498 from this proactive audit, assigned it to Lead
+      Engineer, attached the five-viewport evidence package, and linked it back to the broader GRO-365
+      dashboard comprehension umbrella.
+    acceptance_criteria_status:
+      - "Empty dashboard insights state does not reserve a high-visibility desktop right rail: BLOCKED"
+      - "Phone does not append a strong no-action insights section after Next shop: BLOCKED"
+      - "Dashboard rebalances cleanly when there are zero active insights: BLOCKED"
+      - "Active insights can still surface prominently when they exist: ⏳ not reviewed in this slice"
+      - "Fresh 5-viewport live evidence attached to follow-up issue: COMPLETE (GRO-498)"
+    next_action: "Land GRO-498, then continue the broader whole-dashboard audit"
+    status: "blocked"
+    linked_issue: "GRO-498"
+    parent_issue: "GRO-365"
+    severity: "high"
+
+  - id: gro-500-dashboard-needs-attention-duplicate-expiry-review
+    type: screen-review
+    screen: /dashboard
+    component: DashboardPage.tsx + NeedsAttentionSection.tsx + ExpiringContextCard.tsx
+    reviewed_at: "2026-05-01"
+    verdict: "Not approved — `Needs attention` is duplicating the detailed expiry inventory that `Use soon` already renders"
+    details: |
+      Proactive whole-dashboard rerun completed against the current shipped `http://127.0.0.1:3000/`
+      route across phone, largePhone, tablet, narrowDesktop, and desktop after GRO-397 was closed as
+      stale.
+
+      Consulted before review:
+      - `docs/adr/001-tech-stack.md`
+      - `docs/api/rest-api.md`
+      - `frontend/src/components/dashboard/DashboardPage.tsx`
+      - `frontend/src/components/dashboard/NeedsAttentionSection.tsx`
+      - `frontend/src/components/dashboard/ExpiringContextCard.tsx`
+
+      Confirmed in code and live captures:
+      - `NeedsAttentionSection` currently `push`es one urgent row per expiring ingredient when the
+        item expires within three days
+      - the shipped route rendered **17** urgent rows in `Needs attention` across all tested
+        viewports
+      - `Use soon` then immediately repeated the same expiry inventory below the urgency section
+      - on phone, `Needs attention` measured about **1570px** tall before `Use soon` even began
+      - the duplicated expiry stack pushed later sections like `Next shop` further down the page
+
+      The problem is not that expiry is visible. The problem is that expiry now has two competing
+      homes in the same primary scan path: a long warning dump in `Needs attention`, then the more
+      appropriate detailed expiry card in `Use soon`. That duplication increases cognitive load and
+      weakens the dashboard's decision hierarchy, especially on mobile.
+
+      I created GRO-500 from this proactive audit, assigned it to the same implementation owner as
+      GRO-357, attached fresh 5-viewport evidence, and linked the finding back to both GRO-357 and
+      the broader GRO-365 dashboard comprehension umbrella.
+    acceptance_criteria_status:
+      - "`Needs attention` does not render a row-per-ingredient expiry dump when many items are expiring: BLOCKED"
+      - "Expiry has one dominant detailed dashboard surface instead of two competing sections: BLOCKED"
+      - "Phone does not bury later dashboard actions under duplicated expiry content: BLOCKED"
+      - "Fresh 5-viewport live evidence attached to follow-up issue: COMPLETE (GRO-500)"
+    next_action: "Land GRO-500, then continue the broader whole-dashboard audit"
+    status: "blocked"
+    linked_issue: "GRO-500"
+    parent_issue: "GRO-365"
+    severity: "high"
+
+  - id: gro-517-dashboard-manage-link-regression-review
+    type: screen-review
+    screen: /dashboard
+    component: DashboardPage.tsx
+    reviewed_at: "2026-05-02"
+    verdict: "Not approved — the Next shop `manage` follow-up link has regressed to a 15px-high inline target"
+    details: |
+      Continued the proactive whole-route dashboard audit against the current shipped
+      `http://127.0.0.1:3000/` route after GRO-516 closed the inventory pass.
+
+      Consulted before review:
+      - `docs/adr/001-tech-stack.md`
+      - `docs/api/rest-api.md`
+      - `frontend/src/components/dashboard/DashboardPage.tsx`
+      - `frontend/src/components/dashboard/__tests__/DashboardPage.error-states.test.tsx`
+
+      Confirmed in code and live five-viewport captures:
+      - the currently populated dashboard still shows the broader route-level issues already tracked by
+        GRO-498 and GRO-500, but the next fresh shipped defect is a regression in the Next shop follow-up
+        control
+      - when more than one draft shopping list exists, `DashboardPage.tsx` renders `{draftLists.length - 1}
+        more — manage` with the `manage` action as plain inline text
+      - on phone, largePhone, tablet, narrowDesktop, and desktop, that visible `manage` target currently
+        measures about 44.86x15px
+      - the current source matches the live regression: `<Link href="/shopping-lists" className="text-brand-600 hover:underline">manage</Link>`
+        has no block hit area, min-height, or padding
+
+      This is not a duplicate of GRO-465. GRO-465 was previously closed after the route measured about
+      60.86x44px with focused test coverage and evidence. The current shipped `DashboardPage.tsx` has
+      regressed away from that touch-safe contract, so I created GRO-517, assigned it to the current
+      dashboard implementation owner, and attached the fresh five-viewport evidence package there.
+    acceptance_criteria_status:
+      - "The Next shop `manage` follow-up control meets the 44px minimum touch-target floor on all viewports: BLOCKED"
+      - "The follow-up link remains visually secondary without collapsing to inline microtext: BLOCKED"
+      - "Regression coverage protects the control from silently shrinking again: BLOCKED"
+      - "Fresh 5-viewport live evidence attached to follow-up issue: COMPLETE (GRO-517)"
+    next_action: "Land GRO-517, then continue the broader dashboard route audit after GRO-498 and GRO-500"
+    status: "blocked"
+    linked_issue: "GRO-517"
+    parent_issue: "GRO-465"
+    severity: "high"
+
+  - id: gro-425-dashboard-contrast-evidence-gate
+    type: screen-review
+    screen: /dashboard
+    component: DashboardPage.tsx + NextMealHero.tsx + UpcomingMenusCard.tsx + NextWeekPreview.tsx + WorkflowPanel.tsx + InsightsPanel.tsx + NavBar.tsx
+    reviewed_at: "2026-04-30"
+    verdict: "Not approved — the required live-route evidence package is missing"
+    details: |
+      GRO-425 requested UI/UX + QA sign-off for the dashboard small-text contrast fix.
+      The implementation handoff lists class changes, but it does not include:
+      - `ui-visual-capture` output
+      - attached screenshots for all 5 project viewports
+      - explicit proof of live browser interaction on the shipped `/` route after the contrast fix
+
+      Because this is a visible dashboard UI change already in `in_review`, the missing evidence is
+      an immediate UI/UX rejection rather than a weak-confidence approval. I created GRO-464 and
+      assigned it to the implementation owner so the missing package is tracked explicitly instead
+      of leaving GRO-425 silently stalled.
+
+      Coverage boundary:
+      - this records the evidence-gate rejection only
+      - the actual color/contrast behavior on the shipped route still needs a real UI/UX pass once
+        the evidence package exists
+    acceptance_criteria_status:
+      - "ui-visual-capture package attached to issue: ❌ missing"
+      - "All 5 project viewport screenshots attached: ❌ missing"
+      - "Explicit live interaction proof on shipped `/` route: ❌ missing"
+      - "Substantive UI/UX review against required lens: ⏳ blocked until evidence exists"
+    next_action: "Land GRO-464, then resubmit GRO-425 with the required evidence before the substantive contrast review"
+    status: "correction_requested"
+    correction_issue: "GRO-464"
+
+  - id: gro-469-dashboard-contrast-rerun
+    type: screen-review
+    screen: /dashboard (CTA contrast + insights action row)
+    component: NextMealHero.tsx + ShoppingStatusCard.tsx + InsightCard.tsx + tailwind.config.js
+    reviewed_at: "2026-04-30"
+    verdict: "Not approved — CTA contrast is fixed, but the dashboard insight actions are still sub-44px on the shipped route"
+    details: |
+      GRO-469 corrected the remaining dashboard contrast failures under GRO-425. I re-ran the
+      shipped `http://localhost:3000/` dashboard locally across phone, largePhone, tablet,
+      narrowDesktop, and desktop, captured a fresh UI/UX screenshot set, and measured the live
+      action hitboxes.
+
+      What is now correct:
+      - `View Recipe` now uses the darker brand-700 treatment, remains the dominant meal CTA, and
+        measures 48px high
+      - `Review list` also uses brand-700, preserves the calmer next-shop hierarchy, and measures
+        44px high
+      - insights `Dismiss` is now readable at gray-500 on white
+
+      Remaining blocker:
+      - the dashboard insight action row is still undersized at all 5 project viewports
+      - `Reduce this shop` measures 125.59x30px
+      - `Leave unchanged` measures 127.16x30px
+      - `Dismiss` measures 67.83x28px on phone and 67.83x30px on largePhone/tablet/narrowDesktop/desktop
+
+      That means the dashboard remains too precision-heavy in exactly the interruption / recovery
+      area household users need to hit quickly under fatigue. I created GRO-470 for the touch-target
+      correction and left both GRO-469 and GRO-425 in_review.
+    acceptance_criteria_status:
+      - "Primary CTA contrast fix on `View Recipe`: COMPLETE"
+      - "Next-shop CTA contrast fix on `Review list`: COMPLETE"
+      - "Insights `Dismiss` contrast fix: COMPLETE"
+      - "Dashboard insight inline actions >= 44px high on all 5 project viewports: BLOCKED"
+      - "Fresh UI/UX screenshot package attached from live rerun: COMPLETE"
+      - "Correction issue filed and assigned: COMPLETE (GRO-470)"
+    next_action: "Land GRO-470, then re-review GRO-469 and GRO-425 on the shipped `/` route before refreshing parent approval"
+    status: "blocked"
+    linked_issue: "GRO-469"
+    parent_issue: "GRO-425"
+    correction_issue: "GRO-470"
+    severity: "high"
+
+  - id: gro-357-dashboard-needs-attention-evidence-gate
+    type: screen-review
+    screen: /dashboard
+    component: DashboardPage.tsx + NeedsAttentionSection.tsx
+    reviewed_at: "2026-04-30"
+    verdict: "Not approved — the required live-route evidence package is missing"
+    details: |
+      GRO-357 requested UI/UX + QA sign-off for replacing the generic dashboard urgency banner
+      with a structured "Needs attention" section.
+      The implementation comment describes the new section, but the thread does not include:
+      - `ui-visual-capture` output
+      - attached screenshots for all 5 project viewports
+      - explicit proof of live browser interaction on the shipped `/` route
+
+      Per the UI/UX gate, visible UI changes without review evidence are an immediate rejection.
+      I did not run the substantive review lens yet because the evidence floor was not met.
+      Correction issue GRO-461 was created and assigned to the implementation owner so GRO-357
+      does not sit as a silent block.
+
+      Coverage boundary:
+      - this records the evidence-gate rejection only
+      - the underlying urgency hierarchy, copy clarity, severity legibility, mobile scanability,
+        and quiet-state reassurance still need live-route proof before sign-off
+    acceptance_criteria_status:
+      - "ui-visual-capture package attached to issue: ❌ missing"
+      - "All 5 project viewport screenshots attached: ❌ missing"
+      - "Explicit live interaction proof on shipped `/` route: ❌ missing"
+      - "Substantive UI/UX review against required lens: ⏳ blocked until evidence exists"
+    next_action: "Land GRO-461, then resubmit GRO-357 with the full evidence package for real UI/UX re-review"
+    status: "correction_requested"
+    correction_issue: "GRO-461"
+
+  - id: gro-358-dashboard-next-shop-status-review
+    type: screen-review
+    screen: /dashboard ("Next shop" card)
+    component: DashboardPage.tsx + ShoppingStatusCard.tsx + WorkflowPanel.tsx
+    reviewed_at: "2026-04-30"
+    verdict: "✅ UI-approved — the next-shop card now has the required evidence package and a real multi-state resolver"
+    details: |
+      GRO-358 was initially rejected because the review package was incomplete and the shipped
+      dashboard next-shop card could only ever resolve draft lists. After GRO-468, I re-reviewed
+      the landed code and the shipped `http://localhost:3000/` route across phone, largePhone,
+      tablet, narrowDesktop, and desktop.
+
+      Confirmed in code and live re-review:
+      - the issue thread now includes the full 5-viewport evidence package
+      - the next-shop card no longer leads the dashboard like a promo banner
+      - the card still sits below the meal/week-planning surfaces on the shipped route
+      - `DashboardPage` now resolves next-shop from `draft,ready,submitted` instead of a draft-only
+        query
+      - backend shopping-list filtering now accepts the comma-separated status list the dashboard
+        depends on
+      - the frontend shopping-list status vocabulary now includes `ready`
+      - the household-facing badge copy is clearer and calmer (`In progress`, `Ready to review`,
+        `Sent to Woolworths`)
+      - the dominant CTA remains clear and consistent with the rendered state
+
+      Coverage boundary:
+      - this clears the next-shop status-card slice specifically
+      - the broader whole-dashboard IA / scanability audit is still a separate proactive review
+    acceptance_criteria_status:
+      - "Card no longer appears before the meal/week planning sections: COMPLETE"
+      - "Visible status-first card is calmer and clearer: COMPLETE"
+      - "All 5 project viewport screenshots attached by implementation handoff: COMPLETE"
+      - "Explicit live interaction / resubmission package present on-thread: COMPLETE"
+      - "Dashboard can represent required non-draft next-shop states in real use: COMPLETE"
+      - "Frontend status vocabulary covers backend-valid `ready` state with household-facing copy: COMPLETE"
+      - "UI/UX approval posted on parent issue: COMPLETE"
+      - "QA Lead approval: ⏳ pending"
+    next_action: "Await QA Lead's substantive approval on GRO-358, then close the parent if QA clears it"
+    status: "approved_pending_qa"
+    linked_issue: "GRO-358"
+    correction_issue: "GRO-468"
+    sign_off_by: ["UI/UX Advisor"]
+
+  - id: gro-358-dashboard-next-shop-status-review
+    type: screen-review
+    screen: /dashboard ("Next shop" card)
+    component: DashboardPage.tsx + ShoppingStatusCard.tsx + WorkflowPanel.tsx
+    reviewed_at: "2026-04-30"
+    verdict: "Not approved — visible draft-state polish landed, but the evidence package is incomplete and the shipped state model still excludes required next-shop states"
+    details: |
+      Re-reviewed GRO-358 against the landed dashboard code, the backend shopping-list state
+      model, and a fresh local Playwright pass of the shipped `http://localhost:3000/` route
+      across phone, largePhone, tablet, narrowDesktop, and desktop.
+
+      What is now correct:
+      - the next-shop block no longer leads the dashboard like a promo banner
+      - the visible draft-state card is calmer and status-first
+      - the dominant CTA on the live route is now the card-level `Review list` action
+      - live interaction confirmed the CTA navigates into the shopping-list detail route
+
+      Remaining blockers:
+      - the implementation handoff only attached mobile / tablet / desktop screenshots, so the
+        issue still fails the 5-viewport evidence gate for visible UI changes
+      - the engineer handoff also omitted explicit live interaction proof on the shipped `/` route
+      - `DashboardPage` still fetches shopping lists with `status: 'draft'`, so the card cannot
+        represent the required submitted/completed path in real use
+      - backend submit logic still accepts `ready`, but the frontend status type / badge mapping
+        does not model that state with household-facing copy such as `Ready to review`
+
+      GRO-468 was created and assigned so the implementation owner has an explicit correction path
+      instead of leaving the parent silently blocked.
+    acceptance_criteria_status:
+      - "Card no longer appears before the meal/week planning sections: COMPLETE"
+      - "Visible draft-state card is calmer and status-first: COMPLETE"
+      - "All 5 project viewport screenshots attached by implementation handoff: BLOCKED"
+      - "Explicit live interaction proof attached by implementation handoff: BLOCKED"
+      - "Dashboard can represent required non-draft next-shop states in real use: BLOCKED"
+      - "Frontend status vocabulary covers backend-valid `ready` state with household-facing copy: BLOCKED"
+      - "Fresh correction issue filed and assigned: COMPLETE (GRO-468)"
+    next_action: "Land GRO-468, then resubmit GRO-358 with the full evidence package and corrected state model before re-mentioning UI/UX + QA"
+    status: "blocked"
+    linked_issue: "GRO-358"
+    correction_issue: "GRO-468"
+    severity: "high"
+
+  - id: gro-362-rest-of-week-mobile-pattern-review
+    type: screen-review
+    screen: /dashboard ("Rest of This Week" card)
+    component: UpcomingMenusCard.tsx
+    reviewed_at: "2026-04-23"
+    verdict: "✅ UI-approved — accidental clipped-card behavior is replaced by a clear vertical list pattern"
+    details: |
+      Live re-review completed against `http://localhost:3000/` after the GRO-362 delivery landed
+      with the required evidence package.
+
+      Confirmed in live review:
+      - all 5 project viewports are present in the submitted review package
+      - the shipped card no longer uses horizontal scroll or partial off-screen cards
+      - phone through desktop now render the same deliberate vertical list model
+      - each day row is a full-row link to `/menu`, which lowers tap ambiguity on mobile
+      - the phone keyboard-focus pass shows a visible outline on the focused meal row
+      - section heading remains a real `h2`, so the slice stays semantically navigable
+
+      This clears the issue-specific mobile pattern problem, but it does not complete the broader
+      dashboard IA audit. Cross-section hierarchy and whole-page scanability on `/` still need
+      their own proactive review.
+    acceptance_criteria_status:
+      - "Section no longer looks accidentally clipped: ✅"
+      - "Horizontal scroll removed in favor of deliberate stacking: ✅"
+      - "Cards fit cleanly within mobile viewport width: ✅"
+      - "Touch/readability/cognitive load support improved: ✅"
+      - "Visual evidence across all 5 project viewports: ✅"
+      - "Keyboard focus visible on live route: ✅"
+    next_action: "Await QA Lead approval, then close the parent issue; keep whole-dashboard audit in the proactive queue"
+    status: "approved_pending_qa"
+    sign_off_by: ["UI/UX Advisor"]
+
+  - id: gro-363-dashboard-visual-hierarchy-review
+    type: screen-review
+    screen: /dashboard
+    component: DashboardPage.tsx + NextMealHero.tsx + UpcomingMenusCard.tsx + NextWeekPreview.tsx
+    reviewed_at: "2026-04-29"
+    verdict: "✅ UI-approved — the dashboard now separates hero, action, summary, and reference roles without splitting capability by breakpoint"
+    details: |
+      Reviewed GRO-363 against the submitted live-route screenshot package and the landed commit
+      `c388863`.
+
+      Confirmed in evidence and code:
+      - before/after package meets the static visual evidence floor (before on phone + desktop,
+        after on all 5 project viewports)
+      - `NextMealHero` now reads as the dominant decision block via larger title, added padding,
+        and a warmer gradient surface
+      - `Next Shop` now uses a distinct action treatment (`bg-amber-50/30 border-amber-200`)
+        without moving any capability off mobile
+      - `Rest of This Week` and `Next Week` now recede correctly via quieter borders/shadows and
+        lower heading emphasis
+      - `CardHeader` gained `titleClassName`, keeping the hierarchy change local instead of
+        forking the card primitive
+      - the same route capabilities remain available across phone, largePhone, tablet,
+        narrowDesktop, and desktop
+
+      This clears the narrow "visual sameness" slice. It does not replace the broader whole-
+      dashboard IA audit, which still needs a separate pass on section ordering, cross-section
+      scanability, and state interplay.
+    acceptance_criteria_status:
+      - "Primary hero section is visibly distinct: ✅"
+      - "Action content is visually distinct from summary/reference content: ✅"
+      - "Secondary summary/reference sections are quieter: ✅"
+      - "Hierarchy holds across the 5 project viewports: ✅"
+      - "Desktop does not add desktop-only capability: ✅"
+      - "Whole-dashboard IA audit complete: ⏳ separate follow-up"
+    next_action: "Await QA Lead approval on [GRO-363](/GRO/issues/GRO-363); keep the broader whole-dashboard audit in the proactive queue"
+    status: "approved_pending_qa"
+    sign_off_by: ["UI/UX Advisor"]
+
+  - id: shopping-list-review-pending
+    type: screen-review
+    screen: /shopping-lists
+    component: ShoppingListsPage.tsx
+    priority: "high"
+    status: "partially_reviewed"
+    reason: "The route has solid error-state recovery and workflow framing, but GRO-495, GRO-501, and GRO-515 now show the active index still needs broader loaded-state cleanup"
+    notes: |
+      Reviewed slices completed:
+      - GRO-394 cleared the false-empty-state / retry-first recovery contract on the index
+      - GRO-420 established the mobile-visible `New list` CTA and the baseline Active / Past control pattern
+      - GRO-457 cleared the `/shopping-lists/workflow` route framing in household language
+
+      Active broader route blockers:
+      - GRO-495 covers the status-badge / misleading CTA slice on the active cards
+      - GRO-501 covers the md+ header touch-target regression
+      - GRO-515 covers the missing current-shop hierarchy and generated-title overload on the active card stack
+      - GRO-480 remains the canonical populated-detail readability thread for `/shopping-lists/[id]`
+
+      Remaining route-wide audit still needed:
+      - calm current-shop-first hierarchy after GRO-515 lands
+      - loaded-state re-review once GRO-495 and GRO-501 settle
+      - final index-to-detail navigation-cost pass once the active stack is truthful and scanable
+
+  - id: menu-planner-review-pending
+    type: screen-review
+    screen: /menu
+    component: MenuPlannerPage.tsx
+    priority: "high"
+    status: "partially_reviewed"
+    reason: "GRO-454 set the companion-first design direction, but the delivered route still needs implementation and post-build re-review"
+    notes: |
+      Coverage update (2026-04-30): GRO-454 reviewed the live `/menu` route and current menu-planner
+      implementation and concluded the page already has useful day-focus primitives on mobile, but it
+      still frames the job as weekly admin planning and still changes IA by breakpoint when `md+`
+      switches to the 7-column grid.
+
+      The route now has a design direction:
+      - companion-first default
+      - explicit companion vs plan mode
+      - no desktop-only capability split
+      - dominant day card with durable shopping-coverage reassurance
+
+      Remaining route-wide work:
+      - Thomas approval on the GRO-454 design spec
+      - engineering implementation of the companion-first surface
+      - live re-review of the shipped route across all 5 project viewports
+
+  - id: gro-454-menu-planner-daily-companion-review
+    type: screen-review
+    screen: /menu
+    component: MenuPlannerPage.tsx + RecipeDrawer.tsx + TodayMenuCard.tsx + NextMealHero.tsx
+    reviewed_at: "2026-04-30"
+    verdict: "Design spec ready — current route supports planning, but not the requested daily-companion default"
+    details: |
+      Reviewed the GRO-454 brief, re-read the current `/menu` implementation, and captured the live
+      route on localhost across phone, largePhone, tablet, narrowDesktop, and desktop.
+
+      Confirmed in code and live captures:
+      - mobile already has a selected-day strip and swipe navigation, which is the right base for a
+        companion-style flow
+      - desktop still flips to a 7x4 weekly matrix at `md+`, which changes the route's mental model
+        and introduces hover-dependent edit affordances
+      - page-level copy and action placement still prioritise planning/admin tasks over the core
+        question "what am I eating today, what do I need, is it handled?"
+      - shopping reassurance exists only as scattered actions and status fragments, not as a durable
+        dominant state inside the day surface
+      - existing primitives are sufficient for implementation realism: `RecipeDrawer`, badge/tag
+        rendering, plan chips, plan status copy, current selected-day state, and existing shopping-list
+        generation hooks
+      - preserving a secondary Plan mode is acceptable, but it must remain available on phone, tablet,
+        and desktop rather than becoming a desktop-only editing paradigm
+    acceptance_criteria_status:
+      - "Default surface answers 'what am I eating today, what do I need, is it handled?': ❌"
+      - "One dominant focal point per screen: ❌"
+      - "Same core capability across mobile/tablet/desktop: ❌ current desktop matrix split"
+      - "Recipe detail can open in a mobile-safe overlay: ✅ existing RecipeDrawer"
+      - "Week navigation can stay lightweight and secondary: ✅ current day strip is a usable base"
+      - "Coverage / reassurance state is durable and prominent: ❌"
+    next_action: "Wait for Thomas approval on GRO-454, then implement and re-review the route"
+    status: "design_spec_ready"
+    sign_off_by: ["UI/UX Advisor"]
+
+  - id: recipes-review-pending
+    type: screen-review
+    screen: /recipes
+    component: RecipeBrowserPage.tsx
+    priority: "medium"
+    status: "partially_reviewed"
+    reason: "GRO-343 closed the inline rating feedback path, GRO-424 cleared the filter-tray controlled-region blocker from the UI/UX side, GRO-392 improved detail-page failure truthfulness, and GRO-505 now captures the source-backed index-control touch-target defect; the recipes surface still has both focused blockers and a broader route audit outstanding"
+    notes: |
+      Reviewed slices completed:
+      - GRO-343 (2026-04-23) approved the inline rating-save feedback pattern.
+      - GRO-424 / GRO-341 (2026-04-23 live re-review) confirmed the filter toggle now exposes state
+        and the controlled tray resolves as a named region via `role="region"` +
+        `aria-labelledby="recipe-filter-toggle"` across all 5 project viewports.
+      - Remaining closure dependency on this slice is QA's fresh post-fix rerun on GRO-341, not a
+        further UI/UX design blocker.
+      - GRO-330 / GRO-473 (2026-04-30 live re-review) confirmed the Import-from-URL modal now keeps
+        focus cyclically contained on the disabled-submit path across phone, largePhone, tablet,
+        narrowDesktop, and desktop. Escape and Cancel both return focus to the Import trigger, so
+        the UI/UX gate is clear again; remaining parent closure dependency is QA's matching live
+        rerun on GRO-473 / GRO-330.
+      - GRO-392 (2026-04-30 live re-review) confirmed the recipe detail route now distinguishes
+        real load failures from missing content, but the nutrition retry (~83x34) and ingredient
+        retry (~47x16 on phone) still miss the mobile 44px floor; correction issued as GRO-466.
+      - GRO-505 (2026-05-01 proactive source audit) now captures the recipes-index touch-target gap.
+        During this heartbeat the local frontend returned `ECONNREFUSED` for both `/recipes` and `/`,
+        so I did not claim a live rerun I could not perform. Source inspection of
+        `RecipeBrowserPage.tsx` found compact chip sizing on `FilterPill`, the header `Clear` action,
+        and `SortImportBar` (`A–Z`, `Best Rated`, `Most Recent`, `Import`) via classes such as
+        `px-2.5 py-1 text-xs` and `px-3 py-1 text-xs`, which are not consistent with the product's
+        44px touch-target floor. GRO-505 was created and assigned to the current recipes route owner
+        as a source-backed correction that still needs full live proof on resubmission.
+
+      Remaining route-wide audit still needed:
+      - search and filter clarity
+      - recipe card information density across breakpoints
+      - list/detail navigation cost on mobile
+      - live rerun of the `/recipes` index after GRO-505 lands
+      - final re-review of `/recipes/[id]` after GRO-466 lands
+
+  - id: gro-505-recipes-index-touch-target-review
+    type: screen-review
+    screen: /recipes
+    component: RecipeBrowserPage.tsx (FilterPill + SortImportBar + header Clear)
+    reviewed_at: "2026-05-01"
+    verdict: "Not approved — source inspection found chip-sized recipes-index controls that do not meet the 44px touch-target contract"
+    details: |
+      Proactive route coverage moved to `/recipes` with the assigned queue empty. I first attempted a
+      fresh local availability check, but both `http://127.0.0.1:3000/recipes` and
+      `http://127.0.0.1:3000/` returned `ECONNREFUSED`, so this heartbeat could not produce a truthful
+      live rerun or screenshot package.
+
+      I therefore did a source-backed review of `frontend/src/components/recipes/RecipeBrowserPage.tsx`
+      and found the index-level control group still uses compact chip sizing:
+      - `FilterPill` renders meal / diet / cuisine toggles with `px-2.5 py-1 text-xs`
+      - the visible header `Clear` action also uses `px-2.5 py-1 text-xs`
+      - `SortImportBar` uses the same compact sizing for `A–Z`, `Best Rated`, and `Most Recent`
+      - the index-level `Import` action uses `px-3 py-1 text-xs`
+
+      This leaves the route's highest-frequency browse controls inconsistent with the 44px floor used
+      elsewhere in the app. The problem is not the chip visual language itself; the problem is that the
+      actual hit area remains too small for one-handed recipe browsing under fatigue, especially on
+      phone and tablet. I created GRO-505 and assigned it to the current recipes implementation owner.
+    acceptance_criteria_status:
+      - "Meal / diet / cuisine filter pills meet the 44px floor across all project viewports: BLOCKED"
+      - "Header `Clear` action meets the 44px floor when visible: BLOCKED"
+      - "`A–Z`, `Best Rated`, `Most Recent`, and `Import` meet the 44px floor across all project viewports: BLOCKED"
+      - "Fresh live rerun / 5-viewport evidence exists for the corrected route: BLOCKED (frontend unavailable during this heartbeat)"
+      - "Correction issue created and assigned: COMPLETE (GRO-505)"
+    next_action: "Land GRO-505, then rerun `/recipes` live once the local frontend is reachable again"
+    status: "blocked"
+    linked_issue: "GRO-505"
+    severity: "high"
+
+  - id: gro-392-recipe-detail-error-state-review
+    type: screen-review
+    screen: /recipes/[id]
+    component: RecipeDetailPage.tsx + IngredientRow.tsx
+    reviewed_at: "2026-04-30"
+    verdict: "Not approved — the route now tells the truth about failures, but two visible recovery controls still miss the mobile touch-target floor"
+    details: |
+      Re-reviewed GRO-392 against the landed code, the dedicated regression file, and a fresh local
+      Playwright replay of the shipped recipe detail route with mocked failure states.
+
+      What is now correct:
+      - recipe fetch failures no longer masquerade as missing content
+      - nutrition and ingredient lookup failures surface as distinct inline error states
+      - raw ingredient IDs are no longer leaked into the ingredient-row fallback
+      - the main recipe-level `Try again` action measures at roughly 114x44px on phone
+
+      Remaining blocker:
+      - the nutrition-section `Retry` still measures about 83x34px
+      - the ingredient-row `Retry` still measures about 47x16px on phone
+
+      That leaves the recovery contract too precision-dependent for the product's mobile-first,
+      fatigue-tolerant UX bar. GRO-466 was created so the implementation owner can raise both retry
+      affordances to the standard 44px touch-target pattern without regressing the clearer error copy.
+    acceptance_criteria_status:
+      - "False 'Recipe not found' messaging removed for non-404 failures: COMPLETE"
+      - "Ingredient fallback no longer leaks raw IDs: COMPLETE"
+      - "Primary recipe-level retry meets 44px mobile floor: COMPLETE"
+      - "Nutrition retry meets 44px mobile floor: BLOCKED"
+      - "Ingredient-row retry meets 44px mobile floor: BLOCKED"
+      - "Fresh correction issue filed and assigned: COMPLETE (GRO-466)"
+    next_action: "Re-review GRO-392 after GRO-466 lands with refreshed live-route evidence for the corrected retry controls"
+    status: "blocked"
+    linked_issue: "GRO-392"
+    severity: "high"
+
+  - id: gro-424-recipes-filter-region-review
+    type: screen-review
+    screen: /recipes
+    component: RecipeBrowserPage.tsx
+    reviewed_at: "2026-04-23"
+    verdict: "✅ UI-approved — the filter tray now exposes both trigger state and a named controlled region"
+    details: |
+      Re-reviewed GRO-424 against the landed code, the updated route test file, and the live
+      `http://localhost:3000/recipes` route.
+
+      Confirmed in code and live verification:
+      - the Filters trigger now has the stable id `recipe-filter-toggle`
+      - the trigger preserves `aria-expanded` and `aria-controls="recipe-filter-panel"`
+      - the opened tray now resolves with `role="region"` and
+        `aria-labelledby="recipe-filter-toggle"`
+      - the patch remains layout-neutral across phone, largePhone, tablet, narrowDesktop, and desktop
+      - `RecipeBrowserPage.test.tsx` now asserts both trigger state and controlled-region identity
+
+      This clears the earlier UI/UX blocker from GRO-341. The remaining dependency before the parent
+      can close is QA's fresh post-fix approval, not another design correction.
+    acceptance_criteria_status:
+      - "Opening the filter tray exposes both trigger state and a named controlled region: ✅"
+      - "Panel is programmatically identifiable to assistive tech: ✅"
+      - "Pattern remains mobile-first and layout-neutral across all breakpoints: ✅"
+      - "Fresh QA rerun on parent GRO-341 still needed for dual sign-off: ⏳"
+    next_action: "Await QA rerun on GRO-341, then keep the broader `/recipes` route audit in the proactive queue"
+    status: "approved_pending_qa"
+    sign_off_by: ["UI/UX Advisor"]
+
+  - id: gro-342-recipes-card-disclosure-evidence-gate
+    type: screen-review
+    screen: /recipes
+    component: RecipeBrowserPage.tsx
+    reviewed_at: "2026-04-30"
+    verdict: "✅ Approved — inline recipe-card disclosure now communicates state clearly without breaking the fast-scan recipe grid"
+    details: |
+      GRO-472 supplied the missing five-viewport evidence package and QA then completed a substantive
+      rerun on the shipped `http://localhost:3000/recipes` route. I followed with a separate UI/UX
+      live rerun across phone, largePhone, tablet, narrowDesktop, and desktop using the same first-card
+      disclosure path.
+
+      Confirmed in code and on the live route:
+      - recipe-card toggles expose `aria-expanded`
+      - each toggle keeps a stable `aria-controls="recipe-details-{id}"` relationship
+      - the controlled details container stays in the DOM and drops `hidden` when expanded
+      - keyboard focus reaches the full-card disclosure button cleanly
+      - the trigger hit area remains comfortably above the 44px mobile floor because the whole card
+        header is clickable (roughly 324x138.5 on phone, 262x181.75 on largePhone in the local rerun)
+
+      UI/UX verdict on the actual experience:
+      - **Purpose clarity:** the card still reads first as a recipe summary, then expands inline into
+        supporting detail without rerouting the user
+      - **Primary action clarity:** opening the card is obvious because the whole card top is the target
+      - **Information hierarchy:** the expanded content sits directly under the summary, so the user does
+        not lose context or have to chase a detached panel
+      - **Mobile completeness:** no capability moves to desktop-only treatment; the same inline reveal
+        works across all five project viewports
+      - **Scanability / AuDHD suitability:** state is now durable and explicit instead of being implied
+        only by border changes, which lowers interruption cost during recipe browsing
+      - **Responsive integrity:** tablet and desktop simply gain density; they do not change the task model
+
+      This slice is therefore UI-approved and, because QA approval is also present on-thread, the parent
+      issue can close.
+    acceptance_criteria_status:
+      - "Recipe-card disclosure state is wired in source: ✅"
+      - "ui-visual-capture package attached to issue: ✅"
+      - "All 5 project viewport screenshots attached: ✅"
+      - "Explicit live interaction proof on shipped `/recipes` route: ✅"
+      - "Substantive UI/UX review against required lens: ✅"
+      - "QA Lead approval present on-thread: ✅"
+    next_action: "Treat GRO-342 as closed; keep the broader `/recipes` route audit in the proactive queue"
+    status: "approved"
+    linked_issue: "GRO-342"
+    correction_issue: "GRO-472"
+    severity: "resolved"
+    sign_off_by: ["UI/UX Advisor", "QA Lead"]
+
+  - id: feedback-review-pending
+    type: screen-review
+    screen: /feedback
+    component: FeedbackPage.tsx
+    priority: "low"
+    status: "partially_reviewed"
+    reason: "GRO-344 now covers the error-vs-empty slice, GRO-507 captured the original fake-success submit flow, GRO-509 now captures the live shipped 404 save failure, and the broader feedback route still needs a full audit"
+    notes: |
+      Reviewed slice completed:
+      - GRO-344 re-review (2026-04-30) confirmed the route no longer collapses failed data loads into the misleading
+        `No meals have occurred yet` copy.
+      - Live Playwright re-review with mocked error and true-empty responses reproduced both states across phone,
+        largePhone, tablet, narrowDesktop, and desktop.
+      - The blocking detail is now narrower: the error state's only recovery action (`Retry`) measures 61x34 on
+        phone and largePhone, so UI/UX rejected sign-off and created GRO-459 for touch-target correction.
+      - GRO-507 (2026-05-01 proactive source audit) now captures a bigger loaded-state trust defect.
+        Because the local frontend returned `ECONNREFUSED` for both `/` and `/feedback`, I did not claim
+        a live rerun. Source inspection of `MenuFeedbackCard.tsx` found that `Submit feedback` only
+        `console.log`s the draft, deletes it from local state, and closes the modal. The paired
+        `MenuFeedbackCard.test.tsx` currently encodes that fake-success path by asserting the draft is
+        discarded after submit. GRO-507 was created and assigned to the current feedback-route owner as
+        a source-backed correction that still needs full live proof on resubmission.
+
+      Coverage update (2026-05-02): GRO-507's evidence gate is now clear, so I re-ran the shipped
+      `/feedback` route directly instead of relying on source only. The modal now opens, the form is
+      editable, and the route no longer uses the old fake-success path — but the live save path still
+      fails. Normal submit on `http://127.0.0.1:3000/feedback` posts to `/api/v1/feedback`, and the
+      browser receives **404 Not Found** with `{\"detail\":\"Not Found\"}`. GRO-509 now tracks that
+      live shipped correction path with fresh repro screenshots and network evidence.
+
+      Remaining route-wide audit still needed:
+      - loaded-state hierarchy once recent meals exist
+      - durable submitted-state feedback after GRO-509 lands
+      - scanability / navigation cost when meal history grows longer
+
+  - id: gro-507-feedback-submit-persistence-review
+    type: screen-review
+    screen: /feedback
+    component: FeedbackPage.tsx + MenuFeedbackCard.tsx
+    reviewed_at: "2026-05-01"
+    verdict: "Not approved — the route presents a fake submit flow that discards the draft without saving anything"
+    details: |
+      Proactive route coverage moved to `/feedback` with the assigned queue empty. I first attempted a
+      fresh local availability check, but both `http://127.0.0.1:3000/` and `/feedback` returned
+      `ECONNREFUSED`, so this heartbeat could not produce a truthful live rerun or screenshot package.
+
+      I therefore did a source-backed review of `frontend/src/components/feedback/FeedbackPage.tsx`,
+      `frontend/src/components/dashboard/MenuFeedbackCard.tsx`, and
+      `frontend/src/components/dashboard/__tests__/MenuFeedbackCard.test.tsx`.
+
+      Confirmed in source:
+      - `handleSubmitFeedback` only `console.log('Submitting feedback:', selectedDraft)`
+      - the same handler then deletes the draft from local state and closes the modal
+      - there is no API mutation, no durable success state, and no visible saved record on return
+      - the current test suite asserts that discarding the draft after submit is the expected success path
+
+      This was the initial route-level trust defect. The later live rerun after implementation no longer
+      matched this exact fake-success behavior, but it still failed the primary save path on the shipped
+      route. GRO-509 now tracks that newer live 404 correction path.
+    acceptance_criteria_status:
+      - "Submitting feedback persists user input through a real save path or is explicitly reframed as draft-only: BLOCKED"
+      - "Drafts are not silently discarded on a fake-success path: BLOCKED"
+      - "The route provides durable post-submit feedback tied to saved state: BLOCKED"
+      - "Tests no longer encode the console-log-only path as success: BLOCKED"
+      - "Fresh live rerun / 5-viewport evidence exists for the corrected route: COMPLETE (landed later, but surfaced a new live failure path)"
+      - "Correction issue created and assigned: COMPLETE (GRO-507)"
+    next_action: "Treat GRO-507 as the original source-backed defect record, but use GRO-509 as the active live correction path"
+    status: "blocked"
+    linked_issue: "GRO-507"
+    severity: "critical"
+
+  - id: gro-509-feedback-live-submit-failure-review
+    type: screen-review
+    screen: /feedback
+    component: FeedbackPage.tsx + MenuFeedbackCard.tsx + api.ts + backend feedback endpoint
+    reviewed_at: "2026-05-02"
+    verdict: "Not approved — the shipped browser route still fails normal feedback submission with a live 404"
+    details: |
+      Re-ran the shipped `http://127.0.0.1:3000/feedback` route after GRO-507's visual evidence package
+      landed so the thread could receive a substantive UI/UX review instead of another evidence-gate
+      rejection.
+
+      Consulted:
+      - `docs/adr/001-tech-stack.md`
+      - `docs/api/rest-api.md`
+      - `frontend/src/components/feedback/FeedbackPage.tsx`
+      - `frontend/src/components/dashboard/MenuFeedbackCard.tsx`
+      - `frontend/src/components/dashboard/__tests__/MenuFeedbackCard.test.tsx`
+      - `frontend/src/lib/api.ts`
+      - `backend/app/api/v1/endpoints/feedback.py`
+      - `backend/app/schemas/menu_feedback.py`
+
+      Confirmed in live rerun and network inspection:
+      - the modal opens correctly on the shipped route
+      - the form remains editable and visually calmer than the old fake-success flow
+      - after clicking `Submit feedback`, the dialog stays open and renders the inline alert
+        `Couldn't save your feedback. Please try again.`
+      - the browser issues `POST http://127.0.0.1:3000/api/v1/feedback`
+      - that live request returns **404 Not Found** with body `{\"detail\":\"Not Found\"}`
+
+      Current source shows the intended save path exists in code:
+      - `feedbackApi.submit` posts to `/feedback`
+      - `MenuFeedbackCard` calls that API in the submit handler
+      - backend defines `POST /api/v1/feedback` and accepts the current payload shape
+
+      So this is no longer the old fake-success issue alone. The current shipped route now fails more
+      honestly, but it still fails the core user job. I created GRO-509 as the active correction issue,
+      assigned it to the same implementation owner as GRO-507, and attached fresh live repro evidence.
+    acceptance_criteria_status:
+      - "Normal submit on the shipped `/feedback` route returns success instead of 404: BLOCKED"
+      - "The route no longer shows the inline save-failure alert on a normal save path: BLOCKED"
+      - "The route gives durable visible saved-state feedback after success: BLOCKED"
+      - "Fresh live repro evidence attached to correction issue: COMPLETE (GRO-509)"
+    next_action: "Land GRO-509, then rerun `/feedback` live before reconsidering GRO-507"
+    status: "blocked"
+    linked_issue: "GRO-509"
+    parent_issue: "GRO-507"
+    severity: "critical"
+
+  - id: gro-344-feedback-error-state-review
+    type: screen-review
+    screen: /feedback
+    component: FeedbackPage.tsx
+    reviewed_at: "2026-04-30"
+    verdict: "Not approved — failure vs true-empty distinction is fixed, but the Retry recovery control is still undersized on mobile"
+    details: |
+      Re-reviewed GRO-344 after the Lead Engineer nudged the stale review gate.
+
+      Consulted:
+      - `docs/adr/001-tech-stack.md`
+      - `docs/api/rest-api.md`
+      - `frontend/src/components/feedback/FeedbackPage.tsx`
+      - `frontend/src/components/feedback/__tests__/FeedbackPage.error-states.test.tsx`
+
+      Confirmed in code, tests, and live Playwright review:
+      - `FeedbackPage` now checks failure state for the families, menus, menu-detail, and recipes queries
+      - the route now renders a durable inline `role="alert"` block with plain-language copy instead of falling
+        through to the false-empty `No meals have occurred yet` message
+      - the targeted GRO-344 Jest file passes 5/5 assertions covering all four failure sources plus the genuine
+        success-empty path
+      - live re-review with mocked API responses reproduced both the failure state and the true-empty state across
+        all 5 project viewports
+      - the copy and state hierarchy are now clear, but the only recovery CTA still measures 61x34 on phone and
+        largePhone
+
+      Because the route's primary recovery action misses the 44px mobile touch-target baseline, UI/UX sign-off
+      remains blocked. Correction issue GRO-459 was created and GRO-344 stays in_review pending the sizing fix.
+    acceptance_criteria_status:
+      - "Failure state shown instead of 'no meals yet' when data load fails: ✅"
+      - "True empty state remains distinct on successful empty schedule: ✅"
+      - "Plain-language recovery copy avoids backend leakage: ✅"
+      - "Primary recovery action meets 44px mobile touch-target baseline: ❌ 61x34 on phone / largePhone"
+    next_action: "Land GRO-459, then resubmit GRO-344 with refreshed error-state proof and re-review"
+    status: "correction_requested"
+    correction_issue: "GRO-459"
+
+  - id: inventory-review-pending
+    type: screen-review
+    screen: /inventory
+    component: InventoryPage.tsx (assumed)
+    priority: "medium"
+    status: "partially_reviewed"
+    reason: "GRO-337 / GRO-440 now clear the empty-state recovery-path slice from the UI side, but the populated inventory route now has broader blockers on both header hitboxes and expiry-wall scanability"
+    notes: |
+      Reviewed slice completed:
+      - GRO-337 (2026-04-23 sign-off attempt) confirmed the empty-state copy and CTA hierarchy are directionally right,
+        but the issue was first blocked on missing live interaction proof.
+      - GRO-337 (2026-04-29 re-review after GRO-427) confirmed the follow-up package still does not show a
+        valid settled empty state: the five viewport captures are spinner shots, and the modal captures show
+        contradictory expiry panels behind the empty-state card.
+      - GRO-440 (2026-04-29 evidence re-review) corrected that proof gap: the settled empty-state card is now
+        shown across all 5 project viewports, and both CTA modals are shown opening from the same coherent
+        empty-inventory run.
+      - GRO-440 (2026-04-29 QA follow-up) completed dual sign-off: QA approved the same deterministic evidence
+        package and the correction issue was closed. The remaining inventory work is now only the broader
+        populated-state route audit, not the empty-state recovery-path slice.
+
+      Coverage update (2026-05-01, later heartbeat): a proactive live rerun of the populated
+      `http://127.0.0.1:3000/inventory` route exposed a new breakpoint regression in the route
+      header. `Import CSV` and `Add item` still measure 44px high on phone, but both shrink to 32px
+      at tablet, narrowDesktop, and desktop because the current populated header uses compact
+      `size="sm"` buttons. GRO-502 now tracks that populated-route header regression, so the broader
+      inventory audit is no longer an unstructured placeholder.
+
+      Coverage update (2026-05-02): a fresh proactive live rerun of the populated route exposed the
+      next broader scanability blocker. The expiring-items panel currently starts expanded, renders one
+      chip per urgent item, and on phone measures about 358x931px with 20 expiring items in view. The
+      same expired/expiring items then appear again at the top of the sorted inventory grid, producing
+      34 visible `Expired` badges on the live route. GRO-516 now tracks that expiry-wall duplication
+      problem as a separate populated-route blocker beside GRO-502.
+
+      Remaining route-wide audit still needed:
+      - search clarity and filter affordance
+      - expiry visualization and urgency hierarchy after GRO-516 lands
+      - list density / scanability once inventory is populated, after GRO-502 and GRO-516 are corrected
+
+  - id: gro-502-inventory-header-regression-review
+    type: screen-review
+    screen: /inventory
+    component: InventoryPage.tsx
+    reviewed_at: "2026-05-01"
+    verdict: "Not approved — the populated inventory header actions regress to 32px at tablet and desktop breakpoints"
+    details: |
+      Proactive live rerun completed against the populated shipped `http://127.0.0.1:3000/inventory`
+      route after the empty-state slice had already cleared on GRO-440.
+
+      Consulted before review:
+      - `docs/adr/001-tech-stack.md`
+      - `docs/api/rest-api.md`
+      - `frontend/src/components/inventory/InventoryPage.tsx`
+      - current inventory review memory for GRO-337, GRO-393, and GRO-440
+
+      Confirmed in code and live measurements:
+      - phone keeps the header actions touch-safe: `Import CSV` about 40x44px and `Add item` about
+        102.95x44px
+      - tablet and desktop both regress to 32px-tall populated-route header buttons: `Import CSV`
+        about 108.17x32px and `Add item` about 91.56x32px
+      - the surrounding search field and filter chips remain at the 44px floor, so this is isolated
+        to the populated header actions rather than the whole route
+      - the shrink comes from the current compact populated-header button sizing in `InventoryPage.tsx`
+
+      The problem is not that the route hides capability. The problem is that the same maintenance
+      actions get smaller and less touch-safe at larger breakpoints, which breaks responsive
+      integrity and adds precision strain on a dense route where the user is already scanning a lot of
+      information. I created GRO-502 from this proactive audit, assigned it to the engineer who owned
+      the earlier inventory controls work, and attached fresh 5-viewport evidence directly on the new
+      issue.
+    acceptance_criteria_status:
+      - "`Import CSV` stays at or above 44px on tablet, narrowDesktop, and desktop: BLOCKED"
+      - "`Add item` stays at or above 44px on tablet, narrowDesktop, and desktop: BLOCKED"
+      - "Phone behavior preserved while removing the md+ shrink regression: BLOCKED"
+      - "Fresh 5-viewport live evidence attached to follow-up issue: COMPLETE (GRO-502)"
+    next_action: "Land GRO-502, then continue the broader `/inventory` populated-state audit"
+    status: "blocked"
+    linked_issue: "GRO-502"
+    severity: "high"
+
+  - id: gro-516-inventory-expiry-wall-review
+    type: screen-review
+    screen: /inventory
+    component: InventoryPage.tsx + ExpiryAlertsPanel.tsx
+    reviewed_at: "2026-05-02"
+    verdict: "Not approved — the populated inventory route opens into an expiry wall and then repeats the same urgent items in the main grid"
+    details: |
+      Proactive live rerun completed against `http://127.0.0.1:3000/inventory` while continuing the
+      broader populated-state route audit after GRO-515 closed the shopping-lists pass.
+
+      Consulted before review:
+      - `docs/adr/001-tech-stack.md`
+      - `docs/api/rest-api.md`
+      - `frontend/src/components/inventory/InventoryPage.tsx`
+      - `frontend/src/components/inventory/ExpiryAlertsPanel.tsx`
+
+      Confirmed in code and live five-viewport captures:
+      - the expiring-items panel currently starts expanded because `ExpiryAlertsPanel` initializes
+        `expanded` to `true`
+      - that panel renders one chip per expiring item, grouped by urgency, instead of collapsing to a
+        short preview when the set is large
+      - on phone, the live expiring-items panel measures about 358x931px
+      - the live route currently shows 20 items expiring within 7 days
+      - the same expired/expiring items then appear again in the main inventory grid because
+        `InventoryPage.tsx` still sorts those rows to the top of `items`
+      - the live route therefore exposes 34 visible `Expired` badges on phone, turning the page into a
+        warning wall before the user gets a calm sense of stock
+
+      This is not the same defect as GRO-502. GRO-502 covers the populated header hitboxes. The broader
+      remaining issue is route-level scanability and duplication: expiry dominates first load and then is
+      re-announced in the grid. I created GRO-516 from this proactive audit, assigned it to the current
+      inventory implementation owner, attached the fresh five-viewport evidence package, and linked it to
+      the same goal as the other inventory follow-ups.
+    acceptance_criteria_status:
+      - "First load of `/inventory` does not open as a near-screen-and-a-half expiry wall on phone: BLOCKED"
+      - "Expiry panel summarizes or collapses large urgent sets instead of rendering every item immediately: BLOCKED"
+      - "Same urgent items are not redundantly shouted in both the expiry panel and the top of the grid: BLOCKED"
+      - "Expiry remains visible without burying the normal stock view: BLOCKED"
+      - "Fresh 5-viewport live evidence attached to follow-up issue: COMPLETE (GRO-516)"
+    next_action: "Land GRO-516, then continue the broader populated-state `/inventory` audit"
+    status: "blocked"
+    linked_issue: "GRO-516"
+    severity: "high"
+
+  - id: stores-review-pending
+    type: screen-review
+    screen: /stores
+    component: StorePricePage.tsx
+    priority: "medium"
+    status: "partially_reviewed"
+    reason: "GRO-339 is now closed for the sync-failure recovery slice, GRO-503 covers route-language leakage, GRO-508 covers the Sync now breakpoint regression, GRO-513 covers the reconnect detour, and GRO-518 now covers the blank pre-search browse state on the main route"
+    notes: |
+      Reviewed slice completed:
+      - GRO-339 (2026-04-23 sign-off attempt) confirmed the stores surface now uses a durable inline
+        failure block with plain-language copy, a last-success trust note, and explicit recovery CTAs.
+      - GRO-339 (2026-04-29 re-review after GRO-429) confirmed the failed and stale layouts are now
+        visually credible across the submitted viewports, but the auth-expired reconnect branch is
+        still unproven and the package remains PNG-only instead of a true interaction recording.
+      - GRO-339 / GRO-442 (2026-04-30 closeout) confirmed the reconnect-path blocker is now resolved at
+        the narrower recovery level: the `auth_expired` branch has real in-context proof, the dedicated
+        `/stores/connect` landing route is non-404 and mobile-safe, and the parent sync-failure recovery
+        slice is now dual-sign-off complete.
+
+      Remaining route-wide audit still needed:
+      - overall route purpose clarity between connections and catalog search
+      - recovery affordance clarity once multiple store integrations are present
+      - stale-data trust communication under realistic multi-store load
+      - populated-list scanability on mobile
+
+      Coverage update (2026-05-01, later heartbeat): a fresh proactive `/stores` live rerun was blocked
+      because `http://127.0.0.1:3000` returned `ECONNREFUSED` before the route could be captured. I still
+      re-read `StorePricePage.tsx` and found a concrete plain-language defect that does not require a
+      screenshot pass to establish:
+      - the integrations badge currently renders `{integration.sync_status}` directly, leaking raw backend
+        tokens like `idle`, `ok`, `syncing`, and `failed`
+      - the no-integration state still says `No store connections configured.`
+      - the setup helper still says `Connect a store connection to start searching its catalog.`
+
+      GRO-503 now tracks that route-language slice. Once the frontend is reachable again, the broader
+      populated-state IA / scanability audit should resume with a full 5-viewport live rerun.
+
+      Coverage update (2026-05-02): the frontend became reachable again, so I resumed the proactive
+      live `/stores` audit instead of staying in source-only triage. Fresh Playwright rerun on the
+      shipped route across phone, largePhone, tablet, narrowDesktop, and desktop measured the visible
+      `Sync now` action at roughly 107.61x44px on phone and largePhone but only 95.55x32px on tablet,
+      narrowDesktop, and desktop. Source matches the defect: `IntegrationsPanel` renders that control
+      with `Button size="sm"`, and the shared `Button` contract shrinks `size="sm"` to `md:min-h-8`.
+      GRO-508 now tracks that live breakpoint regression with attached five-viewport evidence.
+
+      Coverage update (2026-05-02, later heartbeat): a separate proactive rerun of the shipped
+      `/stores/connect` route found the earlier GRO-339 closeout note was too generous about the route
+      shell itself. The page is no longer a 404 and the CTAs remain touch-safe, but it still titles
+      itself `Reconnect your store` while only telling the user to go back to `/stores` and use
+      `Sync now` there. GRO-513 now tracks that broader reconnect-route job mismatch as a separate
+      blocker without reopening GRO-339's narrower recovery slice.
+
+      Coverage update (2026-05-02, latest heartbeat): the broader `/stores` whole-route audit exposed a
+      separate browse-state problem on the main route itself. After the connections card, the Product
+      search area currently opens as a mostly blank gate that only says `Type at least 2 characters to
+      search products`, even though the route title promises `Store Prices`. On phone that card measures
+      about 358x272px, and the search control currently has no `aria-label` or `aria-labelledby`, so it
+      depends on placeholder text alone. GRO-518 now tracks that loaded-route browse-state and labeling
+      defect with fresh five-viewport evidence.
+
+      Remaining route-wide audit still needed:
+      - overall route purpose clarity between connections and catalog search after GRO-518 lands
+      - recovery affordance clarity once multiple store integrations are present
+      - stale-data trust communication under realistic multi-store load
+      - populated-list scanability on mobile
+
+  - id: gro-503-stores-copy-review
+    type: screen-review
+    screen: /stores
+    component: StorePricePage.tsx
+    reviewed_at: "2026-05-01"
+    verdict: "Not approved — the route still leaks raw sync-status jargon and awkward setup copy"
+    details: |
+      Proactive source review completed after a heartbeat attempt to rerun the shipped `/stores` route was
+      blocked by local frontend downtime (`http://127.0.0.1:3000` returned `ECONNREFUSED`).
+
+      Even without a fresh screenshot run, the current implementation is explicit enough to establish the
+      defect:
+      - the integrations badge renders `integration.sync_status` directly, so household users can see raw
+        backend-shaped tokens like `idle`, `ok`, `syncing`, and `failed`
+      - the no-integration empty state says `No store connections configured.`
+      - the setup helper says `Connect a store connection to start searching its catalog.`
+
+      This breaks the route's trust contract in a user-facing maintenance surface. Store connection status
+      should read like calm household guidance, not admin/debug vocabulary. The copy also adds unnecessary
+      translation work at the exact moment users are trying to decide whether prices are ready, stale, or
+      require action.
+
+      Review lens:
+      - purpose clarity: weakened by system-shaped status labels
+      - primary action clarity: weakened because the route makes users decode status before deciding
+      - information hierarchy: the badge is visible, but its meaning is not household-friendly
+      - mobile completeness: capability is present, but comprehension is still too translation-heavy
+      - state visibility: present but not expressed in plain language
+      - error recovery: partially improved by GRO-339, but setup and ready-state wording still leak
+        implementation language
+      - AuDHD suitability: poor for a trust surface because the user must interpret terse backend tokens
+      - responsive integrity: unresolved until a fresh live rerun confirms the corrected language across all
+        5 project viewports
+    acceptance_criteria_status:
+      - "Visible integration badges use household-facing language instead of raw backend tokens: BLOCKED"
+      - "No-integration empty-state copy is plain-language and task-focused: BLOCKED"
+      - "Setup helper text tells the user what to do without admin wording: BLOCKED"
+      - "Fresh live `/stores` rerun captured across all 5 project viewports after the copy fix: PENDING"
+    next_action: "Land GRO-503, then rerun `/stores` live across all 5 project viewports before continuing the broader populated-state audit"
+    status: "blocked"
+    linked_issue: "GRO-503"
+    severity: "medium"
+
+  - id: gro-508-stores-sync-now-breakpoint-review
+    type: screen-review
+    screen: /stores
+    component: StorePricePage.tsx + Button.tsx
+    reviewed_at: "2026-05-02"
+    verdict: "Not approved — the main `Sync now` action shrinks from a touch-safe mobile control to a 32px button at tablet and desktop breakpoints"
+    details: |
+      Proactive live rerun completed against the shipped `http://127.0.0.1:3000/stores` route after the
+      frontend became reachable again.
+
+      Consulted before review:
+      - `frontend/src/components/stores/StorePricePage.tsx`
+      - `frontend/src/components/ui/Button.tsx`
+      - current stores route memory for GRO-339 and GRO-503
+
+      Confirmed in live measurements and source:
+      - the visible `Sync now` action measures about **107.61x44px** on phone
+      - the same visible `Sync now` action measures about **107.61x44px** on largePhone
+      - the action drops to about **95.55x32px** on tablet
+      - the action stays about **95.55x32px** on narrowDesktop and desktop
+      - `IntegrationsPanel` renders `Sync now` with `<Button variant="secondary" size="sm">`
+      - the shared `Button` contract uses `min-h-11` for `size="sm"` on mobile but shrinks to
+        `md:min-h-8` at `md+`
+
+      This is a responsive-integrity failure on a trust-critical maintenance route. The route keeps the
+      same visible action across breakpoints, but it gets less touch-safe exactly where tablet users are
+      still likely to tap it directly. The problem is not visual hierarchy; the button can remain a
+      secondary action. The problem is that the current shared sizing contract and route usage reduce the
+      main recovery / maintenance control below the 44px floor once the layout widens.
+    acceptance_criteria_status:
+      - "`Sync now` remains at or above the 44px floor on phone: COMPLETE"
+      - "`Sync now` remains at or above the 44px floor on largePhone: COMPLETE"
+      - "`Sync now` remains at or above the 44px floor on tablet: BLOCKED"
+      - "`Sync now` remains at or above the 44px floor on narrowDesktop and desktop: BLOCKED"
+      - "Fresh 5-viewport live evidence attached to correction issue: COMPLETE (GRO-508)"
+    next_action: "Land GRO-508, then rerun `/stores` live before continuing the broader populated-state audit"
+    status: "blocked"
+    linked_issue: "GRO-508"
+    severity: "high"
+
+  - id: gro-518-stores-search-gate-review
+    type: screen-review
+    screen: /stores
+    component: StorePricePage.tsx
+    reviewed_at: "2026-05-02"
+    verdict: "Not approved — the loaded route opens into a blank search gate with placeholder-only labeling instead of a useful browse state"
+    details: |
+      Continued the proactive whole-route `/stores` audit against the current shipped
+      `http://127.0.0.1:3000/stores` route after GRO-517 closed the dashboard pass.
+
+      Consulted before review:
+      - `docs/adr/001-tech-stack.md`
+      - `docs/api/rest-api.md`
+      - `frontend/src/components/stores/StorePricePage.tsx`
+      - `frontend/src/components/stores/__tests__/IntegrationsPanel.test.tsx`
+
+      Confirmed in live five-viewport captures and source:
+      - the current loaded route shows one store-connections card followed by a Product search card that is
+        mostly blank until the user types at least two characters
+      - on phone, that Product search card measures about 358x272px
+      - the only visible guidance in that state is `Type at least 2 characters to search products`
+      - the search control currently has no `aria-label` and no `aria-labelledby`, so it relies on placeholder
+        text alone
+      - `StorePricePage.tsx` matches the live issue: when `debouncedQuery.length < 2`, the route renders only
+        the search input and the dead-end prompt, with no starter categories, recent lookups, linked ingredients,
+        or other browse entry point
+
+      This is not a duplicate of GRO-331. GRO-331 fixed the dishonest no-match state after a search had already
+      been entered. GRO-518 covers the default loaded route itself: the page title promises `Store Prices`, but
+      the main body opens into a blank query gate with weak labeling and low information scent. I created GRO-518,
+      assigned it to the current stores implementation owner, and attached the fresh five-viewport evidence package.
+    acceptance_criteria_status:
+      - "The loaded `/stores` route provides a useful browse entry point before exact search terms are known: BLOCKED"
+      - "The product-search control has a durable visible/programmatic label instead of relying on placeholder text alone: BLOCKED"
+      - "The main route no longer spends a large blank card telling users only to type more characters: BLOCKED"
+      - "Fresh 5-viewport live evidence attached to follow-up issue: COMPLETE (GRO-518)"
+    next_action: "Land GRO-518, then continue the broader `/stores` route audit"
+    status: "blocked"
+    linked_issue: "GRO-518"
+    severity: "high"
+
+  - id: gro-339-store-sync-failure-review
+    type: screen-review
+    screen: /stores
+    component: StorePricePage.tsx (IntegrationsPanel + IntegrationFailureBlock)
+    reviewed_at: "2026-04-30"
+    verdict: "✅ APPROVED / CLOSED — stores sync failures now surface durable recovery context and a non-404 reconnect destination"
+    details: |
+      Reviewed GRO-339 first after the GRO-429 evidence package landed, then re-reviewed it once the
+      GRO-441 / GRO-442 reconnect evidence and landing surface were complete.
+
+      Confirmed in code, refreshed evidence, and live re-check:
+      - `IntegrationFailureBlock` moves the failure state out of a color-only chip into a durable
+        inline `role="alert"` block
+      - plain-language error mapping now explains failure causes instead of exposing raw backend state
+      - the trust note uses `last_successful_sync_at` to explain whether prices are stale or have
+        never loaded
+      - recovery actions are split clearly between `Retry sync` and `Reconnect store`
+      - the GRO-339 / GRO-441 / GRO-442 package now covers:
+        - failed `auth_expired` state across all 5 project viewports
+        - stale-success warning on phone + desktop
+        - retry visibility
+        - in-context reconnect-flow captures
+        - reconnect interaction recordings
+      - `frontend/src/app/stores/connect/page.tsx` now provides a real non-404 recovery destination instead
+        of a visible 404 surface
+      - the 2026-04-30 closeout rerun confirmed the landing route was present on phone and desktop with
+        44px+ CTAs; a later proactive rerun on 2026-05-02 found a separate broader route-shell defect
+        where the page still sends users back to `/stores` instead of letting them reconnect directly.
+        GRO-513 now tracks that newer issue and does not reopen this narrower 404/recovery slice.
+
+      This clears the narrow sync-failure recovery issue. The broader `/stores` route still needs a
+      separate proactive audit for overall IA, populated-state scanability, and multi-integration
+      recovery clarity.
+    acceptance_criteria_status:
+      - "Failure state moved out of a badge into a durable inline block: ✅"
+      - "Plain-language trust and recovery messaging present: ✅"
+      - "Failed state demonstrated across the required breakpoints: ✅"
+      - "Stale-success warning demonstrated on phone + desktop: ✅"
+      - "Auth-expired reconnect branch demonstrated in-context: ✅"
+      - "Recovery flow captured as a real interaction recording: ✅"
+      - "Reconnect destination is a usable non-404 surface: ✅"
+      - "Dual sign-off complete: ✅"
+    next_action: "Closed for this slice; keep the broader `/stores` route audit in the proactive queue"
+    status: "approved"
+    sign_off_by: ["UI/UX Advisor", "QA Lead"]
+
+  - id: gro-513-stores-connect-detour-review
+    type: screen-review
+    screen: /stores/connect
+    component: StoreConnectPage.tsx
+    reviewed_at: "2026-05-02"
+    verdict: "Not approved — the reconnect page still behaves like a detour because it sends users back to `/stores` instead of helping them reconnect here"
+    details: |
+      Proactive live rerun completed against the shipped `http://127.0.0.1:3000/stores/connect` route
+      after route reconciliation showed this page existed in App Router but still lacked an explicit
+      standalone review record.
+
+      Consulted before review:
+      - `docs/adr/001-tech-stack.md`
+      - `docs/api/rest-api.md`
+      - `frontend/src/app/stores/connect/page.tsx`
+
+      Confirmed in live rerun and source:
+      - the route title is `Reconnect your store`
+      - the body says the user needs to set up the connection again to resume syncing prices
+      - step 1 then tells the user to go back to the Stores page and use `Sync now` there
+      - the only visible CTAs are `Back to Stores` and `Go to dashboard`
+      - current source matches that detour flow and offers no route-local reconnect action or equivalent
+
+      This route is no longer the old GRO-442 404 dead end. The remaining problem is purpose clarity and
+      navigation cost: the page frames itself as the reconnect destination, but it cannot actually advance
+      the reconnect job from within the route. I created GRO-513 from this proactive live audit, assigned
+      it to the current stores implementation owner, and attached the full 5-viewport evidence package
+      there.
+    acceptance_criteria_status:
+      - "The `/stores/connect` route no longer behaves like a dead-end detour in the reconnect flow: BLOCKED"
+      - "Page title, body copy, and dominant action agree on the user's next step: BLOCKED"
+      - "Recovery can be completed or clearly advanced from the route itself without unnecessary backtracking: BLOCKED"
+      - "Fresh 5-viewport live evidence attached to correction issue: COMPLETE (GRO-513)"
+    next_action: "Land GRO-513, then rerun `/stores/connect` live before treating the reconnect route as trustworthy"
+    status: "blocked"
+    linked_issue: "GRO-513"
+    severity: "medium"
+
+  - id: gro-429-store-sync-evidence-followup
+    type: screen-review
+    screen: /stores
+    component: StorePricePage.tsx
+    reviewed_at: "2026-04-29"
+    verdict: "Partial evidence improvement; superseded by the narrower GRO-441 reconnect blocker"
+    details: |
+      GRO-429 materially improved the evidence package for GRO-339:
+      - failed-state screenshots now cover all 5 project viewports
+      - stale-success screenshots now exist on phone + desktop
+      - the warning layout reads clearly on both compact and wide screens
+
+      However, GRO-429 did not close the full UX gate:
+      - no auth-expired screenshot with `Reconnect store` visible
+      - no proof of the reconnect click landing on `/stores/connect` (or the current target)
+      - no video/GIF/recording for the recovery interaction path
+
+      Treat GRO-429 as a useful partial evidence delivery, not the final approval package.
+    acceptance_criteria_status:
+      - "Failed-state viewport coverage improved: ✅"
+      - "Stale-success evidence added: ✅"
+      - "Reconnect-store branch evidenced: ❌"
+      - "True interaction recording attached: ❌"
+    next_action: "Refer to gro-339-store-sync-failure-review and GRO-441 for the remaining blocker"
+    status: "superseded"
+    linked_issue: "GRO-429"
+    superseded_by: "gro-339-store-sync-failure-review"
+
+  - id: gro-337-inventory-empty-state-review
+    type: screen-review
+    screen: /inventory
+    component: InventoryPage.tsx
+    reviewed_at: "2026-04-29"
+    verdict: "Not approved — the UI direction is improved, but the latest evidence package still does not show a valid settled empty state"
+    details: |
+      Reviewed GRO-337 after Senior Engineer Alpha first submitted the implementation, then re-reviewed it
+      once GRO-427 attached follow-up proof.
+
+      Confirmed in code and valid evidence:
+      - the empty state now explains the page purpose in plain language
+      - `Add first item` is the dominant CTA and `Import CSV` remains the secondary path
+      - the true empty state stays distinct from the search/filter no-match state
+      - follow-up modal captures prove both CTAs can open their dialogs
+
+      Current blocking gaps:
+      - the five supposed empty-state viewport screenshots in GRO-427 are still loading-spinner captures, not
+        the rendered empty-state card
+      - the modal interaction captures still show expiring-item sections and inventory alerts behind the dialog,
+        so the run does not represent one coherent empty-inventory state
+      - because the proof is internally inconsistent, it does not clear the UI gate for purpose clarity,
+        state visibility, or responsive integrity
+
+      UI/UX sign-off remains blocked. GRO-427 was insufficient, and GRO-440 now tracks the requirement for
+      settled empty-state captures from one coherent run.
+    acceptance_criteria_status:
+      - "Empty state explains page purpose in plain language: ✅"
+      - "In-context Add first item recovery action present: ✅"
+      - "Bulk import path still exposed in empty state: ✅"
+      - "Resubmission includes valid settled empty-state proof across required viewports: ❌ current screenshots are spinner shots and mixed-state captures"
+    next_action: "Historical blocker only; see gro-440-inventory-empty-state-evidence-review for the passing evidence re-review"
+    status: "superseded"
+    correction_issue: "GRO-440"
+    superseded_by: "gro-440-inventory-empty-state-evidence-review"
+
+  - id: gro-440-inventory-empty-state-evidence-review
+    type: screen-review
+    screen: /inventory
+    component: InventoryPage.tsx + AddItemForm + CsvImportModal
+    reviewed_at: "2026-04-29"
+    verdict: "✅ APPROVED / CLOSED — dual sign-off complete; the corrected evidence shows a coherent settled empty state and both recovery modals from the same run"
+    details: |
+      Re-reviewed the `/inventory` empty-state slice after GRO-440 attached a corrected evidence package.
+
+      Reviewed artifacts and shipped implementation:
+      - the GRO-440 mention comment with 5 viewport screenshots and phone + desktop modal captures
+      - downloaded / visually inspected the phone, largePhone, tablet, narrowDesktop, and desktop empty-state images
+      - visually inspected the Add to Inventory and Import CSV modal captures on phone and desktop
+      - re-read `InventoryPage.tsx`, the empty-state and error-state tests, and `Modal.tsx`
+
+      Confirmed in evidence and code:
+      - the route now settles to the real empty-state card instead of a `PageSpinner`
+      - the purpose copy is plain-language and the dominant action remains **Add first item**
+      - **Import CSV** remains available as the secondary recovery path without becoming a hidden desktop-only affordance
+      - the same actions and meaning are preserved across phone, largePhone, tablet, narrowDesktop, and desktop
+      - the Add / Import modal captures now open from the same coherent empty-inventory background, resolving the earlier mixed-state blocker
+      - the shipped implementation still uses labelled controls, 44px targets, and proper modal dialog semantics for these recovery paths
+
+      Follow-up (same day): QA then approved the same deterministic capture package, explicitly confirming the
+      settled `Your pantry is empty` card across all 5 project viewports and both modal flows. GRO-440 was
+      then closed as done.
+
+      This closes the narrow empty-state review blocker. The broader `/inventory` route audit remains open for
+      populated-state scanability, filters, and expiry hierarchy.
+    acceptance_criteria_status:
+      - "Settled empty-state card shown across all 5 project viewports: ✅"
+      - "Primary Add first item action remains dominant: ✅"
+      - "Secondary Import CSV action remains visible and mobile-complete: ✅"
+      - "Both CTAs open from one coherent empty-inventory run: ✅"
+      - "Desktop adds space, not desktop-only capability: ✅"
+      - "QA Lead approval received on the corrected evidence package: ✅"
+      - "Broader populated-inventory route audit complete: ⏳ separate follow-up"
+    next_action: "Closed; keep the broader `/inventory` route audit in the proactive queue"
+    status: "approved"
+    sign_off_by: ["UI/UX Advisor", "QA Lead"]
+    linked_issue: "GRO-440"
+
+  - id: gro-332-family-eating-needs-modal-review
+    type: screen-review
+    screen: /family ("Eating needs" drawer)
+    component: FamilyProfilePage.tsx + Modal.tsx
+    reviewed_at: "2026-04-30"
+    verdict: "✅ UI-approved — the eating-needs editor now behaves like a trustworthy modal on the live route; pending QA"
+    details: |
+      GRO-332 started as a proactive UI/UX concern that the family-member Eating needs editor
+      looked like a committed modal flow but could still drop edits on a stray backdrop tap.
+
+      For sign-off I refreshed the issue thread, re-read:
+      - `frontend/src/components/family/FamilyProfilePage.tsx`
+      - `frontend/src/components/family/__tests__/FamilyProfilePage.test.tsx`
+      - `frontend/src/components/ui/Modal.tsx`
+
+      I then re-ran the shipped `http://localhost:3000/family` route locally with Playwright,
+      capturing fresh phone, largePhone, tablet, narrowDesktop, and desktop screenshots plus
+      phone/desktop close-path checks.
+
+      The engineer evidence package was complete and the live rerun matched it:
+      - before phone + desktop screenshots attached
+      - after screenshots attached for all 5 project viewports
+      - backdrop taps do not dismiss the open editor
+      - Escape closes the dialog on phone and desktop
+      - focus returns to the originating member card after close
+      - the shared native `<dialog>` modal path preserves one coherent capability set across breakpoints
+      - the mobile sheet keeps the close affordance touch-safe and the Save / Cancel actions durable
+
+      Coverage boundary:
+      - this clears the eating-needs modal-safety slice specifically
+      - the broader `/family` route audit is still open for member-card scanability, add-member flow, and overall information hierarchy
+    acceptance_criteria_status:
+      - "Drawer behaves as a real modal interaction: ✅"
+      - "Focus enters the drawer and returns to the trigger on close: ✅"
+      - "Escape / close behavior is predictable for keyboard users: ✅"
+      - "Accidental backdrop interaction does not drop unsaved edits: ✅"
+      - "All 5 project viewport screenshots attached on-thread: ✅"
+      - "Fresh live UI/UX rerun completed against shipped `/family` route: ✅"
+      - "QA Lead approval: ⏳ pending"
+    next_action: "Await QA Lead approval on GRO-332, then move the issue to `done`; keep the broader `/family` route audit in the proactive queue"
+    status: "approved_pending_qa"
+    sign_off_by: ["UI/UX Advisor"]
+    linked_issue: "GRO-332"
+
+  - id: family-review-pending
+    type: screen-review
+    screen: /family
+    component: FamilyProfilePage.tsx
+    priority: "medium"
+    status: "partially_reviewed"
+    reason: "GRO-332 cleared the modal-safety slice, GRO-506 now captures the inactive-member copy leak in the no-members branch, GRO-510 remains the earlier member-card browse-density thread, GRO-519 now captures the Add member breakpoint regression, and the broader family route still lacks a dedicated mobile-first audit"
+    notes: |
+      Reviewed slices completed:
+      - GRO-332 (2026-04-30) is UI-approved pending QA; the eating-needs editor now behaves like a
+        trustworthy modal workflow on the shipped route. Backdrop taps no longer discard edits,
+        Escape closes predictably, focus returns to the originating member card, and the mobile sheet
+        keeps visible Save / Cancel actions and a touch-safe close control.
+      - GRO-506 (2026-05-01 proactive source audit) now captures a separate plain-language problem in
+        the no-members branch when inactive members exist. Because the local frontend returned
+        `ECONNREFUSED` for both `/` and `/family`, I did not claim a live rerun. Source inspection of
+        `FamilyProfilePage.tsx` found the helper text:
+        `Reactivate them by editing their profile in the database — in-app reactivation is not available yet.`
+        That copy leaks implementation detail and points users at a recovery path they cannot perform.
+        GRO-506 was created and assigned to the current family-route owner as a source-backed correction
+        that still needs full live proof on resubmission.
+      - GRO-510 (2026-05-02 proactive live audit) remains the earlier populated-route browse-density
+        thread for the dossier-style member cards.
+      - GRO-519 (2026-05-02 proactive live audit) now captures a separate header-action regression on
+        the populated route. Fresh rerun of the shipped `/family` route across phone, largePhone,
+        tablet, narrowDesktop, and desktop measured the visible `Add member` action at roughly
+        130.73x44 on phone and largePhone, but only about 115.92x32 on tablet, narrowDesktop, and
+        desktop. Current source matches the live defect because `FamilyProfilePage.tsx` renders the
+        populated-route header CTA as `<Button size="sm">Add member</Button>`. GRO-519 was created and
+        assigned to the current family-route owner with the fresh 5-viewport evidence package attached.
+
+      Remaining route-wide audit still needed:
+      - member-card scanability / current GRO-510 state once the latest populated-route drift is
+        re-verified
+      - add-member flow clarity / friction after create
+      - card-vs-modal hierarchy once the local app is available for a broader rerun
+      - live rerun of the inactive-member no-members state after GRO-506 lands
+
+  - id: gro-506-family-inactive-member-copy-review
+    type: screen-review
+    screen: /family
+    component: FamilyProfilePage.tsx (no-members branch with inactive members)
+    reviewed_at: "2026-05-01"
+    verdict: "Not approved — the inactive-member helper still leaks database/admin language into a household-facing route"
+    details: |
+      Proactive route coverage moved to `/family` with the assigned queue empty. I first attempted a
+      fresh local availability check, but both `http://127.0.0.1:3000/` and `/family` returned
+      `ECONNREFUSED`, so this heartbeat could not produce a truthful live rerun or screenshot package.
+
+      I therefore did a source-backed review of `frontend/src/components/family/FamilyProfilePage.tsx`
+      and found the no-members branch still renders this helper when inactive members exist:
+
+      `Reactivate them by editing their profile in the database — in-app reactivation is not available yet.`
+
+      This route is a household configuration surface, not an admin console. The problem is not that
+      the app lacks in-page reactivation. The problem is that the visible guidance leaks implementation
+      detail (`database`) and suggests a workaround the household user cannot actually perform. I created
+      GRO-506 and assigned it to the current family implementation owner.
+    acceptance_criteria_status:
+      - "Inactive-member helper text uses household-facing language only: BLOCKED"
+      - "No copy mentions `database` or other engineering implementation terms: BLOCKED"
+      - "The message still explains why the route can look empty when inactive members exist: ⏳ not re-reviewed after copy correction"
+      - "Fresh live rerun / 5-viewport evidence exists for the corrected route: BLOCKED (frontend unavailable during this heartbeat)"
+      - "Correction issue created and assigned: COMPLETE (GRO-506)"
+    next_action: "Land GRO-506, then rerun `/family` live once the local frontend is reachable again"
+    status: "blocked"
+    linked_issue: "GRO-506"
+    severity: "medium"
+
+  - id: gro-510-family-card-density-review
+    type: screen-review
+    screen: /family
+    component: FamilyProfilePage.tsx (member cards)
+    reviewed_at: "2026-05-02"
+    verdict: "Not approved — the family index cards still expose too much dossier-style detail for a fast browse-and-edit route"
+    details: |
+      Proactive live rerun completed against the shipped `http://127.0.0.1:3000/family` route with the
+      assigned queue empty, so I moved the broader family route audit forward instead of reopening an
+      already-routed correction thread.
+
+      Consulted before review:
+      - `frontend/src/components/family/FamilyProfilePage.tsx`
+      - `frontend/src/components/family/__tests__/FamilyProfilePage.test.tsx`
+      - `frontend/src/components/family/__tests__/FamilyProfilePage.empty-states.test.tsx`
+
+      Confirmed in live rerun and source:
+      - each member card surfaces identity + role + flags + calorie target, but also a visible DOB line
+        and a notes excerpt before any member is selected
+      - on phone, the cards measure roughly **168–172px** tall
+      - that means only about 2–3 members fit in the active mobile scan path at once
+      - on desktop, the cards align cleanly in a 4-column row, but the same information model still
+        reads like mini case files rather than calm entry points into the existing edit drawer
+      - current source explicitly renders `member.notes` in a visible card paragraph, even though the
+        detailed edit drawer already exists for deliberate deep context
+
+      The primary job on `/family` is to choose the right person, then edit their eating needs. The
+      current browse surface makes users parse dossier-style detail too early. This is especially
+      costly on phone, where the route becomes a stack of long cards rather than a quick member picker.
+      I created GRO-510 from this proactive live audit, assigned it to the current family route owner,
+      and attached the full 5-viewport evidence package there.
+    acceptance_criteria_status:
+      - "Family cards are shorter and easier to scan on phone: BLOCKED"
+      - "The browse surface no longer shows long note excerpts before selection: BLOCKED"
+      - "Detailed notes remain available inside the edit flow after selecting a member: ⏳ not reviewed in the corrected version yet"
+      - "Fresh 5-viewport live evidence attached to correction issue: COMPLETE (GRO-510)"
+    next_action: "Land GRO-510, then rerun `/family` live before continuing the broader route audit"
+    status: "blocked"
+    linked_issue: "GRO-510"
+    severity: "medium"
+
+  - id: gro-519-family-add-member-breakpoint-review
+    type: screen-review
+    screen: /family
+    component: FamilyProfilePage.tsx (populated-route header action)
+    reviewed_at: "2026-05-02"
+    verdict: "Not approved — the route's main Add member action stays touch-safe on phone, then regresses to a 32px control at tablet and desktop breakpoints"
+    details: |
+      Proactive whole-route coverage continued on `/family` after the assigned queue stayed empty, so I
+      finished the current live rerun instead of routing another speculative family issue.
+
+      Consulted before review:
+      - `docs/adr/001-tech-stack.md`
+      - `docs/api/rest-api.md`
+      - `frontend/src/components/family/FamilyProfilePage.tsx`
+      - `frontend/src/components/family/__tests__/FamilyProfilePage.test.tsx`
+      - `frontend/src/components/family/__tests__/FamilyProfilePage.empty-states.test.tsx`
+
+      Confirmed in live rerun and source:
+      - the shipped `http://127.0.0.1:3000/family` route renders across phone, largePhone, tablet,
+        narrowDesktop, and desktop
+      - the visible `Add member` action measures about **130.73x44px** on phone and largePhone
+      - the same action drops to about **115.92x32px** on tablet, narrowDesktop, and desktop
+      - current source matches the live defect because the populated header renders
+        `<Button size="sm">Add member</Button>`
+      - the broader rerun did not justify a brand-new route-shell blocker beyond the existing family
+        slice issues, but this primary creation action still fails responsive integrity on `md+`
+
+      Family is a trust-critical household-management surface, and `Add member` is the main creation
+      action once members already exist. Letting that control shrink below the product's 44px floor at
+      larger breakpoints creates a breakpoint-only regression on the route's highest-level CTA. I
+      created GRO-519 from this proactive live audit, assigned it to the current family-route owner,
+      and attached the full 5-viewport evidence package there.
+    acceptance_criteria_status:
+      - "Populated-route `Add member` action stays at or above the 44px floor across all project viewports: BLOCKED"
+      - "Tablet and desktop do not regress the family route's primary creation CTA relative to mobile: BLOCKED"
+      - "Fresh 5-viewport live evidence attached to correction issue: COMPLETE (GRO-519)"
+    next_action: "Land GRO-519, then rerun `/family` live before continuing the broader route audit"
+    status: "blocked"
+    linked_issue: "GRO-519"
+    severity: "high"
+
+  - id: gro-511-nutrition-shared-actuals-regression-review
+    type: screen-review
+    screen: /nutrition
+    component: NutritionDashboard.tsx
+    reviewed_at: "2026-05-02"
+    verdict: "✅ Approved — the shipped route now keeps household intake family-wide and member cards target-only, so the original trust contradiction is gone"
+    details: |
+      GRO-511 opened from a proactive live audit that found the shipped route presenting repeated
+      family-wide intake values as if they were member-specific progress. The implementation owner then
+      shipped commit `29018c0`, QA approved the corrected route, and I completed a fresh UI/UX rerun on
+      2026-05-02 to verify the final shipped state before closing the slice.
+
+      Consulted before re-review:
+      - `docs/adr/001-tech-stack.md`
+      - `docs/api/rest-api.md`
+      - `frontend/src/components/nutrition/NutritionDashboard.tsx`
+      - `frontend/src/components/nutrition/__tests__/NutritionDashboard.no-data.test.tsx`
+
+      Confirmed in fresh live rerun and source:
+      - the shipped `http://127.0.0.1:3000/nutrition` route renders across phone, largePhone, tablet,
+        narrowDesktop, and desktop
+      - the household summary says `Family-wide average per person per day — individual actuals are not
+        yet tracked separately`
+      - the footer repeats that `Per-member actuals require individual meal tracking, which is not yet
+        available`
+      - there are no per-member `actual / target` comparisons and no `Under target` / `On target` /
+        `Over target` labels on the shipped route anymore
+      - member cards now show target-only rows such as `Calories Target 2200 kcal`
+      - `MemberTargetCard` no longer references `entry.actual`, and `TargetRow` now renders the per-member
+        values as target-only guidance rather than fake progress
+      - fresh UI/UX rerun evidence was uploaded across all 5 project viewports, and QA approval was
+        already present on-thread before the final closeout
+
+      This clears the original trust contradiction completely: household intake remains clearly scoped to
+      the family summary, while member cards now present only honest target guidance. GRO-511 therefore
+      closes as resolved.
+    acceptance_criteria_status:
+      - "Per-member cards do not show `Under target`, `On target`, or `Over target` unless the app has true per-member actual intake: COMPLETE"
+      - "Family-wide intake remains clearly scoped to the household summary only: COMPLETE"
+      - "The route communicates known vs unknown nutrition state without contradiction: COMPLETE"
+      - "Fresh 5-viewport live evidence attached to correction issue: COMPLETE (GRO-511)"
+      - "QA + UI/UX approvals are both present on-thread: COMPLETE"
+    next_action: "Treat GRO-511 as closed; keep the broader `/nutrition` route audit focused on no-menu, no-data, and failure-state continuity"
+    status: "approved"
+    linked_issue: "GRO-511"
+    severity: "resolved"
+    sign_off_by: ["UI/UX Advisor", "QA Lead"]
+
+  - id: nutrition-review-pending
+    type: screen-review
+    screen: /nutrition
+    component: NutritionDashboard.tsx
+    priority: "medium"
+    status: "partially_reviewed"
+    reason: "GRO-511 is now closed on the target-only member-card fix, and the broader nutrition route still needs a mobile-first review across no-menu, missing-data, and failure states"
+    notes: |
+      Reviewed slices completed:
+      - historical nutrition-route issues already existed for missing-data honesty, zero-state recovery,
+        and earlier responsive cleanup (`GRO-173`, `GRO-278`, `GRO-336`, `GRO-383`)
+      - GRO-511 (2026-05-02 fresh live re-review) is now closed. The shipped route keeps the household
+        estimate family-wide, member cards are target-only, and there are no fake per-member progress
+        labels left on the live screen.
+
+      Remaining route-wide audit still needed:
+      - target-only / no-menu branch scanability with the shipped target-only model now confirmed
+      - no-nutrition-data branch re-check against the current shipped route
+      - fetch-failure retry and recovery review after the existing backlog thread (`GRO-398`) is
+        clarified or implemented
+
+  - id: focus-visible-pattern-established
+    type: pattern
+    pattern_name: "focus-visible keyboard indicator"
+    usage: "Tailwind focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500"
+    established_by: "GRO-345 (modal accessibility)"
+    adopted_by: ["GRO-347 (calendar grid)"]
+    standard: true
+    status: "active"
+    notes: |
+      Clear, durable keyboard focus indicator using brand color (500).
+      Inset ring to avoid expanding button boundaries.
+      Applied to all interactive controls (buttons, inputs, etc.).
+
+  - id: visual-evidence-requirement-strict
+    type: guideline
+    guideline: "All UI changes require visual evidence"
+    applies_to: "every engineering issue with UI changes"
+    minimum_evidence: "phone + desktop screenshots"
+    full_evidence: "all 5 project viewports + interaction video"
+    enforcement: "rejection until evidence submitted"
+    source: "GRO-347 sign-off gate (2026-04-22)"
+    rationale: |
+      Visual behavior is the user experience. Code review alone is insufficient.
+      Live proof of rendering + keyboard interaction required before approval.
+      Applies even to "obvious" fixes like semantic HTML upgrades.
+
+  - id: gro-349-discard-confirmation-review
+    type: screen-review
+    screen: /calendar (GoogleCalendarManageSheet)
+    component: GoogleCalendarManageSheet.tsx + GoogleCalendarSelector.tsx
+    reviewed_at: "2026-04-22"
+    verdict: "✅ APPROVED for merge"
+    details: |
+      Discard confirmation footer pattern for unsaved calendar selection edits.
+      Copy ("You have unsaved calendar changes. Discard them?") is plain-language, action-clear.
+      Button pair ("Keep editing" + "Discard changes") uses secondary + danger pattern.
+      All three close paths (backdrop, X, Escape) guarded by single handleClose logic.
+      No silent data loss. State obvious to AuDHD-friendly users.
+      
+      Accessibility: Dialog semantics (role, aria-modal, aria-label), focus trap active,
+      keyboard-reachable buttons, no colour-only state communication.
+      
+      Responsive: Footer panel fits all viewports. 44px+ touch targets. Mobile-safe affordance.
+      
+      Code quality: Defensive design (confirmMode union prevents stacking, isDirtyRef guard
+      prevents refetch data loss, derived isDirty prevents false positives).
+    
+    acceptance_criteria_status:
+      - "Unsaved edits guarded from backdrop tap: ✅"
+      - "Mobile-safe dismissal contract: ✅"
+      - "Durable state feedback: ✅"
+      - "Lightweight flow preserved: ✅"
+      - "Visual evidence required: submitted (code-reviewed by QA, UX-approved)"
+    
+    next_action: "Awaiting QA Lead confirmation; ready for dual sign-off to done"
+    status: "approved"
+    sign_off_by: ["UI/UX Advisor", "QA Lead"]
+
+  - id: gro-347-keyboard-access-triage
+    type: screen-review
+    screen: /calendar (CalendarPage month grid)
+    component: CalendarPage.tsx (CalendarGrid)
+    reviewed_at: "2026-04-23"
+    verdict: "Evidence ✅; QA rejected pending GRO-423 nested-button fix"
+    details: |
+      Fresh five-viewport evidence was submitted and QA re-ran the live /calendar route in
+      Playwright. The original proof blocker is cleared: day-cell labels, event-chip labels,
+      focus behavior, and keyboard-opened dialog behavior all line up with the route and the
+      submitted evidence package.
+
+      NEW BLOCKER: the desktop CalendarGrid nests editable event-chip <button> elements inside
+      the day-cell <button>. React logs "Warning: <button> cannot be a descendant of <button>"
+      on the live route and the existing CalendarPage test file emits the same warning during render.
+
+      This is invalid interactive markup on an accessibility fix and risks browser / AT
+      inconsistency plus hydration instability. QA created GRO-423 and assigned it to
+      Senior Engineer Alpha.
+    
+    acceptance_criteria_status:
+      - "Desktop day cells keyboard-reachable: ✅"
+      - "Event entries keyboard-reachable: ✅"
+      - "Focus visibility explicit: ✅"
+      - "Mobile parity preserved: ✅"
+      - "Visual evidence across viewports: ✅"
+      - "Interactive DOM structure valid: ❌ nested button warning on live route + test render"
+    
+    next_action: "Historical triage fact only; superseded by the completed GRO-423 correction and final GRO-347 approval"
+    status: "superseded"
+    correction_issue: "GRO-423"
+    superseded_by: "gro-423-nested-button-correction-review"
+    triage_date: "2026-04-23 03:31 AEST"
+
+  - id: gro-423-nested-button-correction-review
+    type: screen-review
+    screen: /calendar (CalendarPage month grid)
+    component: CalendarPage.tsx (CalendarGrid)
+    reviewed_at: "2026-04-23"
+    verdict: "✅ APPROVED — nested-button correction preserves the live calendar interaction model"
+    details: |
+      Live re-review completed on `http://localhost:3000/calendar` after the GRO-423
+      correction landed with a fresh evidence package.
+
+      Confirmed in live review:
+      - no React console warning for nested `<button>` markup or hydration instability
+      - enabled desktop day-cell add buttons still accept keyboard focus and `Enter` opens Add Event
+      - editable event chips still open the Edit Event path
+      - `+N more` still opens the overflow dialog
+      - mobile retains `MobileCalendarGrid` while desktop keeps the denser chip grid
+      - no visible layout regression introduced by the sibling-layer DOM change
+
+      QA posted the matching live-route approval and used that verdict to close both GRO-423
+      and the parent GRO-347.
+    acceptance_criteria_status:
+      - "Nested interactive DOM structure removed from desktop month grid: ✅ (live route re-check)"
+      - "Desktop day-cell keyboard activation preserved: ✅"
+      - "Editable event chips remain independently operable: ✅"
+      - "Overflow dialog path preserved: ✅"
+      - "Five-viewport live verification completed by UI/UX: ✅"
+      - "QA approval on correction issue: ✅"
+    next_action: "Closed"
+    status: "approved"
+    linked_issue: "GRO-347"
+    correction_issue: "GRO-423"
+    sign_off_by: ["UI/UX Advisor", "QA Lead"]
+
+  - id: gro-348-calendar-overflow-review
+    type: screen-review
+    screen: /calendar (CalendarPage month grid overflow)
+    component: CalendarPage.tsx (CalendarGrid + DayOverflowPopover)
+    reviewed_at: "2026-04-30"
+    verdict: "✅ APPROVED / CLOSED — the shipped route already provides a complete overflow affordance"
+    details: |
+      GRO-348 was raised against a passive desktop `+N more` label, but the shipped `/calendar`
+      route no longer matches that report.
+
+      Re-review completed from the live route plus the current regression file:
+      - fresh Playwright review on `http://localhost:3000/calendar` across phone, largePhone,
+        tablet, narrowDesktop, and desktop
+      - targeted Jest scope `CalendarPage.test.tsx --testNamePattern="desktop overflow popover"`
+        passing 7/7
+      - live keyboard verification on tablet + desktop confirmed:
+        - Tab reaches the overflow trigger
+        - Enter opens the dialog
+        - initial focus lands on `Close events list`
+        - Escape closes the dialog
+        - focus returns to the trigger
+
+      Responsive verdict:
+      - tablet / desktop use `+N more` as a real button with `aria-haspopup="dialog"` and a
+        descriptive accessible name
+      - the dialog lists all events for the day and keeps scanability intact in the month grid
+      - phone / largePhone remain complete through the separate selected-day panel pattern, so
+        this is progressive enhancement rather than a desktop-only capability split
+
+      Review outcome:
+      - no UI correction required for GRO-348
+      - UI/UX approval comment was already present with 5-viewport screenshots
+      - QA then added a fresh 5-viewport evidence package plus tablet/desktop dialog-open captures
+      - QA live verification reconfirmed `aria-expanded="true"` while open and focus restoration on close
+      - once both gates were present, GRO-348 was moved to `done`
+    acceptance_criteria_status:
+      - "Overflow affordance is interactive and reveals hidden events: ✅"
+      - "Hidden events reachable by pointer and keyboard: ✅"
+      - "Affordance explains what happens next: ✅"
+      - "Scanability preserved while event access stays complete: ✅"
+      - "Live evidence across all 5 project viewports attached in issue thread: ✅"
+      - "QA dual gate present and issue moved to `done`: ✅"
+    next_action: "Closed; keep broader whole-calendar route review in the proactive queue"
+    status: "approved"
+    sign_off_by: ["UI/UX Advisor", "QA Lead"]
+
+  - id: gro-345-modal-dialog-triage
+    type: screen-review
+    screen: /calendar (EventModal)
+    component: CalendarPage.tsx (EventModal)
+    reviewed_at: "2026-04-22"
+    verdict: "Code ✅; Visual evidence ❌"
+    details: |
+      Code review complete: dialog semantics added (role, aria-modal, labelled title, labelled close),
+      focus trap implemented, Escape handling in place, close affordance proper control with aria-label.
+      Tests passing (code correct).
+      
+      BLOCKED: Visual evidence missing (high-frequency, high-visibility interaction).
+      - No screenshots of modal across 5 viewports
+      - No interaction GIF showing Tab focus trap, Escape close, focus restoration
+      - No keyboard accessibility proof (fields Tab-reachable, Escape closes visual overlay)
+      
+      This is a core planning surface. Modal redesign requires visual verification.
+      
+      Unblock comment posted with clear workflow (Playwright ui-visual-capture + video recording).
+      Estimated turnaround: current heartbeat cycle.
+    
+    acceptance_criteria_status:
+      - "Real dialog semantics: ✅ (code)"
+      - "Focus trap implemented: ✅ (code)"
+      - "Escape closes modal: ✅ (code)"
+      - "Close control accessible: ✅ (code)"
+      - "Screenshots all 5 viewports: ❌ PENDING"
+      - "Interaction video proof: ❌ PENDING"
+    
+    next_action: "Await engineer submission of screenshots + interaction GIF"
+    status: "blocked_on_evidence"
+    priority: "high"
+    triage_date: "2026-04-22 14:36 UTC"
+
+  - id: gro-367-touch-target-triage
+    type: screen-review
+    screen: /dashboard (TodayMenuCard)
+    component: TodayMenuCard.tsx
+    reviewed_at: "2026-04-22"
+    verdict: "Code ✅; Visual evidence ❌ (wrong type submitted)"
+    details: |
+      Issue: previous/next meal controls at 28×28px (h-7 w-7), below 44px mobile floor.
+      Code: appears to be fixed.
+      
+      BLOCKED: Wrong evidence type (isolated Storybook component screenshots instead of live route).
+      - Previous submissions rejected twice: by QA and UI/UX
+      - Reason: hero card fix must show live dashboard context (/), not isolated component
+      - Impact: Storybook isolation doesn't catch crowding, context effects, integration issues
+      
+      Unblock comment posted with exact Playwright script (live dashboard capture, 30-min turnaround).
+      Clear workflow reduces friction and unblocks in this heartbeat cycle.
+    
+    acceptance_criteria_status:
+      - "Touch targets meet 44px floor: ✅ (code)"
+      - "Layout clarity preserved: ✅ (presumed)"
+      - "Keyboard accessible: ✅ (presumed)"
+      - "Live dashboard evidence: ❌ PENDING (wrong type submitted twice)"
+    
+    next_action: "Historical triage only; see gro-367-live-surface-resolution for the final live-route verdict"
+    status: "superseded"
+    superseded_by: "gro-367-live-surface-resolution"
+    blocker_type: "wrong evidence type"
+    rejection_count: 2
+    triage_date: "2026-04-22 14:37 UTC"
+
+  - id: gro-367-live-surface-resolution
+    type: screen-review
+    screen: /dashboard (NextMealHero hero)
+    component: DashboardPage.tsx + NextMealHero.tsx
+    reviewed_at: "2026-04-23"
+    verdict: "✅ APPROVED — the original failing stepper surface no longer ships on the live dashboard"
+    details: |
+      Final GRO-367 review used the live-thread evidence plus repo inspection.
+      `DashboardPage` now renders `NextMealHero` as the dashboard hero and no longer imports `TodayMenuCard`.
+      That means the original 28×28 previous/next stepper controls from GRO-367 are absent from the shipped `/` experience.
+      
+      The current hero instead uses a single dominant `View Recipe` CTA at `min-h-[48px]`, which clears the mobile
+      touch-target floor and reduces cognitive load compared with a tiny stepper affordance.
+      
+      Important coverage boundary: this closes the specific GRO-367 defect on the shipped surface, but it does not
+      replace a full dashboard IA / scanability audit across the remaining sections.
+    acceptance_criteria_status:
+      - "Original failing prev/next controls on live route: N/A — surface replaced by NextMealHero"
+      - "Current hero primary action clears 44px mobile floor: ✅ (48px)"
+      - "Primary action remains dominant and plain-language: ✅"
+      - "Live evidence across all 5 project viewports present in the issue thread: ✅"
+      - "QA gate posted after live rerun: ✅"
+    next_action: "Approve GRO-367 and keep the broader dashboard IA audit in the proactive queue"
+    status: "approved"
+
+  - id: gro-343-rating-feedback-review
+    type: screen-review
+    screen: /recipes (RecipeBrowserPage rating panel)
+    component: RecipeBrowserPage.tsx
+    reviewed_at: "2026-04-23"
+    verdict: "✅ APPROVED for merge/done"
+    details: |
+      Live route + evidence re-review completed after GRO-413 delivered the required capture package and QA
+      posted approval. The changed rating panel now behaves like trustworthy inline feedback instead of a
+      stale status leak.
+
+      Confirmed in live review:
+      - `Saved ✓` appears only for the active member context after save
+      - switching member clears the previous success marker immediately
+      - forced save failure leaves durable inline `role="alert"` copy in-card
+      - the compact phone layout keeps status feedback in the same scan zone as member select, stars, and Save
+
+      Evidence reviewed:
+      - engineer-submitted 5 viewport screenshots for baseline, expanded, success, error, and member-switch states
+      - live Playwright re-check by UI/UX Advisor on `http://localhost:3000/recipes`
+      - QA approval already present before closure
+
+      Review lens:
+      - purpose clarity: strong; the panel still reads as lightweight preference capture
+      - primary action clarity: improved because save outcome is now present-tense and local to the action row
+      - information hierarchy: valid; inline success/error sits in the same scan zone as the control that caused it
+      - mobile completeness: valid; no desktop-only recovery path introduced
+      - error recovery: materially improved via durable in-card error state
+      - AuDHD suitability: improved because interruption recovery no longer depends on remembering a toast
+      - responsive integrity: valid; larger breakpoints add space, not different capability
+
+      Remaining follow-up is route-wide, not blocking this issue: the broader `/recipes` audit still needs to
+      assess search, filtering, card density, and import flow.
+    acceptance_criteria_status:
+      - "Member switch clears stale Saved state: ✅"
+      - "Failure feedback durable after toast disappears: ✅"
+      - "Success feedback scoped to current member action: ✅"
+      - "Five-viewport evidence attached: ✅"
+      - "Live Playwright verification completed: ✅"
+      - "QA dual gate present before closure: ✅"
+    next_action: "Close GRO-343 to done and keep the wider /recipes route in the proactive queue"
+    status: "approved"
+    sign_off_by: ["UI/UX Advisor", "QA Lead"]
+
+  - id: gro-341-filter-tray-disclosure-review
+    type: screen-review
+    screen: /recipes (filter tray)
+    component: RecipeBrowserPage.tsx
+    reviewed_at: "2026-04-23"
+    verdict: "Not approved — trigger state is exposed, but the controlled tray is still anonymous"
+    details: |
+      Live re-review completed after the engineer posted a five-viewport evidence package for GRO-341.
+
+      What improved:
+      - the `Filters` button now exposes `aria-expanded`
+      - `aria-controls="recipe-filter-panel"` points to a stable in-DOM target
+      - the panel remains mounted and toggles with the `hidden` attribute, so the control relationship no longer breaks when collapsed
+
+      What still blocks approval:
+      - the opened panel remains a plain `div` with no `role`, no accessible name, and no
+        `aria-labelledby` / equivalent relationship
+      - live verification on `http://localhost:3000/recipes` across phone, largePhone, tablet,
+        narrowDesktop, and desktop returned the same result every time: trigger state is clear,
+        but the controlled content is still an unnamed block
+
+      UX consequence:
+      - this is a hidden-state filter UI, so users need both the toggle state and the identity
+        of the revealed content
+      - without a named region, keyboard and screen-reader users get a better button but still
+        weak information scent once the tray opens
+
+      Action taken:
+      - UI/UX rejection comment posted on GRO-341
+      - correction issue GRO-424 created and assigned to Senior Engineer Alpha
+      - parent left in `in_review` pending GRO-424 + fresh evidence
+    acceptance_criteria_status:
+      - "Filters button exposes aria-expanded: ✅"
+      - "aria-controls points to a stable in-DOM panel id: ✅"
+      - "Panel stays mounted when collapsed: ✅"
+      - "Opened tray is a named semantic region / equivalent: ❌"
+      - "Five-viewport evidence attached: ✅"
+      - "Live route verification completed by UI/UX: ✅"
+    next_action: "Land GRO-424, then re-run GRO-341 against fresh five-viewport live evidence"
+    status: "blocked_on_correction"
+    linked_issue: "GRO-341"
+    correction_issue: "GRO-424"
+    severity: "high"
+
+  - id: visual-evidence-enforcement-working
+    type: guideline
+    guideline: "Visual evidence requirement is working as designed"
+    applies_to: "GRO-245 dual sign-off gate"
+    enforcement_mechanism: "rejection until evidence submitted"
+    session_validation: "2026-04-22 HB82"
+    findings: |
+      Three calendar/dashboard issues blocked in parallel on visual evidence.
+      
+      Evidence that gate is working correctly:
+      1. GRO-349 submitted code + proof → approved
+      2. GRO-347, GRO-345 submitted code only → rejected, waiting for proof
+      3. GRO-367 submitted wrong proof type twice → rejected, waiting for correct type
+      
+      Signal: Engineers understand gate exists, but some don't realize:
+      - "Code review pass" does not equal "visual evidence"
+      - Storybook isolation ≠ live route proof
+      
+      Unblock pattern: Providing exact Playwright workflow script in triage comments
+      reduces friction and unblocks issues immediately.
+    
+    status: "active"
+    effectiveness: "high"
+    next_action: "Continue enforcement; monitor evidence submission rates"
+
+  - id: gro-420-shopping-lists-index-review
+    type: screen-review
+    screen: /shopping-lists
+    component: ShoppingListsPage.tsx
+    reviewed_at: "2026-04-23"
+    verdict: "✅ UI approved on live route; waiting for fresh QA verdict"
+    details: |
+      Proactive review of the shopping list index found two linked header problems:
+      1. The dominant create-list action collapses to an icon-only Play button on phone
+         because the visible label is hidden at the smallest breakpoint.
+      2. The Active / Past segmented control uses compact text/padding without the
+         established 44px mobile touch-target floor.
+
+      Consequence:
+      - primary action clarity drops on the smallest viewport
+      - the state toggle adds precision demand on a high-frequency route
+      - the route remains functional, but not yet aligned with the mobile-first
+        and AuDHD-friendly bar used elsewhere in the app
+
+      Strong elements preserved:
+      - card-based browse pattern is easy to scan
+      - empty-state recovery is clear
+      - shopping-list detail already uses 44px check controls, so the route family
+        has a solid accessibility baseline outside the index header
+
+      2026-04-23 re-review state:
+      - Lead Engineer posted a complete 5-viewport evidence package and route-specific
+        visual review comment on GRO-420.
+      - Shared runtime verification from this heartbeat did NOT match that package:
+        phone still rendered an icon-only header CTA, Active / Past still measured
+        ~28px tall, and the filter wrapper was not exposed as role="group" with the
+        promised "Shopping list filter" label.
+      - The local checkout's ShoppingListsPage.tsx is currently dirty and reverted
+        away from commit f08aff9, matching the stale route visible at localhost:3000.
+      - Result: hold UI approval until a clean live route or fresh capture from the
+        current runnable surface matches the claimed fix.
+
+      2026-04-23 live rerun outcome:
+      - Re-ran Playwright directly against http://localhost:3000/shopping-lists after
+        the engineer's localhost:3000 re-verification comment.
+      - Current source now matches the shipped fix (`flex-wrap`, visible `New list`
+        text, `role="group" aria-label="Shopping list filter"`, `min-h-11` on mobile).
+      - Live measurements from this heartbeat:
+        - phone: Active 44px, Past 44px, labelled group present, `New list` visible
+        - largePhone: Active 44px, Past 44px, labelled group present
+        - tablet / desktop: capability preserved with compact desktop density
+      - Visual pass:
+        - phone header wraps cleanly without overflow
+        - desktop header stays compact and scannable
+      - UI/UX approval posted on GRO-420.
+      - Remaining blocker is process, not UX: QA's latest verdict on the thread is
+        still the earlier reject from before the fresh localhost:3000 rerun, so the
+        issue must remain in `in_review` until QA refreshes that verdict.
+
+      2026-04-23 GRO-422 follow-up:
+      - Re-read the child issue thread and confirmed it is a regression-coverage
+        follow-up, not a net-new UI shape change.
+      - Verified the evidence package is complete on the child thread as well:
+        5 viewport screenshots are attached for phone, largePhone, tablet,
+        narrowDesktop, and desktop.
+      - Re-ran live checks against http://localhost:3000/shopping-lists and
+        confirmed the same route state still holds:
+        - phone / largePhone: `New list` visible, Active 44px, Past 44px
+        - tablet / desktop: same capability preserved with compact density
+        - labelled `role="group"` remains present for the filter cluster
+      - Ran `ShoppingListsPage.test.tsx`: 9/9 passing.
+      - UI/UX verdict for GRO-422: no additional UX blocker; leave the issue in
+        `in_review` until QA posts its own fresh live-route verdict.
+
+      Coverage update (2026-05-01, later heartbeat): the current shipped route no longer preserves
+      the full header-control contract that this earlier review cleared. A fresh proactive rerun of
+      `http://127.0.0.1:3000/shopping-lists` measured `Active`, `Past`, and `New list` at 44px on
+      phone / largePhone, but only 32px on tablet, narrowDesktop, and desktop because the current
+      code applies `md:min-h-8` to the filter buttons and uses a compact `size="sm"` button for the
+      header CTA. GRO-501 now tracks that later breakpoint regression. Treat GRO-420 / GRO-422 as the
+      earlier phone-focused fix, not as proof that the current shipped route is still clear across
+      all five project viewports.
+    acceptance_criteria_status:
+      - "Engineer evidence package attached on GRO-420: COMPLETE"
+      - "Plain-language primary action visible on phone: COMPLETE"
+      - "Active / Past toggle meets 44px mobile target: COMPLETE"
+      - "Segmented filter semantics exposed as labelled group: COMPLETE"
+      - "Selected filter remains obvious and low-friction: COMPLETE"
+      - "Card browse and empty-state recovery: COMPLETE"
+      - "Regression tests protect CTA visibility + filter semantics (GRO-422): COMPLETE"
+      - "Fresh QA verdict after the localhost:3000 rerun: PENDING"
+    next_action: "Treat GRO-420 / GRO-422 as historical phone-fix coverage; use GRO-501 for the current md+ regression path on the shipped route"
+    status: "ux_approved_pending_qa"
+    linked_issue: "GRO-420"
+    severity: "high"
+
+  - id: gro-495-shopping-lists-card-language-review
+    type: screen-review
+    screen: /shopping-lists
+    component: ShoppingListsPage.tsx
+    reviewed_at: "2026-05-01"
+    verdict: "Not approved — loaded-state cards still leak backend status language and a false next-step CTA"
+    details: |
+      Proactive live rerun completed against `http://127.0.0.1:3000/shopping-lists` after the local
+      app became reachable again for the broader shopping-route audit.
+
+      Consulted before review:
+      - `docs/adr/001-tech-stack.md`
+      - `docs/api/rest-api.md`
+      - `frontend/src/components/shopping-list/ShoppingListsPage.tsx`
+      - `frontend/src/components/ui/NavBar.tsx`
+
+      Confirmed in code and live five-viewport captures:
+      - each card badge renders the raw `list.status`, so backend enum tokens can leak directly into
+        household-facing UI
+      - the shipped route currently shows visible `draft` badges on the active cards
+      - draft cards use the same `Start shopping` affordance regardless of readiness
+      - the live phone capture showed `Start shopping` on an empty draft list whose supporting copy
+        still says `No items yet`
+      - the underlying route shell remains workable: GRO-420's visible `New list` CTA and 44px
+        Active / Past filter controls are still intact
+
+      That means the loaded-state browse experience still makes the user translate implementation
+      state before they can act, and in the empty-draft case it implies a next step that is not
+      actually true yet. I created GRO-495 from this proactive audit, assigned it to Lead Engineer,
+      attached the five-viewport evidence package, and linked it back to the broader GRO-409 route
+      audit umbrella.
+    acceptance_criteria_status:
+      - "Raw backend status tokens hidden from shopping-list index cards: BLOCKED"
+      - "Card CTA reflects the actual next step for empty drafts: BLOCKED"
+      - "Card CTA reflects the actual next step for populated lists: BLOCKED"
+      - "Existing header/filter improvements from GRO-420 preserved: COMPLETE"
+      - "Fresh 5-viewport live evidence attached to follow-up issue: COMPLETE (GRO-495)"
+    next_action: "Land GRO-495, then continue the broader loaded-state `/shopping-lists` audit"
+    status: "blocked"
+    linked_issue: "GRO-495"
+    parent_issue: "GRO-409"
+    severity: "high"
+
+  - id: gro-501-shopping-list-header-regression-review
+    type: screen-review
+    screen: /shopping-lists
+    component: ShoppingListsPage.tsx
+    reviewed_at: "2026-05-01"
+    verdict: "Not approved — the route header regresses to 32px targets at tablet and larger viewports"
+    details: |
+      Proactive live rerun completed against `http://127.0.0.1:3000/shopping-lists` while continuing
+      the broader loaded-state route audit after the latest dashboard heartbeat.
+
+      Consulted before review:
+      - `docs/adr/001-tech-stack.md`
+      - `docs/api/rest-api.md`
+      - `frontend/src/components/shopping-list/ShoppingListsPage.tsx`
+      - current shopping-list route review memory for GRO-420 and GRO-495
+
+      Confirmed in code and live measurements:
+      - phone / largePhone still keep the header controls at the 44px floor
+      - tablet / narrowDesktop / desktop now measure `Active` at about 60x32px, `Past` at about
+        50x32px, and `New list` at about 86x32px
+      - the shrink comes from the current `md:min-h-8` filter classes and the compact `Button
+        size="sm"` header CTA on the route
+      - this is a breakpoint regression, not a global route failure: the smaller viewports are more
+        touch-safe than the larger ones
+
+      The problem is not that the header is unlabeled. The problem is that the same route gets less
+      touch-safe at `md+`, which breaks progressive enhancement and especially punishes tablet users
+      on a frequent browse-and-switch surface. I created GRO-501 from this proactive audit, assigned
+      it to the existing shopping-list route owner, attached fresh 5-viewport evidence, and linked it
+      back to the broader GRO-409 route audit umbrella.
+    acceptance_criteria_status:
+      - "`Active` filter stays at or above 44px on tablet, narrowDesktop, and desktop: BLOCKED"
+      - "`Past` filter stays at or above 44px on tablet, narrowDesktop, and desktop: BLOCKED"
+      - "`New list` header action stays at or above 44px on tablet, narrowDesktop, and desktop: BLOCKED"
+      - "Phone / largePhone behavior preserved while removing the md+ shrink: BLOCKED"
+      - "Fresh 5-viewport live evidence attached to follow-up issue: COMPLETE (GRO-501)"
+    next_action: "Land GRO-501, then continue the broader loaded-state `/shopping-lists` audit"
+    status: "blocked"
+    linked_issue: "GRO-501"
+    parent_issue: "GRO-409"
+    severity: "high"
+
+  - id: gro-515-shopping-lists-current-shop-hierarchy-review
+    type: screen-review
+    screen: /shopping-lists
+    component: ShoppingListsPage.tsx
+    reviewed_at: "2026-05-02"
+    verdict: "Not approved — the active index still lacks a clear current-shop hierarchy and promotes generated titles into the primary scan path"
+    details: |
+      Proactive live rerun completed against `http://127.0.0.1:3000/shopping-lists` while continuing
+      the broader loaded-state route audit after GRO-514 closed the calendar pass.
+
+      Consulted before review:
+      - `docs/adr/001-tech-stack.md`
+      - `docs/api/rest-api.md`
+      - `frontend/src/components/shopping-list/ShoppingListsPage.tsx`
+      - current shopping-list route review memory for GRO-495, GRO-501, and GRO-409
+
+      Confirmed in code and live five-viewport captures:
+      - the current active view shows 3 visible `Draft` cards with no dominant current-shop treatment
+      - the first phone card heading currently reads `Shopping list for Week of 28 Apr 2026 — GRO-434
+        (Heather gone, Izzi at parents, Thomas away Fri eve)`
+      - that first phone card measures about 358x221.75px, largely because the generated heading and
+        stacked metadata form a tall text block before the user has even chosen the right list
+      - source only filters data into `allLists`, then maps those lists into identical cards with raw
+        `list.title` rendered directly in the heading
+      - there is no grouping, prioritisation, or calmer summary treatment to answer "which list should I
+        open right now?" on the loaded index
+
+      This is not the same defect as GRO-495 or GRO-501. Those already cover card language and header
+      hitbox regressions. The remaining broader issue is route-level hierarchy: the page still reads like
+      a stack of backend/planner records instead of a calm current-shop surface. I created GRO-515 from
+      this proactive audit, assigned it to the current shopping-list implementation owner, attached the
+      five-viewport evidence package, and linked it back to the broader GRO-409 route audit umbrella.
+    acceptance_criteria_status:
+      - "One clear current or newest actionable list is visually dominant on the active index: BLOCKED"
+      - "Older draft lists are demoted so users do not have to infer which card matters now: BLOCKED"
+      - "Primary card headings stay household-facing instead of leaking generated planning/debug strings: BLOCKED"
+      - "Loaded-state hierarchy remains mobile-complete across all 5 project viewports: BLOCKED"
+      - "Fresh 5-viewport live evidence attached to follow-up issue: COMPLETE (GRO-515)"
+    next_action: "Land GRO-515, then continue the broader loaded-state `/shopping-lists` audit"
+    status: "blocked"
+    linked_issue: "GRO-515"
+    parent_issue: "GRO-409"
+    severity: "high"
+
+  - id: gro-394-shopping-lists-error-state-review
+    type: screen-review
+    screen: /shopping-lists
+    component: ShoppingListsPage.tsx
+    reviewed_at: "2026-04-23"
+    verdict: "✅ UX-approved pending QA — false empty state replaced by durable retry-first recovery"
+    details: |
+      Live re-review completed after Senior Engineer Beta delivered the GRO-394 implementation and
+      attached a five-viewport evidence package plus retry/recovery interaction proof.
+
+      Verified in code:
+      - the route now reads error state from both families and shopping-lists queries
+      - failure state branches before the empty/list render path
+      - the retry control is a real button with a stable accessible name
+      - the empty-state create CTA is suppressed while an error is active
+      - the page heading remains visible so the user keeps orientation
+
+      Verified in live Playwright review on http://localhost:3000/shopping-lists with mocked API responses:
+      - families failure and lists failure both render durable in-page alert cards
+      - the two failure paths use distinct plain-language copy
+      - "No shopping lists yet" does not appear during failure
+      - "New list" is not visible while an error is active
+      - layouts stay readable and uncrowded across phone, largePhone, tablet, narrowDesktop, and desktop
+
+      Review lens:
+      - purpose clarity: strong; the user still knows they are on Shopping Lists
+      - primary action clarity: corrected; retry is dominant during failure
+      - information hierarchy: valid; error state is visually and semantically distinct from empty state
+      - mobile completeness: valid; recovery path is complete on mobile, not desktop-only
+      - state visibility: materially improved via distinct household-vs-list failure copy
+      - error recovery: strong; durable alert + retry matches the mature route pattern for this app
+      - AuDHD suitability: improved because ambiguity and duplicate-list risk are removed
+      - responsive integrity: valid; larger viewports add space, not different behavior
+    acceptance_criteria_status:
+      - "Load failure does not collapse to false empty-state copy: ✅"
+      - "Families and lists failures have distinct recovery copy: ✅"
+      - "Retry action is visible and durable in-page: ✅"
+      - "New list CTA suppressed while error is active: ✅"
+      - "Page heading remains visible in error state: ✅"
+      - "Five-viewport evidence attached: ✅"
+      - "Live route verification completed by UI/UX: ✅"
+      - "QA dual gate posted: ⏳ PENDING"
+    next_action: "Wait for QA approval, then close GRO-394 while keeping broader shopping-list route audits in the proactive queue"
+    status: "approved_pending_qa"
+    linked_issue: "GRO-394"
+    severity: "high"
+
+  - id: gro-405-insight-note-review
+    type: screen-review
+    screen: /insights
+    component: InsightCard.tsx
+    reviewed_at: "2026-04-23"
+    verdict: "✅ APPROVED — dual sign-off complete"
+    details: |
+      Re-review completed after GRO-412 / GRO-415 delivered the missing evidence package.
+
+      Approved findings:
+      - textarea now has a visible label paired with htmlFor/id, fixing the earlier
+        placeholder-only accessibility failure
+      - the note field, action row, and conditional Submit note control hold together
+        cleanly across phone, largePhone, tablet, narrowDesktop, and desktop
+      - action + note, dismiss + note, and note-only flows all resolve into durable
+        in-card feedback rather than transient-only messaging
+      - the note capability is available on mobile without adding desktop-only behavior
+
+      Result:
+      - GRO-405 moved to done after QA + UI/UX sign-off
+      - child corrections GRO-412 and GRO-415 closed as complete
+    acceptance_criteria_status:
+      - "Textarea has stable visible accessible name: COMPLETE"
+      - "All 3 note response paths captured with live interaction proof: COMPLETE"
+      - "Five viewport evidence attached: COMPLETE"
+      - "Durable resolved-card note display verified: COMPLETE"
+      - "Mobile-first capability preserved: COMPLETE"
+    next_action: "Use this as the baseline pattern for future free-text response controls"
+    status: "approved"
+    sign_off_by: ["UI/UX Advisor", "QA Lead"]
+
+  - id: gro-512-insights-tab-switch-review
+    type: screen-review
+    screen: /insights
+    component: InsightsPage.tsx
+    reviewed_at: "2026-05-02"
+    verdict: "Not approved — the page-level Active / History switch behaves like a tabset without tab semantics and misses the mobile touch floor"
+    details: |
+      Proactive route coverage moved to the broader `/insights` page after route reconciliation confirmed
+      the route exists in App Router and nav, but the durable review ledger only tracked the narrower
+      GRO-405 note-response slice inside `InsightCard`.
+
+      Consulted before review:
+      - `docs/adr/001-tech-stack.md`
+      - `docs/api/rest-api.md`
+      - `frontend/src/app/insights/page.tsx`
+      - `frontend/src/components/insights/InsightCard.tsx`
+      - `frontend/src/components/insights/__tests__/InsightCard.test.tsx`
+
+      Confirmed in live rerun and source:
+      - the shipped `http://127.0.0.1:3000/insights` route renders across phone, largePhone, tablet,
+        narrowDesktop, and desktop
+      - the page-level **Active** / **History** switch is the primary route navigation between current
+        actions and past context
+      - on every reviewed viewport, both visible controls measure about **39px high**
+      - on every reviewed viewport, neither control exposes `role="tab"`, `aria-selected`, or
+        `aria-controls`
+      - current source renders plain buttons with `px-4 py-2` styling and no tablist / selected-panel
+        wiring
+
+      The already-approved note flow inside each insight card remains fine. The route-level problem is the
+      page shell: the main state switch is undersized for mobile and semantically invisible to assistive
+      tech even though the interaction model behaves like tabs. I created GRO-512 from this proactive live
+      audit, assigned it to the current insights implementation owner, and attached the full 5-viewport
+      evidence package there.
+    acceptance_criteria_status:
+      - "Active / History switch exposes an accessible selected-state model: BLOCKED"
+      - "The route-level switch uses correct tab semantics or an equally explicit alternative navigation pattern: BLOCKED"
+      - "Visible switch controls meet the 44px touch-target floor across all 5 project viewports: BLOCKED"
+      - "Fresh 5-viewport live evidence attached to correction issue: COMPLETE (GRO-512)"
+    next_action: "Land GRO-512, then rerun `/insights` live before continuing the broader route audit"
+    status: "blocked"
+    linked_issue: "GRO-512"
+    severity: "medium"
+
+  - id: insights-review-pending
+    type: screen-review
+    screen: /insights
+    component: InsightsPage.tsx + InsightCard.tsx
+    priority: "medium"
+    status: "partially_reviewed"
+    reason: "GRO-405 cleared the per-card note flow, but GRO-512 now captures the broader page-level Active / History switch defect and the route still needs a full audit"
+    notes: |
+      Reviewed slices completed:
+      - GRO-405 (2026-04-23) is dual-sign-off complete for the note textarea / note-only / resolved-note
+        flow inside each `InsightCard`
+      - GRO-512 (2026-05-02 proactive live audit) now captures the broader route-shell defect where the
+        page-level Active / History switch behaves like tabs without tab semantics and measures only 39px
+        high across all 5 reviewed viewports
+
+      Remaining route-wide audit still needed:
+      - active-vs-history scanability after GRO-512 lands
+      - page-shell hierarchy once resolved history grows longer
+      - confirmation that the selected state remains obvious without relying on color alone
+
+  - id: note-field-label-prompt-pattern
+    type: pattern
+    pattern_name: "visible label plus prompt placeholder for note fields"
+    usage: "Visible label carries meaning; placeholder offers prompting; resolved state keeps the saved note visible in context"
+    established_by: "GRO-405 insight note flow"
+    standard: true
+    status: "active"
+    notes: |
+      Good fit for AuDHD-friendly grocery UX:
+      - meaning is stable and screen-reader safe
+      - placeholder is not overloaded as the field label
+      - post-submit feedback stays attached to the card instead of disappearing
+
+  - id: shopping-list-detail-review-pending
+    type: screen-review
+    screen: /shopping-lists/[id]
+    component: ShoppingListDetailPage.tsx
+    priority: "high"
+    status: "partially_reviewed"
+    reason: "Structural completion/check-off flow is now reviewed; populated live-item readability is blocked by GRO-478"
+    notes: |
+      Coverage update (2026-04-30): proactive live audit of the shipped populated detail route
+      `http://127.0.0.1:3000/shopping-lists/b69342ce-f9db-4cb2-bf40-c98b5ab6c2d9` across phone,
+      largePhone, tablet, narrowDesktop, and desktop confirmed that the route's structure is present:
+      - back navigation is visible
+      - budget setting is inline
+      - the "Back from shopping?" completion banner is prominent
+      - progress summary is present
+      - the primary check-off buttons remain accessible and touch-safe after GRO-303
+
+      The remaining blocker is item-row readability, not route mechanics. Live populated data still leaks:
+      - recipe-fragment labels such as `/ 2.5 Oz Feta`, `/ 200G Block Of Cheese`, `Of Salt`,
+        and `Each Salt And Pepper`
+      - machine-shaped quantities such as `2.3 each`, `4.312 unit`, `6.325 unit`, `38.525 unit`,
+        and `13.8 each`
+      - raw-ish units such as `unit` and `tbsp_blend`
+      - a very large `Other` bucket that becomes cognitively expensive to scan in-store
+
+      Coverage update (2026-04-30, later heartbeat): GRO-480 supplied the evidence package and a first
+      shopper-normaliser pass, but substantive live rerun still found remaining imported-label residue
+      on the shipped populated route across all 5 project viewports. Persisting live examples included
+      `G/7oz Pre Shedded Coleslaw Mix`, `G/ 10 Oz`, `G/4 Oz Bacon`, `G/7oz Chicken`,
+      `X 150- 180g / 5 - 6 Oz Fish Fillets`, `Cups Milk`, and `Cream, Heavy / Thickened`.
+
+      GRO-482 now tracks the follow-up correction. Remaining follow-up after GRO-482:
+      - re-review the populated detail route with fresh live evidence on all 5 project viewports
+      - confirm the shared formatter path is genuinely cross-surface rather than detail-page-only
+      - assess whether category grouping is calmer once the remaining shopper-label leaks are gone
+
+  - id: gro-478-shopping-list-detail-readability-review
+    type: screen-review
+    screen: /shopping-lists/[id]
+    component: ShoppingListDetailPage.tsx
+    reviewed_at: "2026-04-30"
+    verdict: "Not approved — the populated detail route still leaks recipe-fragment labels and machine-shaped quantity formatting"
+    details: |
+      Proactive live UI/UX rerun completed against the shipped populated shopping-list detail route
+      `http://127.0.0.1:3000/shopping-lists/b69342ce-f9db-4cb2-bf40-c98b5ab6c2d9` with fresh
+      screenshots captured on phone, largePhone, tablet, narrowDesktop, and desktop.
+
+      What is working:
+      - the route preserves orientation with a visible back path to `/shopping-lists`
+      - the budget setter is available inline rather than hidden behind navigation
+      - the completion banner and progress summary make list state obvious
+      - the check-off control pattern remains accessible and touch-safe after GRO-303
+
+      Remaining blocker on the shipped route:
+      - line items still read like recipe fragments instead of household shopping rows
+      - live examples included `/ 2.5 Oz Feta`, `/ 200G Block Of Cheese`, `Of Salt`, and
+        `Each Salt And Pepper`
+      - quantities still leak machine precision such as `2.3 each`, `4.312 unit`, `6.325 unit`,
+        `38.525 unit`, and `13.8 each`
+      - raw-ish units such as `unit` and `tbsp_blend` still surface directly to the household
+      - the overloaded `Other` group becomes a dense translation task rather than a scannable section
+
+      This is a high-severity shopper-readability failure because the main in-store route still demands
+      unnecessary decoding before the user can trust what to buy. The problem persists from phone through
+      desktop, so larger viewports do not actually reduce the cognitive load.
+    acceptance_criteria_status:
+      - "Visible shopping-list rows use shopper-friendly plain-language item names: BLOCKED"
+      - "Quantity display avoids raw calculation precision on the household route: BLOCKED"
+      - "Units shown to the household are plain-language and shopper-safe: BLOCKED"
+      - "Populated category groups stay scannable on phone after normalization: BLOCKED"
+      - "Fresh live evidence captured on a populated route across all 5 project viewports: COMPLETE"
+      - "Correction issue filed and assigned: COMPLETE (GRO-478)"
+    next_action: "Land GRO-478, then re-review the shipped populated detail route with fresh live evidence"
+    status: "blocked"
+    related_issue: "GRO-478"
+    severity: "high"
+
+  - id: gro-479-shopping-list-detail-evidence-gate
+    type: screen-review
+    screen: /shopping-lists/[id]
+    component: ShoppingListDetailPage.tsx + shoppingDisplay.ts + ShoppingListItemResponse display fields
+    reviewed_at: "2026-04-30"
+    verdict: "Not approved — the shopper-facing normaliser changes are still blocked at the evidence gate"
+    details: |
+      GRO-479 moved into `in_review` with an implementation summary for the shopper-facing normaliser
+      that is meant to address GRO-478's populated shopping-list readability blocker.
+
+      I re-read the current UI/UX sign-off rules plus:
+      - `docs/adr/001-tech-stack.md`
+      - `docs/api/data-model.md`
+      - `docs/api/rest-api.md`
+
+      I then checked the parent GRO-479 thread and issue attachments. The issue currently has:
+      - no attachments
+      - no `ui-visual-capture` output
+      - no screenshot set for all 5 required project viewports
+      - no explicit live browser interaction proof on the populated shipped `/shopping-lists/<id>` route
+
+      Because this is a visible shipped UI change already in `in_review`, the missing evidence is an
+      immediate UI/UX rejection rather than a low-confidence approval. I did not run the substantive
+      review lens yet because the review floor was not met. Correction issue GRO-481 was created and
+      assigned to the implementation owner so GRO-479 does not sit as a silent block.
+
+      Coverage boundary:
+      - this records the evidence-gate rejection only
+      - the underlying shopper-readability fix still needs a real populated-route UI/UX rerun once the
+        evidence package exists on the parent
+    acceptance_criteria_status:
+      - "ui-visual-capture package attached to issue: ❌ missing"
+      - "All 5 project viewport screenshots attached: ❌ missing"
+      - "Explicit live interaction proof on shipped populated `/shopping-lists/<id>` route: ❌ missing"
+      - "Substantive UI/UX review against required lens: ⏳ blocked until evidence exists"
+    next_action: "Land GRO-481, then resubmit GRO-479 with the full evidence package for real populated-route UI/UX review"
+    status: "correction_requested"
+    linked_issue: "GRO-479"
+    correction_issue: "GRO-481"
+    severity: "high"
+
+  - id: gro-479-shopping-list-detail-substantive-review
+    type: screen-review
+    screen: /shopping-lists/[id]
+    component: ShoppingListDetailPage.tsx + shoppingDisplay.ts + category fallback grouping
+    reviewed_at: "2026-04-30"
+    verdict: "Not approved — the worst label/quantity leakage is fixed, but the route still is not shopper-calm enough to trust in-store"
+    details: |
+      GRO-479 later supplied the missing evidence package: five attached screenshots covering phone,
+      largePhone, tablet, narrowDesktop, and desktop, plus explicit live-route notes for the populated
+      shopping-list detail page.
+
+      I then ran the substantive UI/UX pass on the shipped populated route
+      `http://127.0.0.1:3000/shopping-lists/b69342ce-f9db-4cb2-bf40-c98b5ab6c2d9`.
+
+      What is now clearly better:
+      - the earlier gross parser leakage (`/ 2.5 Oz Feta`, `Of Salt`, long-decimal quantities) no
+        longer dominates the household list
+      - route orientation remains strong via the back path, budget setter, completion banner, and
+        visible progress
+      - the check-off controls remain touch-safe and the improvement holds across all 5 project viewports
+
+      Remaining blockers from the live rerun:
+      - the `Other` bucket still contains 46 items on the shipped page, so it remains effectively a
+        second main list rather than an exceptional catch-all
+      - several visible labels still read like parser residue or recipe-note phrasing instead of
+        shopper nouns, including `G/7oz Pre Shedded Coleslaw Mix`, `G/ 10 Oz`, `G/4 Oz Bacon`,
+        `G/7oz Chicken`, `X 150- 180g / 5 - 6 Oz Fish Fillets`, `Coriander/cilantro`,
+        `Cilantro / Coriander`, `Thickened / Heavy Cream`, `Cream, Heavy / Thickened`, and
+        `Fresh Thyme or Rosemary`
+      - some rows remain instruction-shaped or ambiguous rather than purchase-shaped, for example
+        `Your Favourite Spice`, `Fat`, and `Flavouring`
+
+      UX verdict:
+      - purpose clarity and primary action clarity are improved
+      - mobile completeness is present
+      - but scanability, AuDHD suitability, and information hierarchy are still not good enough because
+        shoppers still have to translate too many rows under fatigue
+
+      I created GRO-483 for the remaining shopper-language cleanup and category regrouping work, and
+      returned the parent to `in_review` because the route is no longer evidence-blocked — it is now
+      blocked by substantive UI quality.
+    acceptance_criteria_status:
+      - "Evidence package attached on parent GRO-479: COMPLETE"
+      - "Worst `/` / `Of` / long-decimal leakage removed from the populated route: COMPLETE"
+      - "Visible labels all read like shopper-trustworthy grocery lines: BLOCKED"
+      - "`Other` becomes a genuinely exceptional small bucket: BLOCKED"
+      - "Route stays calm and scannable for mobile in-store use across all 5 viewports: BLOCKED"
+      - "Follow-up correction issue filed and assigned: COMPLETE (GRO-483)"
+    next_action: "Land GRO-483, then re-review GRO-479 on the shipped populated route"
+    status: "blocked"
+    linked_issue: "GRO-479"
+    parent_issue: "GRO-478"
+    correction_issue: "GRO-483"
+    severity: "high"
+
+  - id: gro-479-shopping-list-detail-post-gro-483-rerun
+    type: screen-review
+    screen: /shopping-lists/[id]
+    component: ShoppingListDetailPage.tsx + shoppingDisplay.ts + shopping_display.py + category fallback grouping
+    reviewed_at: "2026-04-30"
+    verdict: "Not approved — fresh post-GRO-483 evidence exists, but the live route still fails the shopper-readability bar"
+    details: |
+      GRO-479 later received a fresh post-fix evidence package in
+      [GRO-479#comment-b18ed8b8](/GRO/issues/GRO-479#comment-b18ed8b8), explicitly positioned as the
+      new proof set after [GRO-483](/GRO/issues/GRO-483) and [GRO-482](/GRO/issues/GRO-482).
+
+      I treated that as a real substantive rerun request and re-checked:
+      - the new parent attachments
+      - the live populated shipped route `http://127.0.0.1:3000/shopping-lists/b69342ce-f9db-4cb2-bf40-c98b5ab6c2d9`
+      - a fresh local mobile rerun of the same route
+
+      What is still wrong on the live route:
+      - parser-shaped labels are still visible, including `Thickened / Heavy Cream`,
+        `Cream, Heavy / Thickened`, `Coriander/cilantro`, `Fresh Thyme or Rosemary`, `G/ 10 Oz`,
+        `G/4 Oz Bacon`, and `G/7oz Chicken`
+      - the `Other` group still contains 46 items on the live route, so it remains a second main list
+        rather than a calm exception bucket
+      - the route therefore still creates too much translation work before a shopper can trust the row
+        and act quickly under fatigue
+
+      Evidence-quality note:
+      - the new attached phone screenshot is only a loading spinner, so although the parent now has
+        fresh evidence and the route was reviewable live, that specific mobile attachment is not
+        valid loaded-state proof
+
+      UX verdict:
+      - purpose clarity and task mechanics are intact
+      - but row trust, scanability, AuDHD suitability, and responsive integrity are still blocked by
+        the remaining parser residue and oversized catch-all grouping
+    acceptance_criteria_status:
+      - "Fresh post-GRO-483 evidence package attached on parent GRO-479: COMPLETE"
+      - "Loaded-state mobile screenshot in the fresh parent evidence pack: BLOCKED"
+      - "Visible labels all read like shopper-trustworthy grocery lines: BLOCKED"
+      - "`Other` becomes a genuinely exceptional small bucket: BLOCKED"
+      - "Route stays calm and scannable for mobile in-store use after GRO-483: BLOCKED"
+    next_action: "Keep GRO-483 active, then re-review GRO-479 only once the live route actually removes the remaining parser labels, materially shrinks `Other`, and includes clean loaded-state mobile proof"
+    status: "blocked"
+    linked_issue: "GRO-479"
+    parent_issue: "GRO-478"
+    correction_issue: "GRO-483"
+    severity: "high"
+
+  - id: gro-480-shopping-list-normaliser-rerun
+    type: screen-review
+    screen: /shopping-lists/[id]
+    component: ShoppingListDetailPage.tsx + shoppingDisplay.ts + shopping_display.py + WorkflowRunnerPage.tsx
+    reviewed_at: "2026-04-30"
+    verdict: "Not approved — the populated route still leaks shopper-hostile importer residue after the first normaliser pass"
+    details: |
+      GRO-480 moved past the evidence gate with a real 5-viewport package and explicit live-route
+      claim, so this rerun was a substantive UI/UX review against the shipped populated detail route
+      `http://127.0.0.1:3000/shopping-lists/b69342ce-f9db-4cb2-bf40-c98b5ab6c2d9`.
+
+      I re-read the landed normaliser code on both sides plus the affected shopping-list surfaces, then
+      re-ran the live route locally across phone, largePhone, tablet, narrowDesktop, and desktop.
+
+      What is improved:
+      - the obvious earlier leftovers like `/ 2.5 Oz Feta`, `Of Salt`, and `Each Salt And Pepper`
+        are now cleaned up
+      - machine-precision `unit` rows cited in GRO-478 are no longer the dominant visible problem
+      - the route still keeps the good structural work from earlier passes: visible back path, inline
+        budget setter, prominent completion banner, progress summary, and touch-safe check-off controls
+
+      Remaining blocker on the shipped populated route:
+      - visible line items still include shopper-hostile leftovers such as
+        `G/7oz Pre Shedded Coleslaw Mix`, `G/ 10 Oz`, `G/4 Oz Bacon`, `G/7oz Chicken`,
+        `X 150- 180g / 5 - 6 Oz Fish Fillets`, `Cups Milk`, and `Cream, Heavy / Thickened`
+      - those failures persist from phone through desktop, so larger screens do not actually reduce the
+        translation cost
+      - the current normaliser still looks too prefix-only for the remaining dirty patterns
+      - the promised shared rollout is incomplete in code: `WorkflowRunnerPage.tsx` still renders raw
+        `unmatched_items` strings directly, so the cross-surface consistency requirement is not yet
+        convincingly closed
+
+      This remains a high-severity shopper-readability blocker because the user still has to decode
+      importer residue in the core one-handed in-store route before trusting what to buy.
+    acceptance_criteria_status:
+      - "No visible shopper-hostile importer residue on the populated detail route: BLOCKED"
+      - "Plain-language row labels hold across all 5 project viewports: BLOCKED"
+      - "Current normaliser covers the still-live `G/`, `X ... / ...`, comma/slash, and `Cups ...` patterns: BLOCKED"
+      - "Shared formatter path is rolled through the remaining shopper-visible surfaces: BLOCKED"
+      - "Fresh live rerun completed on the populated route across all 5 project viewports: COMPLETE"
+      - "Correction issue filed and assigned: COMPLETE (GRO-482)"
+    next_action: "Land GRO-482, then re-review GRO-480 on the shipped populated route before reconsidering approval"
+    status: "blocked"
+    linked_issue: "GRO-480"
+    correction_issue: "GRO-482"
+    severity: "high"
+
+  - id: shopping-workflow-review-pending
+    type: screen-review
+    screen: /shopping-lists/workflow
+    component: WorkflowRunnerPage.tsx
+    priority: "high"
+    status: "partially_reviewed"
+    reason: "Error-state, touch-target, and route-framing slices are now covered; broader run-result and populated-history behavior still need follow-up"
+    notes: |
+      Coverage update (2026-04-30): GRO-390 is now cleared after the child correction GRO-462 landed.
+      The shipped route no longer masks failed family / workflow-runs fetches as empty setup states, and
+      the runs-error Retry control now meets the 44px mobile touch-target floor. Both QA and UI/UX
+      approvals are present through the final child iteration, so this route's error-state / recovery
+      slice should be treated as reviewed and resolved rather than an active blocker.
+
+      Coverage update (2026-04-30): proactive live audit of `http://localhost:3000/shopping-lists/workflow`
+      across phone, largePhone, tablet, narrowDesktop, and desktop found the next uncovered route-level
+      problem after GRO-390 and GRO-391: the page still frames itself as an internal process surface.
+
+      Confirmed in live captures and code:
+      - the page title still leads with `Shopping Workflow`
+      - the main card still uses `Run weekly workflow`
+      - the primary CTA still says `Run workflow`
+      - the preflight state still confirms a `workflow run`
+      - the route remains readable, but household users must translate system language before deciding to
+        trigger a real cart-affecting action
+
+      GRO-457 was created to correct that framing problem and assigned to Lead Engineer. Remaining route-
+      wide follow-up after GRO-457:
+      - review result-state reassurance once a real recent-run history is present
+      - review interruption/resumption clarity with populated history and partial outcomes
+
+      Coverage update (2026-04-30, later heartbeat): GRO-457 is now UI-approved and QA-approved after
+      a fresh live rerun on the shipped `http://localhost:3000/shopping-lists/workflow` route across
+      phone, largePhone, tablet, narrowDesktop, and desktop plus a second-step preflight check. The
+      shipped surface now consistently reframes the job in household language:
+      - page title `Prepare this week's shop`
+      - subtitle `Build your shopping list and send it to your Woolworths cart in one step`
+      - trigger card `Get this week's shop ready`
+      - primary CTA `Prepare my shop`
+      - preflight heading `Ready to send to your Woolworths cart?`
+
+      Fresh UI/UX rerun measurements confirmed the primary CTA and both preflight actions are 44px high
+      on all 5 project viewports. This clears the route-framing blocker; the remaining proactive review
+      gap is the richer interruption/resumption story once the page has more populated history / result
+      states to assess.
+
+  - id: gro-390-shopping-workflow-error-state-review
+    type: screen-review
+    screen: /shopping-lists/workflow
+    component: WorkflowRunnerPage.tsx
+    reviewed_at: "2026-04-30"
+    verdict: "✅ Approved — workflow fetch failures now surface honest, section-appropriate recovery states and the last mobile touch-target blocker is cleared"
+    details: |
+      GRO-390 originally identified two harmful false-empty-state paths on the shopping workflow route:
+      failed household loading fell through to setup guidance, and failed workflow-run history loading
+      fell through to `No shop runs yet.`. The functional fix landed first, then QA found one remaining
+      UI blocker: the inline `Recent shop runs` Retry control was only 34px high on mobile. GRO-462
+      corrected that last touch-target issue.
+
+      Verified outcome from the final child iteration:
+      - family-query failures now render a durable `Couldn't load your household` recovery panel
+      - workflow-runs failures now render an inline `Couldn't load recent shop runs` state scoped to
+        the `Recent shop runs` card
+      - the route no longer lies about setup / history existence when data has actually failed to load
+      - the runs-error Retry control now measures 83.36x44px on phone and largePhone
+      - retry recovery returns cleanly to the successful empty-history state instead of jumping through
+        an ambiguous placeholder path
+      - QA approval is present on GRO-462 and UI/UX approval was posted on the same final iteration
+
+      UX verdict:
+      - **Purpose clarity:** recovered because the route now tells the truth about load failures
+      - **Primary action clarity:** users no longer get nudged toward unsafe duplicate runs when history is unavailable
+      - **Information hierarchy:** route-level vs section-level failures are now placed where the problem occurs
+      - **Error recovery:** durable, explicit, and mobile-tappable
+      - **AuDHD suitability:** ambiguity is materially lower because false setup language is gone
+    acceptance_criteria_status:
+      - "Family query error renders a durable recovery state: ✅"
+      - "Workflow-runs query error renders a durable inline recovery state: ✅"
+      - "Empty states only appear after successful empty responses: ✅"
+      - "Main workflow action remains guarded by truthful family context: ✅"
+      - "Runs-error Retry control meets 44px mobile floor: ✅"
+      - "QA approval present on final iteration: ✅"
+      - "UI/UX approval present on final iteration: ✅"
+    next_action: "Treat GRO-390 as closed; keep broader populated-history / result-state reassurance review on the proactive queue"
+    status: "approved"
+    sign_off_by: ["UI/UX Advisor", "QA Lead"]
+    related_issue: "GRO-390"
+    correction_issue: "GRO-462"
+
+  - id: gro-457-shopping-workflow-language-review
+    type: screen-review
+    screen: /shopping-lists/workflow
+    component: WorkflowRunnerPage.tsx
+    reviewed_at: "2026-04-30"
+    verdict: "✅ UI-approved — the route now frames the action as preparing this week's shop instead of running an internal workflow"
+    details: |
+      Final UI/UX sign-off rerun completed against the shipped `http://localhost:3000/shopping-lists/workflow`
+      route with fresh screenshots captured on phone, largePhone, tablet, narrowDesktop, and desktop plus
+      preflight captures at all 5 project viewports.
+
+      Confirmed in the fresh live rerun and current shipped copy:
+      - page title `Prepare this week's shop`
+      - subtitle `Build your shopping list and send it to your Woolworths cart in one step`
+      - trigger card title `Get this week's shop ready`
+      - main CTA `Prepare my shop`
+      - preflight heading `Ready to send to your Woolworths cart?`
+      - preflight body explains the real-world consequence in plain household language
+      - `Recent shop runs` is acceptable for this IA slice and no longer reads as the page's primary identity
+
+      Fresh UI/UX measurements on the rerun confirmed:
+      - primary CTA is 44px high on all 5 project viewports
+      - `Yes, send to cart` is 44px high on all 5 project viewports
+      - `Cancel` is 44px high on all 5 project viewports
+
+      This clears the route-framing blocker GRO-457 was created for. The remaining route-level follow-up
+      is a separate proactive audit of populated history / result reassurance, not a blocker for this issue.
+    acceptance_criteria_status:
+      - "Route uses household task language instead of internal workflow terminology: ✅"
+      - "Page title/subtitle describe the user job clearly: ✅"
+      - "Primary CTA describes the shopping action in plain language: ✅"
+      - "Preflight confirmation uses trustworthy household-facing copy: ✅"
+      - "Live evidence captured on all 5 project viewports plus preflight rerun: ✅"
+      - "UI/UX approval posted after fresh rerun: ✅"
+      - "QA approval present on final copy iteration: ✅"
+    next_action: "Keep broader workflow-history / result-state review on the proactive queue; GRO-457 itself can close"
+    status: "approved"
+    related_issue: "GRO-457"
+
+  - id: gro-343-rating-feedback-review
+    type: screen-review
+    screen: /recipes
+    component: RecipeBrowserPage.tsx (RatingPanel)
+    reviewed_at: "2026-04-23"
+    verdict: "QA approved; awaiting UI/UX Advisor for dual sign-off"
+    details: |
+      Live Playwright verification against http://localhost:3000/recipes matched the submitted evidence package.
+      - Success path: Thomas 4★→5★ POSTed to /api/v1/recipes/.../ratings and rendered Saved ✓ for the current member.
+      - Member-switch regression fixed: switching Thomas → Isabelle cleared inline Saved ✓ immediately.
+      - Forced 500 failure left durable inline error copy ("Could not save — please try again.") in-card after the toast cycle.
+      - Keyboard order reached member select → star buttons (Rate 1..5 stars) → Save.
+      Phone and desktop spot-checks were clean in-context; no visible crowding in the compact rating panel.
+    acceptance_criteria_status:
+      - "No stale Saved ✓ after member switch: COMPLETE"
+      - "Durable inline error after failed save: COMPLETE"
+      - "Success state scoped to current member: COMPLETE"
+      - "Lightweight inline pattern preserved: COMPLETE"
+      - "Visual evidence on live route: COMPLETE"
+    next_action: "Await UI/UX Advisor sign-off before moving GRO-343 to done"
+    status: "qa_approved_pending_ux"
+
+  - id: gro-405-insights-note-rereview
+    type: screen-review
+    screen: /insights
+    component: InsightCard.tsx
+    reviewed_at: "2026-04-23"
+    verdict: "Superseded by final dual-sign-off record"
+    details: |
+      GRO-412 delivered the visible textarea label and the combined evidence package for GRO-405/GRO-415.
+      Live /insights verification on 2026-04-23 confirmed:
+      - labelled textarea accessible by role+name ("Add a note (optional)")
+      - prompt-style placeholder copy instead of placeholder-only labelling
+      - Submit note appears when text is entered without phone-layout crowding
+      - focusable order keeps textarea before action/dismiss controls
+      - live route matches the attached 5-viewport screenshots and interaction recordings
+      This record is retained as the intermediate QA-passed checkpoint only.
+    acceptance_criteria_status:
+      - "Stable accessible name on textarea: COMPLETE"
+      - "All 5 viewport screenshots attached: COMPLETE"
+      - "Live interaction proof for 3 note paths: COMPLETE"
+      - "Parent issue QA verdict: COMPLETE"
+      - "Parent issue UI/UX verdict: COMPLETE (see gro-405-insight-note-review)"
+    next_action: "Use gro-405-insight-note-review as the canonical final record"
+    status: "superseded"
+    superseded_by: "gro-405-insight-note-review"
+
+  - id: gro-412-insights-correction-review
+    type: screen-review
+    screen: /insights
+    component: InsightCard.tsx
+    reviewed_at: "2026-04-23"
+    verdict: "Superseded by final parent closeout"
+    details: |
+      Correction issue for GRO-405 accessible label + evidence capture.
+      Live route confirms the label/placeholder fix is present and the combined evidence package
+      attached to GRO-412 satisfies the requested viewport + interaction coverage.
+      QA approval comment posted on GRO-412 on 2026-04-23. The correction path later closed
+      through the approved parent GRO-405 review.
+    acceptance_criteria_status:
+      - "Accessible label added: COMPLETE"
+      - "Combined evidence package attached: COMPLETE"
+      - "QA correction verdict: COMPLETE"
+      - "UI/UX correction verdict: COMPLETE via GRO-405 parent closeout"
+    next_action: "Refer to gro-405-insight-note-review for the final merged verdict"
+    status: "superseded"
+    superseded_by: "gro-405-insight-note-review"
+
+  - id: gro-415-insights-evidence-review
+    type: screen-review
+    screen: /insights
+    component: InsightCard.tsx
+    reviewed_at: "2026-04-23"
+    verdict: "Superseded by final parent closeout"
+    details: |
+      GRO-415 requested five-viewport screenshots and live interaction proof for the insight note flows.
+      The required package is attached through GRO-412 and matches the current live /insights route.
+      QA approval comment posted on GRO-415 on 2026-04-23; no further engineer action was needed
+      once GRO-405 was approved and moved to done.
+    acceptance_criteria_status:
+      - "Parent remains in review until evidence posted: COMPLETE"
+      - "All 5 project viewports covered: COMPLETE"
+      - "Live browser interaction notes included: COMPLETE"
+      - "QA evidence verdict: COMPLETE"
+      - "UI/UX evidence verdict: COMPLETE via GRO-405 parent closeout"
+    next_action: "Refer to gro-405-insight-note-review for the final merged verdict"
+    status: "superseded"
+    superseded_by: "gro-405-insight-note-review"
+
+  - id: gro-378-dashboard-recipe-drawer-review
+    type: screen-review
+    screen: /dashboard (NextMealHero -> RecipeDrawer)
+    component: NextMealHero.tsx + RecipeDrawer.tsx
+    reviewed_at: "2026-04-23"
+    verdict: "✅ APPROVED — deterministic ingredient names now hold across the hero drawer and shared recipe-detail path"
+    details: |
+      Final re-review completed after GRO-421 landed and QA re-ran the live app.
+
+      The corrected path now does the right job:
+      - `RecipeDrawer.tsx` uses the shared per-id `IngredientRow` path instead of a paginated
+        first-page ingredient list lookup
+      - `RecipeDetailModal.tsx` follows the same deterministic rendering path
+      - `RecipeDetailPage.tsx` reuses the same shared component, keeping the name-rendering
+        contract aligned across recipe surfaces
+
+      UX outcome on the live route:
+      - the dashboard hero drawer now shows human-readable ingredient names instead of false
+        fallback rows
+      - no raw UUIDs are visible
+      - no false `Unknown ingredient` / `Ingredient unavailable` rows appeared during the
+        reviewed live flows
+      - the drawer footer still preserves 44px controls on phone and desktop
+
+      This restores purpose clarity to the hero CTA: opening `View Recipe` now helps the
+      household inspect the next meal quickly and trust what they are seeing.
+    acceptance_criteria_status:
+      - "Fresh ui-visual-capture evidence attached: COMPLETE"
+      - "Hero CTA visible and drawer opens across 5 viewports: COMPLETE"
+      - "Footer CTA 44px floor preserved: COMPLETE"
+      - "No raw UUIDs visible: COMPLETE"
+      - "All visible ingredient rows show human-readable names: COMPLETE"
+      - "QA dual gate posted after live rerun: COMPLETE"
+    next_action: "Treat the broader whole-dashboard IA audit as separate follow-up work"
+    status: "approved"
+    linked_issue: "GRO-421"
+    severity: "resolved"
+    sign_off_by: ["UI/UX Advisor", "QA Lead"]
+
+  - id: gro-421-dashboard-ingredient-followup
+    type: screen-review
+    screen: /dashboard (NextMealHero -> RecipeDrawer) + /recipes (RecipeDetailModal)
+    component: RecipeDrawer.tsx + RecipeDetailModal.tsx + shared IngredientRow extraction
+    reviewed_at: "2026-04-23"
+    verdict: "Correction complete; superseded by the approved parent surface review"
+    details: |
+      GRO-421 delivered the implementation correction that unblocked GRO-378:
+      - shared `IngredientRow` extracted for deterministic per-id ingredient lookups
+      - dashboard drawer and recipe detail modal moved off the broken paginated list query
+      - recipe detail page now shares the same ingredient-name rendering contract
+      - fresh five-viewport evidence was attached and QA re-ran the live route successfully
+
+      The issue-specific correction is complete. The canonical UX record now lives on the
+      parent screen review (`gro-378-dashboard-recipe-drawer-review`), where the live
+      hero flow was approved.
+    acceptance_criteria_status:
+      - "Technical spec reviewed and aligned with UX blocker: COMPLETE"
+      - "Issue is implementation-complete and ready for UI review: COMPLETE"
+      - "Drawer shows deterministic human-readable names for existing ingredients: COMPLETE"
+      - "Recipe detail modal uses the same deterministic path: COMPLETE"
+      - "Fresh five-viewport live evidence attached: COMPLETE"
+    next_action: "Refer to gro-378-dashboard-recipe-drawer-review for the final surface verdict"
+    status: "superseded"
+    linked_issue: "GRO-421"
+    parent_issue: "GRO-378"
+    severity: "resolved"
+    superseded_by: "gro-378-dashboard-recipe-drawer-review"
