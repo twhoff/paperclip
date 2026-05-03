@@ -763,12 +763,20 @@ export async function runChildProcess(
     const mergedEnv = ensurePathInEnv(rawMerged);
     void resolveSpawnTarget(command, args, opts.cwd, mergedEnv)
       .then((target) => {
-        const child = spawn(target.command, target.args, {
-          cwd: opts.cwd,
-          env: mergedEnv,
-          shell: false,
-          stdio: [opts.stdin != null ? "pipe" : "ignore", "pipe", "pipe"],
-        }) as ChildProcessWithEvents;
+        let child: ChildProcessWithEvents;
+        try {
+          child = spawn(target.command, target.args, {
+            cwd: opts.cwd,
+            env: mergedEnv,
+            shell: false,
+            stdio: [opts.stdin != null ? "pipe" : "ignore", "pipe", "pipe"],
+          }) as ChildProcessWithEvents;
+        } catch (err) {
+          const msg = `Failed to start command "${command}" in "${opts.cwd}": ${
+            err instanceof Error ? err.message : String(err)
+          }`;
+          throw new Error(msg);
+        }
         const startedAt = new Date().toISOString();
 
         if (opts.stdin != null && child.stdin) {
