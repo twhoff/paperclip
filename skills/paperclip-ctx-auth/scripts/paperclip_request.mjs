@@ -1,3 +1,13 @@
+/**
+ * @deprecated Use paperclip_context_mode_request.mjs instead.
+ *
+ * This legacy helper is retained because it includes a DB-based identity
+ * fallback (via `psql`) that the canonical cached helper does not provide.
+ * Only import this file from non-sandboxed contexts where psql is on PATH
+ * and env vars (PAPERCLIP_AGENT_ID/COMPANY_ID/ADAPTER_TYPE) cannot be set.
+ *
+ * For ctx_execute and any new caller, import paperclip_context_mode_request.mjs.
+ */
 import { execFileSync } from "node:child_process";
 import { createHmac, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";

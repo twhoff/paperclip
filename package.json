@@ -13,6 +13,7 @@
     "typecheck": "pnpm -r typecheck",
     "test": "vitest",
     "test:run": "vitest run",
+    "test:skills": "node --test skills/paperclip-ctx-auth/scripts/__tests__/*.test.mjs",
     "db:generate": "pnpm --filter @paperclipai/db generate",
     "db:migrate": "pnpm --filter @paperclipai/db migrate",
     "secrets:migrate-inline-env": "tsx scripts/migrate-inline-env-secrets.ts",
