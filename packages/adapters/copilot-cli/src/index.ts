@@ -15,7 +15,6 @@ export const modelEffortSupport: Record<string, readonly string[]> = {
   "gpt-5.4-mini": ["low", "medium", "high", "xhigh"],
   "gpt-5-mini": ["low", "medium", "high"],
   "claude-sonnet-4.6": ["low", "medium", "high"],
-  "claude-opus-4.7": ["low", "medium", "high"],
 };
 
 export const models = [

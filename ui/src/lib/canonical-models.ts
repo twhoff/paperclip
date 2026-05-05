@@ -54,13 +54,6 @@ export const CANONICAL_MODELS: Record<string, CanonicalModel> = {
       copilot_cli: "claude-opus-4.7-1m",
     },
   },
-  "claude-opus-4.6": {
-    label: "Claude Opus 4.6",
-    adapters: {
-      claude_local: "claude-opus-4-6",
-      cursor: "opus-4.6",
-    },
-  },
   "claude-sonnet-4.6": {
     label: "Claude Sonnet 4.6",
     adapters: {
@@ -223,7 +216,6 @@ export const CANONICAL_MODELS: Record<string, CanonicalModel> = {
  * Key = cursor model ID, value = canonical effort level.
  */
 export const CURSOR_THINKING_MODELS: Record<string, string> = {
-  "opus-4.6-thinking": "high",
   "opus-4.5-thinking": "high",
   "sonnet-4.6-thinking": "high",
   "sonnet-4.5-thinking": "high",
@@ -269,7 +261,7 @@ export const CANONICAL_EFFORT_LEVELS: Record<string, CanonicalEffortLevel> = {
   xhigh: {
     label: "Extra High",
     adapters: {
-      // xhigh is copilot-cli-only; falls back to "high" for other adapters via translateEffort
+      claude_local: { field: "effort", value: "xhigh" },
       copilot_cli: { field: "reasoningEffort", value: "xhigh" },
       pi_local: { field: "thinking", value: "xhigh" },
     },
@@ -285,7 +277,7 @@ export const CANONICAL_EFFORT_LEVELS: Record<string, CanonicalEffortLevel> = {
   max: {
     label: "Max",
     adapters: {
-      // max is opencode-only; falls back to "high" for other adapters via translateEffort
+      claude_local: { field: "effort", value: "max" },
       opencode_local: { field: "variant", value: "max" },
     },
   },
