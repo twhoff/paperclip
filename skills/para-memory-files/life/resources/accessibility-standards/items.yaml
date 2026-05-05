@@ -13,8 +13,8 @@
   timestamp: "2026-04-22"
   source: "GRO-393"
   status: active
-  last_accessed: "2026-04-22"
-  access_count: 1
+  last_accessed: "2026-05-05"
+  access_count: 2
 
 - id: a11y-003
   fact: "Autocomplete workflows require ARIA combobox semantics: aria-autocomplete, aria-controls, aria-expanded on search input; role=listbox/option on suggestions."
@@ -49,5 +49,5 @@
   timestamp: "2026-04-22"
   source: "GRO-393"
   status: active
-  last_accessed: "2026-04-22"
-  access_count: 1
+  last_accessed: "2026-05-05"
+  access_count: 2

@@ -3148,3 +3148,25 @@ facts:
     parent_issue: "GRO-378"
     severity: "resolved"
     superseded_by: "gro-378-dashboard-recipe-drawer-review"
+
+  - id: ui-evidence-fresh-handoff-contract-2026-05-05
+    type: review-policy
+    reviewed_at: "2026-05-05"
+    verdict: "Fresh UI resubmissions must stand on their own current evidence package"
+    details: |
+      GRO-585 and GRO-605 reinforced an important QA queue rule: when a fresh UI
+      handoff @mentions reviewers, QA should reject at the evidence gate if that
+      current handoff does not paste the current `ui-visual-capture` output and
+      explicit live interaction proof for the current run.
+
+      Earlier screenshots or capture output elsewhere on the same issue do not
+      automatically satisfy the current resubmission if the new handoff asks
+      reviewers to trust code-diff-only narration for the claimed fix.
+    acceptance_criteria_status:
+      - "Current handoff includes ui-visual-capture output block: REQUIRED"
+      - "Current handoff includes explicit live interaction proof: REQUIRED"
+      - "Reviewer-visible proof covers the currently claimed fix, not code-diff-only narration: REQUIRED"
+    next_action: "Apply this rule before reopening parent issues that depend on correction-lane evidence"
+    status: "active"
+    linked_issue: "GRO-585"
+    related_issues: ["GRO-605", "GRO-602"]
