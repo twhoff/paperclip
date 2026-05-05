@@ -431,8 +431,93 @@ function parseYamlBlock(
   return { value: record, nextIndex: index };
 }
 
+function foldYamlBlockScalars(raw: string): string {
+  const inputLines = raw.split("\n");
+  const output: string[] = [];
+  let i = 0;
+  const blockKeyRe = /^(\s*)([A-Za-z_][\w-]*)\s*:\s*([>|])([-+]?)\s*$/;
+  while (i < inputLines.length) {
+    const line = inputLines[i]!;
+    const match = blockKeyRe.exec(line);
+    if (!match) {
+      output.push(line);
+      i += 1;
+      continue;
+    }
+    const leadingIndent = match[1] ?? "";
+    const key = match[2]!;
+    const style = match[3]!;
+    const chomp = match[4] ?? "";
+    const parentIndent = leadingIndent.length;
+
+    const continuation: string[] = [];
+    i += 1;
+    while (i < inputLines.length) {
+      const candidate = inputLines[i]!;
+      if (candidate.trim() === "") {
+        continuation.push("");
+        i += 1;
+        continue;
+      }
+      const indent = candidate.match(/^ */)?.[0].length ?? 0;
+      if (indent <= parentIndent) break;
+      continuation.push(candidate.replace(/\s+$/, ""));
+      i += 1;
+    }
+    while (continuation.length > 0 && continuation[continuation.length - 1] === "") {
+      continuation.pop();
+    }
+
+    if (continuation.length === 0) {
+      output.push(`${leadingIndent}${key}: ""`);
+      continue;
+    }
+
+    const blockIndent = Math.min(
+      ...continuation
+        .filter((c) => c !== "")
+        .map((c) => c.match(/^ */)?.[0].length ?? 0),
+    );
+    const dedented = continuation.map((c) => (c === "" ? "" : c.slice(blockIndent)));
+
+    let joined: string;
+    if (style === "|") {
+      joined = dedented.join("\n");
+    } else {
+      const segments: string[] = [];
+      let paragraph: string[] = [];
+      const flushParagraph = () => {
+        if (paragraph.length > 0) {
+          segments.push(paragraph.join(" "));
+          paragraph = [];
+        }
+      };
+      for (const dedentedLine of dedented) {
+        if (dedentedLine === "") {
+          flushParagraph();
+          segments.push("\n");
+        } else {
+          paragraph.push(dedentedLine);
+        }
+      }
+      flushParagraph();
+      joined = segments.join("");
+    }
+
+    if (chomp === "-") {
+      joined = joined.replace(/\n+$/, "");
+    } else if (chomp !== "+") {
+      joined = joined.replace(/\n+$/, "");
+    }
+
+    output.push(`${leadingIndent}${key}: ${JSON.stringify(joined)}`);
+  }
+  return output.join("\n");
+}
+
 function parseYamlFrontmatter(raw: string): Record<string, unknown> {
-  const prepared = prepareYamlLines(raw);
+  const folded = foldYamlBlockScalars(raw);
+  const prepared = prepareYamlLines(folded);
   if (prepared.length === 0) return {};
   const parsed = parseYamlBlock(prepared, 0, prepared[0]!.indent);
   return isPlainRecord(parsed.value) ? parsed.value : {};

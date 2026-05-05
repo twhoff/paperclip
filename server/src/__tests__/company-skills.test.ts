@@ -177,6 +177,100 @@ describe("project workspace skill discovery", () => {
       ],
     });
   });
+
+  it("folds YAML block-scalar descriptions into a single string", async () => {
+    const workspace = await makeTempDir("paperclip-folded-yaml-");
+    await fs.mkdir(workspace, { recursive: true });
+    await fs.writeFile(
+      path.join(workspace, "SKILL.md"),
+      [
+        "---",
+        "name: agent-chat",
+        "description: >",
+        "  Comprehensive reference for agent-to-agent chat. Covers the chat CLI",
+        "  (post, read, wait, monitor), channel strategy, message protocol,",
+        "  file-based posting, monitoring patterns, and common pitfalls.",
+        "  Use whenever an agent needs to communicate with other agents.",
+        "---",
+        "",
+        "# Agent Chat",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const imported = await readLocalSkillImportFromDirectory(
+      "33333333-3333-4333-8333-333333333333",
+      workspace,
+      { inventoryMode: "full" },
+    );
+
+    expect(imported.description).toBe(
+      "Comprehensive reference for agent-to-agent chat. Covers the chat CLI"
+        + " (post, read, wait, monitor), channel strategy, message protocol,"
+        + " file-based posting, monitoring patterns, and common pitfalls."
+        + " Use whenever an agent needs to communicate with other agents.",
+    );
+  });
+
+  it("strips trailing newlines from chomped folded scalars", async () => {
+    const workspace = await makeTempDir("paperclip-folded-chomp-yaml-");
+    await fs.mkdir(workspace, { recursive: true });
+    await fs.writeFile(
+      path.join(workspace, "SKILL.md"),
+      [
+        "---",
+        "name: agent-lifecycle",
+        "description: >-",
+        "  Complete agent lifecycle from session boot to shutdown.",
+        "  Use at the start of any agent interaction.",
+        "---",
+        "",
+        "# Agent Lifecycle",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const imported = await readLocalSkillImportFromDirectory(
+      "33333333-3333-4333-8333-333333333333",
+      workspace,
+      { inventoryMode: "full" },
+    );
+
+    expect(imported.description).toBe(
+      "Complete agent lifecycle from session boot to shutdown."
+        + " Use at the start of any agent interaction.",
+    );
+  });
+
+  it("preserves newlines for literal block scalars", async () => {
+    const workspace = await makeTempDir("paperclip-literal-yaml-");
+    await fs.mkdir(workspace, { recursive: true });
+    await fs.writeFile(
+      path.join(workspace, "SKILL.md"),
+      [
+        "---",
+        "name: example",
+        "description: |",
+        "  Line one.",
+        "  Line two.",
+        "---",
+        "",
+        "# Example",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const imported = await readLocalSkillImportFromDirectory(
+      "33333333-3333-4333-8333-333333333333",
+      workspace,
+      { inventoryMode: "full" },
+    );
+
+    expect(imported.description).toBe("Line one.\nLine two.");
+  });
 });
 
 describe("missing local skill reconciliation", () => {
