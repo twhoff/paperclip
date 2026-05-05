@@ -179,7 +179,7 @@ export function estimateCostUsd(
 ): number {
   // Token prices per 1M tokens (March 2026 rates, 50% batch discount applied)
   const inputPrice: Record<string, number> = {
-    "claude-opus-4-6": 3.0,
+    "claude-opus-4-7": 3.0,
     "claude-sonnet-4-6": 3.0,
     "claude-haiku-4-6": 0.8,
     "claude-sonnet-4-5-20250929": 3.0,
@@ -187,7 +187,7 @@ export function estimateCostUsd(
   };
 
   const outputPrice: Record<string, number> = {
-    "claude-opus-4-6": 15.0,
+    "claude-opus-4-7": 15.0,
     "claude-sonnet-4-6": 15.0,
     "claude-haiku-4-6": 4.0,
     "claude-sonnet-4-5-20250929": 15.0,

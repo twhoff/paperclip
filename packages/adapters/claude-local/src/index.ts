@@ -4,7 +4,6 @@ export const label = "Claude Code (local)";
 export const models = [
   { id: "claude-opus-4-7[1m]", label: "Claude Opus 4.7 (1M context)" },
   { id: "claude-opus-4-7", label: "Claude Opus 4.7" },
-  { id: "claude-opus-4-6", label: "Claude Opus 4.6" },
   { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
   { id: "claude-sonnet-4-6[1m]", label: "Claude Sonnet 4.6 (1M context)" },
   { id: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5" },
@@ -18,7 +17,7 @@ Core fields:
 - cwd (string, optional): default absolute working directory fallback for the agent process (created if missing when possible)
 - instructionsFilePath (string, optional): absolute path to a markdown instructions file injected at runtime
 - model (string, optional): Claude model id
-- effort (string, optional): reasoning effort passed via --effort (low|medium|high)
+- effort (string, optional): reasoning effort passed via --effort (low|medium|high|xhigh|max)
 - chrome (boolean, optional): pass --chrome when running Claude
 - promptTemplate (string, optional): run prompt template
 - maxTurnsPerRun (number, optional): max turns for one run
