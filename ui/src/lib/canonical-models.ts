@@ -44,20 +44,21 @@ export const CANONICAL_MODELS: Record<string, CanonicalModel> = {
     label: "Claude Opus 4.7",
     adapters: {
       claude_local: "claude-opus-4-7",
+      copilot_cli: "claude-opus-4.7",
+    },
+  },
+  "claude-opus-4.7-1m": {
+    label: "Claude Opus 4.7 (1M)",
+    adapters: {
+      claude_local: "claude-opus-4-7",
+      copilot_cli: "claude-opus-4.7-1m",
     },
   },
   "claude-opus-4.6": {
     label: "Claude Opus 4.6",
     adapters: {
       claude_local: "claude-opus-4-6",
-      copilot_cli: "claude-opus-4.6",
       cursor: "opus-4.6",
-    },
-  },
-  "claude-opus-4.6-fast": {
-    label: "Claude Opus 4.6 (fast)",
-    adapters: {
-      copilot_cli: "claude-opus-4.6-fast",
     },
   },
   "claude-sonnet-4.6": {
@@ -66,6 +67,13 @@ export const CANONICAL_MODELS: Record<string, CanonicalModel> = {
       claude_local: "claude-sonnet-4-6",
       copilot_cli: "claude-sonnet-4.6",
       cursor: "sonnet-4.6",
+    },
+  },
+  "claude-sonnet-4.6-1m": {
+    label: "Claude Sonnet 4.6 (1M)",
+    adapters: {
+      claude_local: "claude-sonnet-4-6",
+      copilot_cli: "claude-sonnet-4.6-1m",
     },
   },
   "claude-haiku-4.6": {
@@ -131,20 +139,12 @@ export const CANONICAL_MODELS: Record<string, CanonicalModel> = {
   "gpt-5.1-codex-max": {
     label: "GPT-5.1 Codex Max",
     adapters: {
-      copilot_cli: "gpt-5.1-codex-max",
       cursor: "gpt-5.1-codex-max",
-    },
-  },
-  "gpt-5.1-codex": {
-    label: "GPT-5.1 Codex",
-    adapters: {
-      copilot_cli: "gpt-5.1-codex",
     },
   },
   "gpt-5.1-codex-mini": {
     label: "GPT-5.1 Codex Mini",
     adapters: {
-      copilot_cli: "gpt-5.1-codex-mini",
       cursor: "gpt-5.1-codex-mini",
     },
   },
@@ -166,12 +166,6 @@ export const CANONICAL_MODELS: Record<string, CanonicalModel> = {
     adapters: {
       copilot_cli: "gpt-5.2",
       cursor: "gpt-5.2",
-    },
-  },
-  "gpt-5.1": {
-    label: "GPT-5.1",
-    adapters: {
-      copilot_cli: "gpt-5.1",
     },
   },
   "gpt-4.1": {
