@@ -87,10 +87,61 @@ describe("buildTranscript", () => {
 
     expect(entries).toEqual([
       { kind: "system", ts, text: "[paperclip] Loaded agent instructions file: /tmp/agent-instructions.md" },
-      { kind: "system", ts, text: "Hook started: SessionStart:resume" },
-      { kind: "system", ts, text: "Hook completed: SessionStart:resume" },
+      // hook_started is suppressed; SessionStart hook_response is also suppressed because
+      // it's an auto-injected lifecycle hook that fires every prompt.
       { kind: "system", ts, text: "Claude rate limit: rejected (five_hour)" },
       { kind: "assistant", ts, text: "hello" },
+    ]);
+  });
+
+  it("collapses non-auto-injected hook lifecycles to a single entry on response", () => {
+    const ts2 = "2026-03-20T13:00:00.000Z";
+    const claudeChunks: RunLogChunk[] = [
+      {
+        ts: ts2,
+        stream: "stdout",
+        chunk: JSON.stringify({
+          type: "system",
+          subtype: "hook_started",
+          hook_name: "PreToolUse:Bash",
+          hook_event: "PreToolUse",
+        }) + "\n",
+      },
+      {
+        ts: ts2,
+        stream: "stdout",
+        chunk: JSON.stringify({
+          type: "system",
+          subtype: "hook_response",
+          hook_name: "PreToolUse:Bash",
+          hook_event: "PreToolUse",
+          exit_code: 0,
+        }) + "\n",
+      },
+    ];
+
+    expect(buildTranscript(claudeChunks, parseClaudeStdoutLine)).toEqual([
+      { kind: "system", ts: ts2, text: "Hook: PreToolUse:Bash ✓" },
+    ]);
+  });
+
+  it("emits a failure entry on hook_response with non-zero exit_code", () => {
+    const ts2 = "2026-03-20T13:00:00.000Z";
+    const claudeChunks: RunLogChunk[] = [
+      {
+        ts: ts2,
+        stream: "stdout",
+        chunk: JSON.stringify({
+          type: "system",
+          subtype: "hook_response",
+          hook_name: "PostToolUse:Edit",
+          exit_code: 2,
+        }) + "\n",
+      },
+    ];
+
+    expect(buildTranscript(claudeChunks, parseClaudeStdoutLine)).toEqual([
+      { kind: "system", ts: ts2, text: "Hook failed: PostToolUse:Edit (exit 2)" },
     ]);
   });
 });

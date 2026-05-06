@@ -84,6 +84,12 @@ type TranscriptBlock =
       tone: "info" | "warn" | "error" | "neutral";
       text: string;
       detail?: string;
+      meta?: {
+        inputTokens?: number;
+        outputTokens?: number;
+        cachedTokens?: number;
+        costUsd?: number;
+      };
     };
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -429,6 +435,12 @@ export function normalizeTranscript(entries: TranscriptEntry[], streaming: boole
         label: "result",
         tone: entry.isError ? "error" : "info",
         text: entry.text.trim() || entry.errors[0] || (entry.isError ? "Run failed" : "Completed"),
+        meta: {
+          inputTokens: entry.inputTokens,
+          outputTokens: entry.outputTokens,
+          cachedTokens: entry.cachedTokens,
+          costUsd: entry.costUsd,
+        },
       });
       continue;
     }
@@ -652,7 +664,7 @@ function TranscriptToolCard({
                 <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
                   Input
                 </div>
-                <pre className="overflow-x-auto whitespace-pre-wrap break-words font-mono text-[11px] text-foreground/80">
+                <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted/20 p-2 font-mono text-[11px] text-foreground/80">
                   {formatToolPayload(block.input) || "<empty>"}
                 </pre>
               </div>
@@ -661,8 +673,10 @@ function TranscriptToolCard({
                   Result
                 </div>
                 <pre className={cn(
-                  "overflow-x-auto whitespace-pre-wrap break-words font-mono text-[11px]",
-                  block.status === "error" ? "text-red-700 dark:text-red-300" : "text-foreground/80",
+                  "max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md p-2 font-mono text-[11px]",
+                  block.status === "error"
+                    ? "bg-red-500/[0.06] text-red-700 dark:text-red-300"
+                    : "bg-muted/20 text-foreground/80",
                 )}>
                   {block.result ? formatToolPayload(block.result) : "Waiting for result..."}
                 </pre>
@@ -877,8 +891,47 @@ function TranscriptEventRow({
               {block.detail}
             </pre>
           )}
+          {block.meta && (
+            <TranscriptResultMetaRow meta={block.meta} />
+          )}
         </div>
       </div>
+    </div>
+  );
+}
+
+function TranscriptResultMetaRow({
+  meta,
+}: {
+  meta: NonNullable<Extract<TranscriptBlock, { type: "event" }>["meta"]>;
+}) {
+  const pills: { label: string; value: string }[] = [];
+  if (typeof meta.inputTokens === "number" && meta.inputTokens > 0) {
+    pills.push({ label: "in", value: formatTokens(meta.inputTokens) });
+  }
+  if (typeof meta.outputTokens === "number" && meta.outputTokens > 0) {
+    pills.push({ label: "out", value: formatTokens(meta.outputTokens) });
+  }
+  if (typeof meta.cachedTokens === "number" && meta.cachedTokens > 0) {
+    pills.push({ label: "cached", value: formatTokens(meta.cachedTokens) });
+  }
+  if (typeof meta.costUsd === "number" && meta.costUsd > 0) {
+    pills.push({ label: "cost", value: `$${meta.costUsd.toFixed(meta.costUsd < 0.01 ? 4 : 3)}` });
+  }
+  if (pills.length === 0) return null;
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-1.5">
+      {pills.map((pill) => (
+        <span
+          key={pill.label}
+          className="inline-flex items-center gap-1 rounded-full border border-border/60 bg-muted/30 px-2 py-0.5 text-[10px] font-medium text-muted-foreground"
+        >
+          <span className="uppercase tracking-[0.12em] text-muted-foreground/70">
+            {pill.label}
+          </span>
+          <span className="font-mono text-foreground/80">{pill.value}</span>
+        </span>
+      ))}
     </div>
   );
 }
@@ -893,22 +946,31 @@ function TranscriptStdoutRow({
   collapseByDefault: boolean;
 }) {
   const [open, setOpen] = useState(!collapseByDefault);
+  const lineCount = block.text.length === 0
+    ? 0
+    : block.text.split("\n").filter((line, idx, arr) => idx < arr.length - 1 || line.length > 0).length;
 
   return (
     <div>
-      <div className="flex items-center gap-2">
+      <button
+        type="button"
+        className="group flex w-full items-center gap-2 text-left"
+        onClick={() => setOpen((value) => !value)}
+        aria-label={open ? "Collapse stdout" : "Expand stdout"}
+        aria-expanded={open}
+      >
+        <span className="inline-flex h-5 w-5 items-center justify-center text-muted-foreground transition-colors group-hover:text-foreground">
+          {open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+        </span>
         <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
           stdout
         </span>
-        <button
-          type="button"
-          className="inline-flex h-5 w-5 items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
-          onClick={() => setOpen((value) => !value)}
-          aria-label={open ? "Collapse stdout" : "Expand stdout"}
-        >
-          {open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-        </button>
-      </div>
+        {lineCount > 0 && (
+          <span className="rounded-full border border-border/60 bg-muted/40 px-1.5 py-px text-[10px] font-medium text-muted-foreground">
+            {lineCount} {lineCount === 1 ? "line" : "lines"}
+          </span>
+        )}
+      </button>
       {open && (
         <pre className={cn(
           "mt-2 overflow-x-auto whitespace-pre-wrap break-words font-mono text-foreground/80",

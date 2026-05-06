@@ -47,6 +47,11 @@ function parsePaperclipLine(line: string, ts: string): TranscriptEntry[] | null 
   return [{ kind: "system", ts, text: line }];
 }
 
+function isAutoInjectedHook(name: string): boolean {
+  // SessionStart fires on every prompt; logging it adds nothing useful.
+  return name.startsWith("SessionStart");
+}
+
 function parseSystemEvent(parsed: Record<string, unknown>, ts: string): TranscriptEntry[] {
   const subtype = asString(parsed.subtype);
 
@@ -61,15 +66,21 @@ function parseSystemEvent(parsed: Record<string, unknown>, ts: string): Transcri
     ];
   }
 
+  // Suppress hook_started entirely — we only emit a single line on
+  // hook_response so the transcript shows one row per hook lifecycle
+  // instead of two (or three when multiple hooks fire concurrently).
   if (subtype === "hook_started") {
-    return [{ kind: "system", ts, text: `Hook started: ${readHookName(parsed)}` }];
+    return [];
   }
 
   if (subtype === "hook_response") {
+    const name = readHookName(parsed);
+    if (isAutoInjectedHook(name)) return [];
     const exitCode = asNumber(parsed.exit_code);
-    const label = exitCode > 0 ? "Hook failed" : "Hook completed";
-    const detail = exitCode > 0 ? ` (exit ${exitCode})` : "";
-    return [{ kind: "system", ts, text: `${label}: ${readHookName(parsed)}${detail}` }];
+    if (exitCode > 0) {
+      return [{ kind: "system", ts, text: `Hook failed: ${name} (exit ${exitCode})` }];
+    }
+    return [{ kind: "system", ts, text: `Hook: ${name} ✓` }];
   }
 
   if (subtype) {
@@ -100,8 +111,10 @@ export function parseClaudeStdoutLine(line: string, ts: string): TranscriptEntry
 
   const type = asString(parsed.type);
   if (type === "system") {
-    const entries = parseSystemEvent(parsed, ts);
-    if (entries.length > 0) return entries;
+    // Always return for system events — even when parseSystemEvent returns
+    // [] (e.g. suppressed hook lifecycle pairs), so the line never falls
+    // through to the raw stdout fallback.
+    return parseSystemEvent(parsed, ts);
   }
 
   if (type === "rate_limit_event") {
