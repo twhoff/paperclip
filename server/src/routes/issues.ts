@@ -416,6 +416,7 @@ export function issueRoutes(db: Db, storage: StorageService) {
         status: g.status,
         level: g.level,
         parentId: g.parentId,
+        ownerAgentId: g.ownerAgentId,
       })),
       commentCursor,
       wakeComment:

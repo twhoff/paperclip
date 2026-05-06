@@ -114,6 +114,7 @@ describe("GET /issues/:id/heartbeat-context — goals changes", () => {
     expect(res.body.companyGoals[0].id).toBe("goal-1");
     expect(res.body.companyGoals[0].title).toBe("Automate groceries");
     expect(res.body.companyGoals[0].description).toBe("Full description of the company goal");
+    expect(res.body.companyGoals[0].ownerAgentId).toBe("agent-owner");
   });
 
   it("returns empty companyGoals when no active company goals exist", async () => {
