@@ -8,8 +8,7 @@ export {
   isClaudeUnknownSessionError,
 } from "./parse.js";
 export {
-  formatClaudeStreamLine,
-  formatClaudeStreamEvent,
+  filterClaudeStreamLine,
   createClaudeLogFilter,
 } from "./format-event.js";
 export {
