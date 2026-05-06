@@ -35,13 +35,13 @@ const __moduleDir = path.dirname(fileURLToPath(import.meta.url));
 
 /**
  * Resolve the stable directory used to hold Copilot CLI skill symlinks.
- * Uses ~/.paperclip/instances/{instanceId}/codex-skills so the path
+ * Uses ~/.paperclip/instances/{instanceId}/copilot-skills so the path
  * survives across invocations and macOS temp-dir cleanup.
  */
 function resolveCopilotSkillsStableDir(): string {
   const paperclipHome = process.env.PAPERCLIP_HOME ?? path.join(os.homedir(), ".paperclip");
   const instanceId = process.env.PAPERCLIP_INSTANCE_ID ?? "default";
-  return path.join(paperclipHome, "instances", instanceId, "codex-skills");
+  return path.join(paperclipHome, "instances", instanceId, "copilot-skills");
 }
 
 /**
