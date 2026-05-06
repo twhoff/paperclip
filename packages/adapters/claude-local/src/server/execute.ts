@@ -23,6 +23,7 @@ import {
   runChildProcess,
 } from "@paperclipai/adapter-utils/server-utils";
 import { CLAUDE_BASE_ARGS } from "./base-args.js";
+import { createClaudeLogFilter } from "./format-event.js";
 import {
   parseClaudeStreamJson,
   describeClaudeFailure,
@@ -691,6 +692,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           })}\n`
         : prompt;
 
+    const logFilter = createClaudeLogFilter(onLog);
     const proc = await runChildProcess(runId, command, args, {
       cwd,
       env,
@@ -698,8 +700,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       timeoutSec,
       graceSec,
       onSpawn,
-      onLog,
+      onLog: logFilter.onLog,
     });
+    await logFilter.flush();
 
     const parsedStream = parseClaudeStreamJson(proc.stdout);
     const parsed = parsedStream.resultJson ?? parseJson(proc.stdout);

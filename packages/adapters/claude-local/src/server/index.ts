@@ -8,6 +8,11 @@ export {
   isClaudeUnknownSessionError,
 } from "./parse.js";
 export {
+  formatClaudeStreamLine,
+  formatClaudeStreamEvent,
+  createClaudeLogFilter,
+} from "./format-event.js";
+export {
   getQuotaWindows,
   readClaudeAuthStatus,
   readClaudeToken,
