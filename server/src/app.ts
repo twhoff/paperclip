@@ -31,6 +31,8 @@ import { accessRoutes } from "./routes/access.js";
 import { pluginRoutes } from "./routes/plugins.js";
 import { pluginUiStaticRoutes } from "./routes/plugin-ui-static.js";
 import { createBatchAdminRoutes } from "./routes/admin/index.js";
+import { systemRoutes } from "./routes/system.js";
+import { shutdownService, type ShutdownService } from "./services/shutdown.js";
 import { applyUiBranding } from "./ui-branding.js";
 import { logger } from "./middleware/logger.js";
 import { DEFAULT_LOCAL_PLUGIN_DIR, pluginLoader } from "./services/plugin-loader.js";
@@ -155,6 +157,8 @@ export async function createApp(
   api.use(sidebarBadgeRoutes(db));
   api.use(instanceSettingsRoutes(db));
   api.use("/admin/batch", createBatchAdminRoutes(db));
+  const shutdown = shutdownService(db);
+  api.use("/system", systemRoutes(shutdown));
   const hostServicesDisposers = new Map<string, () => void>();
   const workerManager = createPluginWorkerManager();
   const pluginRegistry = pluginRegistryService(db);
@@ -316,5 +320,10 @@ export async function createApp(
     void flushPluginLogBuffer();
   });
 
-  return app;
+  return { app, shutdown };
 }
+
+export type CreateAppResult = {
+  app: express.Express;
+  shutdown: ShutdownService;
+};
