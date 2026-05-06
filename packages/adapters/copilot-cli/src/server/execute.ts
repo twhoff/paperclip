@@ -35,13 +35,13 @@ const __moduleDir = path.dirname(fileURLToPath(import.meta.url));
 
 /**
  * Resolve the stable directory used to hold Copilot CLI skill symlinks.
- * Uses ~/.paperclip/instances/{instanceId}/codex-skills so the path
+ * Uses ~/.paperclip/instances/{instanceId}/copilot-skills so the path
  * survives across invocations and macOS temp-dir cleanup.
  */
 function resolveCopilotSkillsStableDir(): string {
   const paperclipHome = process.env.PAPERCLIP_HOME ?? path.join(os.homedir(), ".paperclip");
   const instanceId = process.env.PAPERCLIP_INSTANCE_ID ?? "default";
-  return path.join(paperclipHome, "instances", instanceId, "codex-skills");
+  return path.join(paperclipHome, "instances", instanceId, "copilot-skills");
 }
 
 /**
@@ -284,13 +284,13 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     extraArgs,
   } = runtimeConfig;
 
-  const skillsTmpDir = skillsEnabled && !skipSkills ? await buildCopilotSkillsDir(config, onLog) : null;
-  if (skillsTmpDir) {
+  const skillsDir = skillsEnabled && !skipSkills ? await buildCopilotSkillsDir(config, onLog) : null;
+  if (skillsDir) {
     const existing = env.COPILOT_CUSTOM_INSTRUCTIONS_DIRS ?? "";
     env.COPILOT_CUSTOM_INSTRUCTIONS_DIRS = existing
-      ? `${existing}:${skillsTmpDir}`
-      : skillsTmpDir;
-    await onLog("stdout", `[paperclip] Injected Paperclip skills via symlinks in ${skillsTmpDir}/.agents/skills/\n`);
+      ? `${existing}:${skillsDir}`
+      : skillsDir;
+    await onLog("stdout", `[paperclip] Injected Paperclip skills via symlinks in ${skillsDir}/.agents/skills/\n`);
   } else if (skillsEnabled && !skipSkills) {
     await onLog("stdout", `[paperclip] Warning: Could not resolve Paperclip skills (moduleDir: ${__moduleDir})\n`);
   }
@@ -364,8 +364,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       }
     }
   }
-  const paperclipCtxAuthHelperPath = skillsTmpDir
-    ? path.join(skillsTmpDir, ".agents", "skills", "paperclip-ctx-auth", "scripts", "paperclip_request.mjs")
+  const paperclipCtxAuthHelperPath = skillsDir
+    ? path.join(skillsDir, ".agents", "skills", "paperclip-ctx-auth", "scripts", "paperclip_request.mjs")
     : null;
   contextLines.push(
     ``,
@@ -433,8 +433,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const prompt = promptParts.join("\n\n---\n\n");
 
   const commandNotes: string[] = [];
-  if (skillsTmpDir) {
-    commandNotes.push(`Injected Paperclip skills via COPILOT_CUSTOM_INSTRUCTIONS_DIRS: ${skillsTmpDir}/.agents/skills/`);
+  if (skillsDir) {
+    commandNotes.push(`Injected Paperclip skills via COPILOT_CUSTOM_INSTRUCTIONS_DIRS: ${skillsDir}/.agents/skills/`);
   }
   if (instructionsContent && !sessionId) {
     commandNotes.push(`Injected agent instructions file: ${instructionsFilePath}`);
@@ -630,8 +630,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       fallbackSessionId: runtimeSessionId || runtime.sessionId,
     });
   } finally {
-    if (skillsTmpDir) {
-      fs.rm(skillsTmpDir, { recursive: true, force: true }).catch(() => {});
+    if (skillsDir) {
+      fs.rm(skillsDir, { recursive: true, force: true }).catch(() => {});
     }
   }
 }
