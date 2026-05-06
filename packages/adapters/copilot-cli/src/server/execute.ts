@@ -630,8 +630,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       fallbackSessionId: runtimeSessionId || runtime.sessionId,
     });
   } finally {
-    if (skillsDir) {
-      fs.rm(skillsDir, { recursive: true, force: true }).catch(() => {});
-    }
+    // skillsDir is intentionally NOT removed here — it is a stable
+    // per-instance directory (see resolveCopilotSkillsStableDir) that persists
+    // across runs so hard-coded skill paths stay valid between heartbeats.
   }
 }
