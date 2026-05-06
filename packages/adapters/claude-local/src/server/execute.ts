@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -21,6 +22,7 @@ import {
   renderTemplate,
   runChildProcess,
 } from "@paperclipai/adapter-utils/server-utils";
+import { CLAUDE_BASE_ARGS } from "./base-args.js";
 import {
   parseClaudeStreamJson,
   describeClaudeFailure,
@@ -52,42 +54,72 @@ const PAPERCLIP_AGENT_ALLOWED_TOOLS = [
 ];
 
 /**
- * Create a tmpdir with `.claude/skills/` containing symlinks to skills from
+ * Create a directory with `.claude/skills/` containing symlinks to skills from
  * the repo's `skills/` directory, so `--add-dir` makes Claude Code discover
  * them as proper registered skills.
  *
  * Also writes a `.claude/settings.json` with pre-approved tool permissions so
  * headless agents are not blocked waiting for interactive approval.
+ *
+ * The directory path is content-hashed (allowedTools + desired skill entries)
+ * and reused across runs — when the same agent invokes the adapter repeatedly
+ * with the same skill set, no filesystem work is repeated. Skill source-path
+ * or `allowedTools` changes invalidate the hash and produce a fresh cache dir.
  */
-async function buildSkillsDir(config: Record<string, unknown>): Promise<string> {
-  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-skills-"));
-  const claudeDir = path.join(tmp, ".claude");
+async function buildSkillsDir(
+  config: Record<string, unknown>,
+  onLog?: AdapterExecutionContext["onLog"],
+): Promise<string> {
+  const extraAllowedTools = asStringArray(config.allowedTools);
+  const allowedTools = [...PAPERCLIP_AGENT_ALLOWED_TOOLS, ...extraAllowedTools];
+
+  const availableEntries = await readPaperclipRuntimeSkillEntries(config, __moduleDir);
+  const desiredNames = new Set(
+    resolveClaudeDesiredSkillNames(config, availableEntries),
+  );
+  const desiredEntries = availableEntries
+    .filter((entry) => desiredNames.has(entry.key))
+    .map((entry) => ({ key: entry.key, runtimeName: entry.runtimeName, source: entry.source }))
+    .sort((a, b) => a.key.localeCompare(b.key));
+
+  const hashInput = JSON.stringify({
+    allowedTools: [...allowedTools].sort(),
+    entries: desiredEntries,
+  });
+  const cacheKey = createHash("sha256").update(hashInput).digest("hex").slice(0, 16);
+  const cacheDir = path.join(os.tmpdir(), `paperclip-skills-cache-${cacheKey}`);
+
+  // Cache hit: directory already populated from a prior run with the same hash.
+  try {
+    const stat = await fs.stat(cacheDir);
+    if (stat.isDirectory()) {
+      if (onLog) {
+        await onLog("stdout", `[paperclip] Reusing skills dir cache: ${cacheDir}\n`);
+      }
+      return cacheDir;
+    }
+  } catch {
+    // Cache miss — fall through and build it.
+  }
+
+  const claudeDir = path.join(cacheDir, ".claude");
   const target = path.join(claudeDir, "skills");
   await fs.mkdir(target, { recursive: true });
 
-  // Pre-approve tools so headless agents don't stall on permission prompts.
-  const extraAllowedTools = asStringArray(config.allowedTools);
-  const allowedTools = [...PAPERCLIP_AGENT_ALLOWED_TOOLS, ...extraAllowedTools];
   await fs.writeFile(
     path.join(claudeDir, "settings.json"),
     JSON.stringify({ permissions: { allow: allowedTools } }, null, 2),
   );
 
-  const availableEntries = await readPaperclipRuntimeSkillEntries(config, __moduleDir);
-  const desiredNames = new Set(
-    resolveClaudeDesiredSkillNames(
-      config,
-      availableEntries,
-    ),
-  );
-  for (const entry of availableEntries) {
-    if (!desiredNames.has(entry.key)) continue;
-    await fs.symlink(
-      entry.source,
-      path.join(target, entry.runtimeName),
-    );
+  for (const entry of desiredEntries) {
+    try {
+      await fs.symlink(entry.source, path.join(target, entry.runtimeName));
+    } catch (err) {
+      // Concurrent run may have just created the symlink — accept EEXIST.
+      if ((err as { code?: string }).code !== "EEXIST") throw err;
+    }
   }
-  return tmp;
+  return cacheDir;
 }
 
 interface ClaudeExecutionInput {
@@ -342,6 +374,11 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const sessionPolicy = asString(config.sessionPolicy, "resume");
   const skipSkills = asBoolean(config.skipSkills, false);
   const batchMode = asString(config.batchMode, "never") as "never" | "smart" | "always";
+  const fallbackModel = asString(config.fallbackModel, "").trim();
+  const maxBudgetUsd = asNumber(config.maxBudgetUsd, 0);
+  const includeHookEvents = asBoolean(config.includeHookEvents, false);
+  const debugFile = asString(config.debugFile, "").trim();
+  const inputFormat = asString(config.inputFormat, "text") === "stream-json" ? "stream-json" : "text";
   const instructionsFilePath = asString(config.instructionsFilePath, "").trim();
   const instructionsFileDir = instructionsFilePath ? `${path.dirname(instructionsFilePath)}/` : "";
   const commandNotes = instructionsFilePath
@@ -374,7 +411,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     ),
   );
   const billingType = resolveClaudeBillingType(effectiveEnv);
-  const skillsDir = skipSkills ? null : await buildSkillsDir(config);
+  const skillsDir = skipSkills ? null : await buildSkillsDir(config, onLog);
 
   // When instructionsFilePath is configured, create a combined temp file that
   // includes both the file content and the path directive, so we only need
@@ -387,7 +424,17 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       const pathDirective = `\nThe above agent instructions were loaded from ${instructionsFilePath}. Resolve any relative file references from ${instructionsFileDir}.`;
       const parentDir = skillsDir ?? (instructionsTmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-instr-")));
       const combinedPath = path.join(parentDir, "agent-instructions.md");
-      await fs.writeFile(combinedPath, instructionsContent + pathDirective, "utf-8");
+      const combinedContent = instructionsContent + pathDirective;
+      let needsWrite = true;
+      try {
+        const existing = await fs.readFile(combinedPath, "utf-8");
+        needsWrite = existing !== combinedContent;
+      } catch {
+        // file does not exist yet — write it
+      }
+      if (needsWrite) {
+        await fs.writeFile(combinedPath, combinedContent, "utf-8");
+      }
       effectiveInstructionsFilePath = combinedPath;
       await onLog("stdout", `[paperclip] Loaded agent instructions file: ${instructionsFilePath}\n`);
     } catch (err) {
@@ -398,6 +445,13 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       );
       effectiveInstructionsFilePath = undefined;
     }
+  }
+
+  if (chrome) {
+    await onLog(
+      "stdout",
+      `[paperclip] Warning: --chrome requires the Claude in Chrome companion app to be running; the flag is a no-op otherwise.\n`,
+    );
   }
 
   const runtimeSessionParams = parseObject(runtime.sessionParams);
@@ -575,13 +629,20 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   };
 
   const buildClaudeArgs = (resumeSessionId: string | null) => {
-    const args = ["--print", "-", "--output-format", "stream-json", "--verbose"];
+    const args = [...CLAUDE_BASE_ARGS];
     if (resumeSessionId) args.push("--resume", resumeSessionId);
     if (dangerouslySkipPermissions) args.push("--dangerously-skip-permissions");
     if (chrome) args.push("--chrome");
     if (model) args.push("--model", model);
+    if (fallbackModel) args.push("--fallback-model", fallbackModel);
     if (effort) args.push("--effort", effort);
     if (maxTurns > 0) args.push("--max-turns", String(maxTurns));
+    if (maxBudgetUsd > 0) args.push("--max-budget-usd", String(maxBudgetUsd));
+    if (includeHookEvents) args.push("--include-hook-events");
+    if (debugFile) args.push("--debug-file", debugFile);
+    if (inputFormat === "stream-json") {
+      args.push("--input-format", "stream-json", "--replay-user-messages");
+    }
     if (effectiveInstructionsFilePath) {
       args.push("--append-system-prompt-file", effectiveInstructionsFilePath);
     }
@@ -622,10 +683,18 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       });
     }
 
+    const stdinPayload =
+      inputFormat === "stream-json"
+        ? `${JSON.stringify({
+            type: "user",
+            message: { role: "user", content: [{ type: "text", text: prompt }] },
+          })}\n`
+        : prompt;
+
     const proc = await runChildProcess(runId, command, args, {
       cwd,
       env,
-      stdin: prompt,
+      stdin: stdinPayload,
       timeoutSec,
       graceSec,
       onSpawn,

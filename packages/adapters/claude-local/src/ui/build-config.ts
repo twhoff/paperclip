@@ -97,5 +97,10 @@ export function buildClaudeLocalConfig(v: CreateConfigValues): Record<string, un
   }
   if (v.command) ac.command = v.command;
   if (v.extraArgs) ac.extraArgs = parseCommaArgs(v.extraArgs);
+  if (v.fallbackModel) ac.fallbackModel = v.fallbackModel;
+  if (typeof v.maxBudgetUsd === "number" && v.maxBudgetUsd > 0) ac.maxBudgetUsd = v.maxBudgetUsd;
+  if (v.includeHookEvents) ac.includeHookEvents = true;
+  if (v.debugFile) ac.debugFile = v.debugFile;
+  if (v.inputFormat && v.inputFormat !== "text") ac.inputFormat = v.inputFormat;
   return ac;
 }

@@ -42,6 +42,13 @@ Operational fields:
 - timeoutSec (number, optional): run timeout in seconds
 - graceSec (number, optional): SIGTERM grace period in seconds
 
+Advanced CLI flags:
+- fallbackModel (string, optional): pass --fallback-model <model-id>. When the primary model is overloaded, Claude falls back to this model instead of failing the run. Recommended pairing: opus + opus-1m, or 1m + non-1m.
+- maxBudgetUsd (number, optional): pass --max-budget-usd <amount>. Hard $ cap per run. Pairs well with maxTurnsPerRun for cost safety.
+- includeHookEvents (boolean, optional): pass --include-hook-events. Surfaces PreToolUse / PostToolUse hook firings in the stream output for diagnostics.
+- debugFile (string, optional): pass --debug-file <path>. Writes Claude's internal debug log to a file instead of polluting stdout/stderr.
+- inputFormat (string, optional): "text" (default) or "stream-json". When "stream-json", the adapter sends the prompt as a stream-json envelope on stdin and adds --input-format stream-json + --replay-user-messages so user messages echo back for acknowledgement.
+
 Notes:
 - When Paperclip realizes a workspace/runtime for a run, it injects PAPERCLIP_WORKSPACE_* and PAPERCLIP_RUNTIME_* env vars for agent-side tooling.
 - Batch API mode is single-turn (no multi-turn agentic loops or tool callbacks). Best for analysis, reports, summarization, data processing.

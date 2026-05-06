@@ -133,6 +133,91 @@ export function ClaudeLocalAdvancedFields({
           />
         )}
       </Field>
+      <Field label="Fallback model" hint={help.fallbackModel}>
+        <DraftInput
+          value={
+            isCreate
+              ? values!.fallbackModel ?? ""
+              : eff("adapterConfig", "fallbackModel", String(config.fallbackModel ?? ""))
+          }
+          onCommit={(v) =>
+            isCreate
+              ? set!({ fallbackModel: v })
+              : mark("adapterConfig", "fallbackModel", v || undefined)
+          }
+          immediate
+          className={inputClass}
+          placeholder="claude-opus-4-7"
+        />
+      </Field>
+      <Field label="Max budget per run (USD)" hint={help.maxBudgetUsd}>
+        {isCreate ? (
+          <input
+            type="number"
+            step="0.01"
+            min="0"
+            className={inputClass}
+            value={values!.maxBudgetUsd ?? 0}
+            onChange={(e) => set!({ maxBudgetUsd: Number(e.target.value) })}
+          />
+        ) : (
+          <DraftNumberInput
+            value={eff("adapterConfig", "maxBudgetUsd", Number(config.maxBudgetUsd ?? 0))}
+            onCommit={(v) => mark("adapterConfig", "maxBudgetUsd", v || 0)}
+            immediate
+            className={inputClass}
+          />
+        )}
+      </Field>
+      <ToggleField
+        label="Include hook events in stream"
+        hint={help.includeHookEvents}
+        checked={
+          isCreate
+            ? values!.includeHookEvents ?? false
+            : eff("adapterConfig", "includeHookEvents", config.includeHookEvents === true)
+        }
+        onChange={(v) =>
+          isCreate
+            ? set!({ includeHookEvents: v })
+            : mark("adapterConfig", "includeHookEvents", v)
+        }
+      />
+      <Field label="Debug log file" hint={help.debugFile}>
+        <DraftInput
+          value={
+            isCreate
+              ? values!.debugFile ?? ""
+              : eff("adapterConfig", "debugFile", String(config.debugFile ?? ""))
+          }
+          onCommit={(v) =>
+            isCreate
+              ? set!({ debugFile: v })
+              : mark("adapterConfig", "debugFile", v || undefined)
+          }
+          immediate
+          className={inputClass}
+          placeholder="/absolute/path/to/claude-debug.log"
+        />
+      </Field>
+      <Field label="Input format" hint={help.inputFormat}>
+        <select
+          className={inputClass}
+          value={
+            isCreate
+              ? values!.inputFormat ?? "text"
+              : eff("adapterConfig", "inputFormat", String(config.inputFormat ?? "text"))
+          }
+          onChange={(e) =>
+            isCreate
+              ? set!({ inputFormat: e.target.value })
+              : mark("adapterConfig", "inputFormat", e.target.value === "text" ? undefined : e.target.value)
+          }
+        >
+          <option value="text">text</option>
+          <option value="stream-json">stream-json</option>
+        </select>
+      </Field>
     </>
   );
 }

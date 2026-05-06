@@ -15,6 +15,7 @@ import {
   runChildProcess,
 } from "@paperclipai/adapter-utils/server-utils";
 import path from "node:path";
+import { CLAUDE_BASE_ARGS } from "./base-args.js";
 import { detectClaudeLoginRequired, parseClaudeStreamJson } from "./parse.js";
 
 function summarizeStatus(checks: AdapterEnvironmentCheck[]): AdapterEnvironmentTestResult["status"] {
@@ -138,7 +139,7 @@ export async function testEnvironment(
         return asStringArray(config.args);
       })();
 
-      const args = ["--print", "-", "--output-format", "stream-json", "--verbose"];
+      const args = [...CLAUDE_BASE_ARGS, "--no-session-persistence"];
       if (dangerouslySkipPermissions) args.push("--dangerously-skip-permissions");
       if (chrome) args.push("--chrome");
       if (model) args.push("--model", model);

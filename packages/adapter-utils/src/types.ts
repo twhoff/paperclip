@@ -358,4 +358,9 @@ export interface CreateConfigValues {
   maxTurnsPerRun: number;
   heartbeatEnabled: boolean;
   intervalSec: number;
+  fallbackModel?: string;
+  maxBudgetUsd?: number;
+  includeHookEvents?: boolean;
+  debugFile?: string;
+  inputFormat?: string;
 }
