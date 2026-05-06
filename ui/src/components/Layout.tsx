@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { BookOpen, Moon, Settings, Sun } from "lucide-react";
+import { BookOpen, Moon, Power, Settings, Sun } from "lucide-react";
 import { Link, Outlet, useLocation, useNavigate, useParams } from "@/lib/router";
 import { CompanyRail } from "./CompanyRail";
 import { Sidebar } from "./Sidebar";
@@ -16,6 +16,8 @@ import { ToastViewport } from "./ToastViewport";
 import { MobileBottomNav } from "./MobileBottomNav";
 import { WorktreeBanner } from "./WorktreeBanner";
 import { DevRestartBanner } from "./DevRestartBanner";
+import { ShutdownBanner } from "./ShutdownBanner";
+import { ShutdownDialog } from "./ShutdownDialog";
 import { useDialog } from "../context/DialogContext";
 import { usePanel } from "../context/PanelContext";
 import { useCompany } from "../context/CompanyContext";
@@ -67,6 +69,7 @@ export function Layout() {
   const lastMainScrollTop = useRef(0);
   const [mobileNavVisible, setMobileNavVisible] = useState(true);
   const [instanceSettingsTarget, setInstanceSettingsTarget] = useState<string>(() => readRememberedInstanceSettingsPath());
+  const [shutdownOpen, setShutdownOpen] = useState(false);
   const nextTheme = theme === "dark" ? "light" : "dark";
   const matchedCompany = useMemo(() => {
     if (!companyPrefix) return null;
@@ -273,6 +276,7 @@ export function Layout() {
       </a>
       <WorktreeBanner />
       <DevRestartBanner devServer={health?.devServer} />
+      <ShutdownBanner />
       <div className={cn("min-h-0 flex-1", isMobile ? "w-full" : "flex overflow-hidden")}>
         {isMobile && sidebarOpen && (
           <button
@@ -313,6 +317,17 @@ export function Layout() {
                     <TooltipContent>v{health.version}</TooltipContent>
                   </Tooltip>
                 )}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  className="text-muted-foreground shrink-0"
+                  onClick={() => setShutdownOpen(true)}
+                  aria-label="Shut down agents"
+                  title="Shut down agents"
+                >
+                  <Power className="h-4 w-4" />
+                </Button>
                 <Button variant="ghost" size="icon-sm" className="text-muted-foreground shrink-0" asChild>
                   <Link
                     to={instanceSettingsTarget}
@@ -371,6 +386,17 @@ export function Layout() {
                     <TooltipContent>v{health.version}</TooltipContent>
                   </Tooltip>
                 )}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  className="text-muted-foreground shrink-0"
+                  onClick={() => setShutdownOpen(true)}
+                  aria-label="Shut down agents"
+                  title="Shut down agents"
+                >
+                  <Power className="h-4 w-4" />
+                </Button>
                 <Button variant="ghost" size="icon-sm" className="text-muted-foreground shrink-0" asChild>
                   <Link
                     to={instanceSettingsTarget}
@@ -435,6 +461,7 @@ export function Layout() {
       <NewProjectDialog />
       <NewGoalDialog />
       <NewAgentDialog />
+      <ShutdownDialog open={shutdownOpen} onOpenChange={setShutdownOpen} />
       <ToastViewport />
     </div>
   );

@@ -31,3 +31,9 @@ export { reconcilePersistedRuntimeServicesOnStartup } from "./workspace-runtime.
 export { createStorageServiceFromConfig, getStorageService } from "../storage/index.js";
 export { createBatchJobService } from "./batch-job-service.js";
 export { adapterStatusService } from "./adapter-status.js";
+export {
+  shutdownService,
+  type ShutdownPhase,
+  type ShutdownState,
+  type ShutdownService,
+} from "./shutdown.js";

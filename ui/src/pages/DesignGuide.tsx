@@ -22,6 +22,7 @@ import {
   User,
   Zap,
 } from "lucide-react";
+import { ShutdownDialog } from "../components/ShutdownDialog";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -123,6 +124,25 @@ import { FilterBar, type FilterValue } from "@/components/FilterBar";
 import { InlineEditor } from "@/components/InlineEditor";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { Identity } from "@/components/Identity";
+
+/* ------------------------------------------------------------------ */
+/*  Shutdown showcase helper                                           */
+/* ------------------------------------------------------------------ */
+
+function ShutdownDialogShowcase() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="flex items-center gap-3">
+      <Button variant="destructive" size="sm" onClick={() => setOpen(true)}>
+        Open Shutdown Dialog
+      </Button>
+      <ShutdownDialog open={open} onOpenChange={setOpen} />
+      <span className="text-xs text-muted-foreground">
+        Opens the confirmation dialog with timeout + optional server exit.
+      </span>
+    </div>
+  );
+}
 
 /* ------------------------------------------------------------------ */
 /*  Section wrapper                                                    */
@@ -1301,6 +1321,43 @@ export function DesignGuide() {
             );
           })}
         </div>
+      </Section>
+
+      {/* ============================================================ */}
+      {/*  SHUTDOWN BANNER / DIALOG                                     */}
+      {/* ============================================================ */}
+      <Section title="Shutdown Banner">
+        <p className="text-sm text-muted-foreground mb-4">
+          Rendered at the top of the layout when the server shutdown phase is not <code>idle</code>.
+          Three phases shown below (static previews).
+        </p>
+        <div className="divide-y divide-border border border-border rounded-md overflow-hidden">
+          {/* draining */}
+          <div className="flex items-center justify-between gap-4 px-4 py-2 border-b border-destructive/30 bg-destructive/10 text-sm">
+            <div className="flex items-center gap-2">
+              <span className="inline-flex shrink-0 rounded-full px-2 py-0.5 text-xs font-medium bg-amber-200 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300">draining</span>
+              <span>Draining 3 agents… <span className="text-muted-foreground">90s remaining</span></span>
+            </div>
+            <Button variant="outline" size="sm">Cancel shutdown</Button>
+          </div>
+          {/* drained */}
+          <div className="flex items-center justify-between gap-4 px-4 py-2 bg-muted border-b border-border text-sm">
+            <div className="flex items-center gap-2">
+              <span className="inline-flex shrink-0 rounded-full px-2 py-0.5 text-xs font-medium bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300">drained</span>
+              <span>All agents paused — <span className="text-muted-foreground">system available for manual use.</span></span>
+            </div>
+            <Button size="sm">Resume agents</Button>
+          </div>
+          {/* stopping */}
+          <div className="flex items-center gap-4 px-4 py-2 border-b border-destructive/30 bg-destructive/10 text-sm">
+            <span className="inline-flex shrink-0 rounded-full px-2 py-0.5 text-xs font-medium bg-red-200 text-red-700 dark:bg-red-900/50 dark:text-red-300">stopping</span>
+            <span>Stopping server…</span>
+          </div>
+        </div>
+      </Section>
+
+      <Section title="Shutdown Dialog">
+        <ShutdownDialogShowcase />
       </Section>
 
       {/* ============================================================ */}

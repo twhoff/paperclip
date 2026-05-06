@@ -485,7 +485,7 @@ export async function startServer(): Promise<StartedServer> {
   const listenPort = await detectPort(config.port);
   const uiMode = config.uiDevMiddleware ? "vite-dev" : config.serveUi ? "static" : "none";
   const storageService = createStorageServiceFromConfig(config);
-  const app = await createApp(db as any, {
+  const { app, shutdown } = await createApp(db as any, {
     uiMode,
     serverPort: listenPort,
     storageService,
@@ -499,6 +499,13 @@ export async function startServer(): Promise<StartedServer> {
     resolveSession,
   });
   const server = createServer(app as unknown as Parameters<typeof createServer>[0]);
+  shutdown.setTargets({
+    httpServer: server,
+    stopEmbeddedPostgres:
+      embeddedPostgres && embeddedPostgresStartedByThisProcess
+        ? () => embeddedPostgres.stop()
+        : undefined,
+  });
   
   if (listenPort !== config.port) {
     logger.warn(`Requested port is busy; using next free port (requestedPort=${config.port}, selectedPort=${listenPort})`);
