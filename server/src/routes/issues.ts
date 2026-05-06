@@ -355,7 +355,7 @@ export function issueRoutes(db: Db, storage: StorageService) {
         ? req.query.wakeCommentId.trim()
         : null;
 
-    const [ancestors, project, goal, commentCursor, wakeComment] = await Promise.all([
+    const [ancestors, project, goal, commentCursor, wakeComment, companyGoals] = await Promise.all([
       svc.getAncestors(issue.id),
       issue.projectId ? projectsSvc.getById(issue.projectId) : null,
       issue.goalId
@@ -365,6 +365,7 @@ export function issueRoutes(db: Db, storage: StorageService) {
           : null,
       svc.getCommentCursor(issue.id),
       wakeCommentId ? svc.getComment(wakeCommentId) : null,
+      goalsSvc.listActiveCompanyGoals(issue.companyId),
     ]);
 
     res.json({
@@ -401,11 +402,21 @@ export function issueRoutes(db: Db, storage: StorageService) {
         ? {
             id: goal.id,
             title: goal.title,
+            description: goal.description,
             status: goal.status,
             level: goal.level,
             parentId: goal.parentId,
+            ownerAgentId: goal.ownerAgentId,
           }
         : null,
+      companyGoals: companyGoals.map((g) => ({
+        id: g.id,
+        title: g.title,
+        description: g.description,
+        status: g.status,
+        level: g.level,
+        parentId: g.parentId,
+      })),
       commentCursor,
       wakeComment:
         wakeComment && wakeComment.issueId === issue.id

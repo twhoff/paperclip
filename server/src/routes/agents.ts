@@ -34,6 +34,7 @@ import {
   approvalService,
   companySkillService,
   budgetService,
+  goalService,
   heartbeatService,
   issueApprovalService,
   issueService,
@@ -1018,6 +1019,16 @@ export function agentRoutes(db: Db) {
         activeRun: issue.activeRun,
       })),
     );
+  });
+
+  router.get("/agents/me/scoped-goals", async (req, res) => {
+    if (req.actor.type !== "agent" || !req.actor.agentId) {
+      res.status(401).json({ error: "Agent authentication required" });
+      return;
+    }
+    const goalsSvc = goalService(db);
+    const scoped = await goalsSvc.listScopedForAgent(req.actor.agentId);
+    res.json(scoped);
   });
 
   router.get("/agents/:id", async (req, res) => {

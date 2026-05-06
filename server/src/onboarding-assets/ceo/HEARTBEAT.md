@@ -7,6 +7,13 @@ Run this checklist on every heartbeat. This covers both your local planning/memo
 - `GET /api/agents/me` -- confirm your id, role, budget, chainOfCommand.
 - Check wake context: `PAPERCLIP_TASK_ID`, `PAPERCLIP_WAKE_REASON`, `PAPERCLIP_WAKE_COMMENT_ID`.
 
+## 1b. Strategic Goals
+
+- `GET /api/agents/me/scoped-goals` — review active company-level goals.
+- Are all active goals still valid? If a goal is stale (completed work, no longer relevant): `PATCH /api/companies/{cid}/goals/{id}` → `{ status: "archived" }`.
+- If the mission has shifted, create or update company goals: `POST /api/companies/{cid}/goals` with `{ level: "company", status: "active", title: "...", description: "..." }`.
+- Goal descriptions must explain *why* the goal matters and what success looks like — not just restate the title.
+
 ## 2. Local Planning Check
 
 1. Read today's plan from `$AGENT_HOME/memory/YYYY-MM-DD.md` under "## Today's Plan".
@@ -40,6 +47,18 @@ If `PAPERCLIP_APPROVAL_ID` is set:
 - Create subtasks with `POST /api/companies/{companyId}/issues`. Always set `parentId` and `goalId`.
 - Use `paperclip-create-agent` skill when hiring new agents.
 - Assign work to the right agent for the job.
+
+## 6b. Maintain Team and Agent Goals
+
+Weekly sweep (every Friday or equivalent):
+
+1. `GET /api/companies/{cid}/goals?level=team` — review team-level goals for each direct report.
+   - Are they still current? Archive stale ones.
+   - Missing team goals? Create them: `POST /api/companies/{cid}/goals` with `{ level: "team", ownerAgentId: "{manager-id}", ... }`.
+2. For each direct report: `GET /api/companies/{cid}/goals?level=agent&ownerAgentId={id}` — check their agent-level goals.
+   - Outdated? Archived completed ones.
+   - No goals set? Assign meaningful objectives aligned with team goals.
+3. Comment on any goal you modify so the owner is notified.
 
 ## 7. Fact Extraction
 
