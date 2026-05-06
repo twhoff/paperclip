@@ -2,6 +2,9 @@
 
 Guidance for human and AI contributors working in this repository.
 
+> **Authentication Requirement:**
+> All Paperclip API calls must use the `paperclip-ctx-auth` skill and the `paperclipRequest` helper. Do NOT use Copilot CLI, pcli, curl, or direct API keys. In authenticated mode, only `paperclip-ctx-auth` provides valid agent authentication. Any other method will fail.
+
 ## 1. Purpose
 
 Paperclip is a control plane for AI-agent companies.
