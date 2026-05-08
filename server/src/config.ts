@@ -80,6 +80,7 @@ export interface Config {
   heartbeatSchedulerEnabled: boolean;
   heartbeatSchedulerIntervalMs: number;
   heartbeatMaxRunDurationMs: number;
+  heartbeatEventSilenceThresholdMs: number;
   companyDeletionEnabled: boolean;
 }
 
@@ -337,6 +338,10 @@ export function loadConfig(): Config {
     heartbeatMaxRunDurationMs: Math.max(
       5 * 60 * 1000,
       Number(process.env.HEARTBEAT_MAX_RUN_DURATION_MS) || 45 * 60 * 1000,
+    ),
+    heartbeatEventSilenceThresholdMs: Math.max(
+      60 * 1000,
+      Number(process.env.HEARTBEAT_EVENT_SILENCE_THRESHOLD_MS) || 10 * 60 * 1000,
     ),
     companyDeletionEnabled,
   };

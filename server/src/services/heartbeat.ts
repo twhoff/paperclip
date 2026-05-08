@@ -1939,9 +1939,66 @@ export function heartbeatService(db: Db) {
     };
   }
 
-  async function reapOrphanedRuns(opts?: { staleThresholdMs?: number; maxRunDurationMs?: number }) {
+  async function killAndFinalizeAsTimeout(
+    run: typeof heartbeatRuns.$inferSelect,
+    now: Date,
+    timeoutMessage: string,
+    extraPayload: Record<string, unknown>,
+  ) {
+    if (run.processPid) {
+      try {
+        process.kill(run.processPid, "SIGTERM");
+        await new Promise((r) => setTimeout(r, 5_000));
+        if (isProcessAlive(run.processPid)) {
+          process.kill(run.processPid, "SIGKILL");
+        }
+      } catch {
+        // Process may have already exited between check and kill
+      }
+    }
+    const timedOutRun = await setRunStatus(run.id, "failed", {
+      error: timeoutMessage,
+      errorCode: "timeout",
+      finishedAt: now,
+    });
+    await setWakeupStatus(run.wakeupRequestId, "failed", {
+      finishedAt: now,
+      error: timeoutMessage,
+    });
+    const resolvedTimedOut = timedOutRun ?? await getRun(run.id);
+    if (resolvedTimedOut) {
+      await appendRunEvent(resolvedTimedOut, await nextRunEventSeq(resolvedTimedOut.id), {
+        eventType: "lifecycle",
+        stream: "system",
+        level: "error",
+        message: timeoutMessage,
+        payload: { ...(run.processPid ? { processPid: run.processPid } : {}), ...extraPayload },
+      });
+      await releaseIssueExecutionAndPromote(resolvedTimedOut);
+      await finalizeAgentStatus(run.agentId, "timed_out");
+    }
+    activeRunExecutions.delete(run.id);
+    runningProcesses.delete(run.id);
+  }
+
+  async function getLastRunEventAt(runId: string): Promise<Date | null> {
+    const [row] = await db
+      .select({ createdAt: heartbeatRunEvents.createdAt })
+      .from(heartbeatRunEvents)
+      .where(eq(heartbeatRunEvents.runId, runId))
+      .orderBy(desc(heartbeatRunEvents.seq))
+      .limit(1);
+    return row?.createdAt ? new Date(row.createdAt) : null;
+  }
+
+  async function reapOrphanedRuns(opts?: {
+    staleThresholdMs?: number;
+    maxRunDurationMs?: number;
+    eventSilenceThresholdMs?: number;
+  }) {
     const staleThresholdMs = opts?.staleThresholdMs ?? 0;
     const maxRunDurationMs = opts?.maxRunDurationMs ?? 0;
+    const eventSilenceThresholdMs = opts?.eventSilenceThresholdMs ?? 0;
     const now = new Date();
 
     // Find all runs stuck in "running" state (queued runs are legitimately waiting; resumeQueuedRuns handles them)
@@ -1957,85 +2014,93 @@ export function heartbeatService(db: Db) {
     const reaped: string[] = [];
 
     for (const { run, adapterType } of activeRuns) {
-      if (runningProcesses.has(run.id) || activeRunExecutions.has(run.id)) continue;
-
-      // Apply staleness threshold to avoid false positives
+      // Apply staleness threshold to avoid false positives on very fresh runs.
+      // This applies to the in-memory-tracked path too: a run that was just claimed
+      // shouldn't be touched even if duration/silence thresholds would otherwise fire.
       if (staleThresholdMs > 0) {
         const refTime = run.updatedAt ? new Date(run.updatedAt).getTime() : 0;
         if (now.getTime() - refTime < staleThresholdMs) continue;
       }
 
       const tracksLocalChild = isTrackedLocalChildProcessAdapter(adapterType);
-      if (tracksLocalChild && run.processPid && isProcessAlive(run.processPid)) {
-        // Check hard timeout: if alive but exceeded max duration, kill the process
+      const pidAlive = tracksLocalChild && !!run.processPid && isProcessAlive(run.processPid);
+
+      // 1) Hard duration timeout. Fires regardless of in-memory tracking — a wedged
+      //    in-memory pump (e.g. ctx_execute waiting on a backgrounded next-server
+      //    that never closes its stdout) must not be able to bypass this cap.
+      if (pidAlive && maxRunDurationMs > 0) {
         const runStartTime = run.processStartedAt
           ? new Date(run.processStartedAt).getTime()
           : run.startedAt
             ? new Date(run.startedAt).getTime()
             : 0;
-        if (maxRunDurationMs > 0 && runStartTime > 0 && now.getTime() - runStartTime > maxRunDurationMs) {
+        if (runStartTime > 0 && now.getTime() - runStartTime > maxRunDurationMs) {
           const durationMin = Math.round((now.getTime() - runStartTime) / 60_000);
           const maxMin = Math.round(maxRunDurationMs / 60_000);
           logger.warn(
             { runId: run.id, pid: run.processPid, durationMin },
             `killing hung process after ${durationMin}min (max ${maxMin}min)`,
           );
-          try {
-            process.kill(run.processPid, "SIGTERM");
-            await new Promise((r) => setTimeout(r, 5_000));
-            if (isProcessAlive(run.processPid)) {
-              process.kill(run.processPid, "SIGKILL");
-            }
-          } catch {
-            // Process may have already exited between check and kill
-          }
-          // Finalize as timed_out — not as process_lost. Timeout is deliberate; don't retry.
-          const timeoutMessage = `Run exceeded max duration of ${maxMin}min; process killed`;
-          const timedOutRun = await setRunStatus(run.id, "failed", {
-            error: timeoutMessage,
-            errorCode: "timeout",
-            finishedAt: now,
-          });
-          await setWakeupStatus(run.wakeupRequestId, "failed", {
-            finishedAt: now,
-            error: timeoutMessage,
-          });
-          const resolvedTimedOut = timedOutRun ?? await getRun(run.id);
-          if (resolvedTimedOut) {
-            await appendRunEvent(resolvedTimedOut, await nextRunEventSeq(resolvedTimedOut.id), {
-              eventType: "lifecycle",
-              stream: "system",
-              level: "error",
-              message: timeoutMessage,
-              payload: { processPid: run.processPid, durationMin, maxDurationMin: maxMin },
-            });
-            await releaseIssueExecutionAndPromote(resolvedTimedOut);
-            await finalizeAgentStatus(run.agentId, "timed_out");
-          }
-          runningProcesses.delete(run.id);
+          await killAndFinalizeAsTimeout(
+            run,
+            now,
+            `Run exceeded max duration of ${maxMin}min; process killed`,
+            { durationMin, maxDurationMin: maxMin, reason: "max_duration" },
+          );
           reaped.push(run.id);
           continue;
-        } else {
-          if (run.errorCode !== DETACHED_PROCESS_ERROR_CODE) {
-            const detachedMessage = `Lost in-memory process handle, but child pid ${run.processPid} is still alive`;
-            const detachedRun = await setRunStatus(run.id, "running", {
-              error: detachedMessage,
-              errorCode: DETACHED_PROCESS_ERROR_CODE,
-            });
-            if (detachedRun) {
-              await appendRunEvent(detachedRun, await nextRunEventSeq(detachedRun.id), {
-                eventType: "lifecycle",
-                stream: "system",
-                level: "warn",
-                message: detachedMessage,
-                payload: {
-                  processPid: run.processPid,
-                },
-              });
-            }
-          }
+        }
+      }
+
+      // 2) Silence watchdog. If the run has produced no event_seq progress for
+      //    `eventSilenceThresholdMs`, the adapter pump is stuck. Kill regardless
+      //    of in-memory tracking — same wedge mode, different signal.
+      if (pidAlive && eventSilenceThresholdMs > 0) {
+        const lastEventAt = await getLastRunEventAt(run.id);
+        const refDate = lastEventAt ?? (run.startedAt ? new Date(run.startedAt) : null);
+        if (refDate && now.getTime() - refDate.getTime() > eventSilenceThresholdMs) {
+          const silenceMin = Math.round((now.getTime() - refDate.getTime()) / 60_000);
+          const thresholdMin = Math.round(eventSilenceThresholdMs / 60_000);
+          logger.warn(
+            { runId: run.id, pid: run.processPid, silenceMin, thresholdMin },
+            `killing event-silent process after ${silenceMin}min idle (threshold ${thresholdMin}min)`,
+          );
+          await killAndFinalizeAsTimeout(
+            run,
+            now,
+            `Run produced no events for ${silenceMin}min (threshold ${thresholdMin}min); process killed`,
+            { silenceMin, silenceThresholdMin: thresholdMin, reason: "event_silence" },
+          );
+          reaped.push(run.id);
           continue;
         }
+      }
+
+      // From here on we only handle the case where the server has lost the
+      // in-memory handle. Runs that the server is still actively driving and
+      // that have not tripped a watchdog above are left alone.
+      if (runningProcesses.has(run.id) || activeRunExecutions.has(run.id)) continue;
+
+      if (tracksLocalChild && run.processPid && isProcessAlive(run.processPid)) {
+        if (run.errorCode !== DETACHED_PROCESS_ERROR_CODE) {
+          const detachedMessage = `Lost in-memory process handle, but child pid ${run.processPid} is still alive`;
+          const detachedRun = await setRunStatus(run.id, "running", {
+            error: detachedMessage,
+            errorCode: DETACHED_PROCESS_ERROR_CODE,
+          });
+          if (detachedRun) {
+            await appendRunEvent(detachedRun, await nextRunEventSeq(detachedRun.id), {
+              eventType: "lifecycle",
+              stream: "system",
+              level: "warn",
+              message: detachedMessage,
+              payload: {
+                processPid: run.processPid,
+              },
+            });
+          }
+        }
+        continue;
       }
 
       const baseMessage = run.processPid

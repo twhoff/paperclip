@@ -94,6 +94,15 @@ function spawnAliveProcess() {
   });
 }
 
+function isAlive(pid: number) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function waitFor(check: () => Promise<void>, timeoutMs = 5_000, intervalMs = 50) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -258,6 +267,110 @@ describe("heartbeat orphaned process recovery", () => {
       .then((rows) => rows[0] ?? null);
     expect(wakeup?.status).toBe("claimed");
   });
+
+  it("reaps a max-duration-exceeded local run even when it is still tracked in runningProcesses", async () => {
+    const child = spawnAliveProcess();
+    childProcesses.add(child);
+    expect(child.pid).toBeTypeOf("number");
+
+    const { runId, agentId } = await seedRunFixture({
+      processPid: child.pid ?? null,
+      includeIssue: false,
+    });
+
+    // processStartedAt + startedAt sit at fixture date (2026-03-19); real `now`
+    // is well past that, so any non-zero maxRunDurationMs trips the cap.
+    await db
+      .update(heartbeatRuns)
+      .set({ processStartedAt: new Date("2026-03-19T00:00:00.000Z") })
+      .where(eq(heartbeatRuns.id, runId));
+
+    // Simulate the wedge: server still has the in-memory handle, but the
+    // adapter pump is stuck and not advancing the run.
+    runningProcesses.set(runId, { child, graceSec: 1 });
+
+    const heartbeat = heartbeatService(db);
+    const result = await heartbeat.reapOrphanedRuns({ maxRunDurationMs: 60 * 1000 });
+
+    expect(result.reaped).toBe(1);
+    expect(result.runIds).toEqual([runId]);
+
+    const run = await heartbeat.getRun(runId);
+    expect(run?.status).toBe("failed");
+    expect(run?.errorCode).toBe("timeout");
+    expect(run?.error).toContain("max duration");
+
+    expect(runningProcesses.has(runId)).toBe(false);
+
+    // No retry should be queued for a deliberate timeout.
+    const allRuns = await db
+      .select()
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.agentId, agentId));
+    expect(allRuns).toHaveLength(1);
+
+    // Child process should have been signalled (SIGTERM → exit). Allow a small
+    // grace for the OS to deliver the signal before asserting.
+    await waitFor(async () => {
+      expect(child.pid && isAlive(child.pid)).toBe(false);
+    }, 8_000);
+  }, 20_000);
+
+  it("reaps an event-silent local run even when it is still tracked in runningProcesses", async () => {
+    const child = spawnAliveProcess();
+    childProcesses.add(child);
+    expect(child.pid).toBeTypeOf("number");
+
+    const { runId, companyId, agentId } = await seedRunFixture({
+      processPid: child.pid ?? null,
+      includeIssue: false,
+    });
+
+    // Fresh process start so the duration watchdog can't fire — only silence should.
+    const recentStart = new Date(Date.now() - 30_000);
+    await db
+      .update(heartbeatRuns)
+      .set({ processStartedAt: recentStart, startedAt: recentStart })
+      .where(eq(heartbeatRuns.id, runId));
+
+    // Seed a single old event so the silence watchdog has something stale to read.
+    await db.insert(heartbeatRunEvents).values({
+      companyId,
+      runId,
+      agentId,
+      seq: 1,
+      eventType: "lifecycle",
+      stream: "system",
+      level: "info",
+      message: "run started",
+      createdAt: new Date("2026-03-19T00:00:00.000Z"),
+    });
+
+    runningProcesses.set(runId, { child, graceSec: 1 });
+
+    const heartbeat = heartbeatService(db);
+    const result = await heartbeat.reapOrphanedRuns({ eventSilenceThresholdMs: 60 * 1000 });
+
+    expect(result.reaped).toBe(1);
+    expect(result.runIds).toEqual([runId]);
+
+    const run = await heartbeat.getRun(runId);
+    expect(run?.status).toBe("failed");
+    expect(run?.errorCode).toBe("timeout");
+    expect(run?.error).toMatch(/no events/i);
+
+    expect(runningProcesses.has(runId)).toBe(false);
+
+    const allRuns = await db
+      .select()
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.agentId, agentId));
+    expect(allRuns).toHaveLength(1);
+
+    await waitFor(async () => {
+      expect(child.pid && isAlive(child.pid)).toBe(false);
+    }, 8_000);
+  }, 20_000);
 
   it("queues exactly one retry when the recorded local pid is dead", async () => {
     const { agentId, runId, issueId } = await seedRunFixture({

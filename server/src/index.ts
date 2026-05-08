@@ -588,7 +588,11 @@ export async function startServer(): Promise<StartedServer> {
       // Periodically reap orphaned runs (5-min staleness threshold) and make sure
       // persisted queued work is still being driven forward.
       void heartbeat
-        .reapOrphanedRuns({ staleThresholdMs: 5 * 60 * 1000, maxRunDurationMs: config.heartbeatMaxRunDurationMs })
+        .reapOrphanedRuns({
+          staleThresholdMs: 5 * 60 * 1000,
+          maxRunDurationMs: config.heartbeatMaxRunDurationMs,
+          eventSilenceThresholdMs: config.heartbeatEventSilenceThresholdMs,
+        })
         .then(() => heartbeat.resumeQueuedRuns())
         .catch((err) => {
           logger.error({ err }, "periodic heartbeat recovery failed");
