@@ -111,8 +111,26 @@ export function resolveLocalAgentIdentity() {
   return _identity;
 }
 
+const HTTP_METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"]);
+
 export async function paperclipRequest(apiPath, options = {}) {
+  // Support alternate calling convention: paperclipRequest(method, path, body)
+  // Agents naturally reach for (method, url) so we detect and normalise it.
+  if (typeof apiPath === "string" && HTTP_METHODS.has(apiPath.toUpperCase()) && typeof options === "string") {
+    const method = apiPath.toUpperCase();
+    const path = options;
+    const body = arguments[2];
+    const opts = { method };
+    if (body !== undefined) {
+      opts.body = typeof body === "string" ? body : JSON.stringify(body);
+      opts.headers = { "Content-Type": "application/json" };
+    }
+    return paperclipRequest(path, opts);
+  }
+
   const apiBase = resolveApiBase();
+  // Strip accidental /api/ double-prefix (base already ends with /api).
+  const normPath = apiPath.replace(/^\/api\//, "/");
   const identity = options.identity || resolveLocalAgentIdentity();
   const { token, runId } = mintLocalAgentJwt({
     agentId: identity.agentId,
@@ -125,11 +143,35 @@ export async function paperclipRequest(apiPath, options = {}) {
   headers.set("Authorization", `Bearer ${token}`);
   headers.set("X-Paperclip-Run-Id", runId);
 
-  const response = await fetch(`${apiBase}${apiPath}`, {
+  const response = await fetch(`${apiBase}${normPath}`, {
     ...options,
     headers,
   });
   return { response, runId, identity };
+}
+
+/**
+ * Convenience wrapper: calls paperclipRequest and returns parsed JSON data.
+ * Throws on non-2xx. Use this instead of paperclipRequest when you don't
+ * need the raw Response or runId.
+ *
+ *   const me = await callApi("GET", "/agents/me");
+ *   const items = await callApi("GET", `/companies/${cid}/issues?status=in_review`);
+ *   await callApi("POST", `/issues/${id}/comments`, { body: "done" });
+ */
+export async function callApi(method, path, body) {
+  const opts = { method: method.toUpperCase() };
+  if (body !== undefined) {
+    opts.body = typeof body === "string" ? body : JSON.stringify(body);
+    opts.headers = { "Content-Type": "application/json" };
+  }
+  const { response } = await paperclipRequest(path, opts);
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(`Paperclip API ${method} ${path} → ${response.status}: ${text.slice(0, 200)}`);
+  }
+  const text = await response.text();
+  try { return text ? JSON.parse(text) : null; } catch { return text; }
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

@@ -1,6 +1,6 @@
 ---
 name: paperclip-ctx-auth
-description: "Authenticate to the Paperclip API in authenticated deployment mode. Use when making API calls that return 'Board access required', '401 Agent authentication required', or other auth errors. Covers minting local agent JWTs, board session auth, and the `paperclip_context_mode_request.mjs` helper for `ctx_execute`. Triggers: `deploymentMode: authenticated`, curl/fetch returning 401/403, `PAPERCLIP_API_KEY` unusable, pausing or managing agents via API, any Paperclip REST call needing auth."
+description: "Authenticate to the Paperclip API in authenticated deployment mode. Use when making API calls that return 'Board access required', '401 Agent authentication required', or other auth errors. Covers minting local agent JWTs, board session auth, and the `paperclip_context_mode_request.mjs` helper for `ctx_execute`. Exports: `callApi(method, path, body?)` returns parsed JSON directly (preferred); `paperclipRequest(path, options?)` returns raw Response. Both accept `/api/` prefix — strip is automatic. Triggers: `deploymentMode: authenticated`, curl/fetch returning 401/403, `PAPERCLIP_API_KEY` unusable, any Paperclip REST call needing auth."
 ---
 
 # Paperclip ctx auth
@@ -10,17 +10,42 @@ This is an injected file-backed skill, not a callable tool. In Codex runtimes, P
 
 The key point: inside `ctx_execute`, `PAPERCLIP_API_KEY` may be the fallback `pcli-local`. In authenticated mode that fails. Mint a real local agent JWT inside the sandbox instead.
 
-## Quick start
+## Quick start — use `callApi` (preferred)
 
-Import the bundled helper from `ctx_execute`:
+`callApi(method, path, body?)` returns **parsed JSON directly** — no `.json()` call, no destructuring, no raw Response object to manage. Use this for all routine board reads and writes.
+
+```javascript
+const { callApi } =
+  await import('file:///absolute/path/to/.agents/skills/paperclip-ctx-auth/scripts/paperclip_context_mode_request.mjs')
+
+// Read
+const me = await callApi('GET', '/agents/me')
+console.log(me.id, me.role, me.adapterType)
+
+// Read with /api/ prefix (both forms work)
+const inbox = await callApi('GET', '/api/agents/me/inbox-lite')
+
+// Write
+await callApi('POST', `/api/issues/${id}/comments`, { body: 'done' })
+```
+
+`callApi` accepts the path with or without `/api/` prefix — it normalises automatically. It throws a descriptive error on non-2xx.
+
+## Low-level access — `paperclipRequest`
+
+Use `paperclipRequest` only when you need the raw `Response` object or the `runId`/`identity` metadata.
 
 ```javascript
 const { paperclipRequest } =
   await import('file:///absolute/path/to/.agents/skills/paperclip-ctx-auth/scripts/paperclip_context_mode_request.mjs')
 
+// (apiPath, options?) — original form
 const { response, runId, identity } = await paperclipRequest('/agents/me')
 const body = await response.json()
-console.log(JSON.stringify({ status: response.status, runId, identity, body }, null, 2))
+
+// (method, path, body?) — alternative form, equally valid
+const { response: r2 } = await paperclipRequest('GET', '/agents/me')
+const body2 = await r2.json()
 ```
 
 If you are working from a worktree, change the absolute prefix but keep the `.agents/skills/paperclip-ctx-auth/...` suffix.
@@ -36,7 +61,7 @@ console.log(await res.text())
 
 2. If the health response shows `deploymentMode: authenticated`, do not rely on `PAPERCLIP_API_KEY=pcli-local`.
 
-3. Import `scripts/paperclip_context_mode_request.mjs` and call `paperclipRequest('/path')`.
+3. Import `callApi` and use it for all board reads/writes.
 
 4. If you already know the agent identity, pass it explicitly:
 
