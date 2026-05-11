@@ -1,5 +1,7 @@
 # AGENTS.md
 
+**MANDATORY FIRST STEP: LOAD THE context-mode SKILL AND USE IT FOR ALL OPERATIONS.**
+
 Guidance for human and AI contributors working in this repository.
 
 > **Authentication Requirement:**
@@ -181,10 +183,6 @@ ALL work requiring edit permission MUST be done in a git worktree.
    git worktree remove paperclip-worktrees/branch-name
    ```
 
-IMPORTANT RULES:
-
-- NEVER push to upstream branches or create PRs in this repo. All changes must go directly to master.
-
 ## 12. Landing the Plane
 
 Work is NOT complete until `git push` succeeds.
@@ -205,3 +203,9 @@ Work is NOT complete until `git push` succeeds.
    ```
 
 4. Verify: `git status` must show "up to date with origin"
+
+## CRITICAL RULES
+
+- ALWAYS use context-mode for ALL operations.
+- IF context-mode NOT available, STOP IMMEDIATELY, DO NOT PROCEED, DO NOT START ANY WORK; instead, report "Context mode not available" and await instructions.
+- NEVER push to upstream branches or create PRs in this repo. All changes must go directly to master.
