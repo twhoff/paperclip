@@ -55,12 +55,4 @@ tests/release-smoke/playwright-report/
 
 # context-mode auto-generated file
 .github/copilot-instructions.md
-.github/context-mode/content/8a5edab282632443.db
-.github/context-mode/content/8a5edab282632443.db-shm
-.github/context-mode/content/8a5edab282632443.db-wal
-.github/context-mode/sessions/stats-pid-1.json
-.github/context-mode/sessions/stats-pid-1099.json
-.github/context-mode/sessions/stats-pid-21110.json
-.github/context-mode/sessions/stats-pid-32833.json
-.github/context-mode/sessions/stats-pid-54472.json
-.github/context-mode/sessions/stats-pid-82385.json
+.github/context-mode/*
