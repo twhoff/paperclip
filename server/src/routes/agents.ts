@@ -63,6 +63,7 @@ import {
   loadDefaultAgentInstructionsBundle,
   resolveDefaultAgentInstructionsBundleRole,
 } from "../services/default-agent-instructions.js";
+import { resolveDefaultAgentWorkspaceDir } from "../home-paths.js";
 
 export function agentRoutes(db: Db) {
   const DEFAULT_INSTRUCTIONS_PATH_KEYS: Record<string, string> = {
@@ -152,10 +153,23 @@ export function agentRoutes(db: Db) {
       buildAgentAccessState(agent),
     ]);
 
+    // The agent's persistent workspace home — where per-agent memory lives:
+    // MEMORY.md (tacit knowledge), memory/YYYY-MM-DD.md (daily notes), and
+    // life/{projects,areas,resources,archives}/ (PARA knowledge graph).
+    // Stable absolute path; directory may not exist yet for new agents and
+    // is created lazily by the heartbeat or by callers on first write.
+    let workspacePath: string | null;
+    try {
+      workspacePath = resolveDefaultAgentWorkspaceDir(agent.id);
+    } catch {
+      workspacePath = null;
+    }
+
     return {
       ...(options?.restricted ? redactForRestrictedAgentView(agent) : agent),
       chainOfCommand,
       access: accessState,
+      workspacePath,
     };
   }
 
