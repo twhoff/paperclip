@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import { and, eq, inArray, sql } from "drizzle-orm";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   applyPendingMigrations,
   createDb,
@@ -21,6 +21,7 @@ import {
 } from "@paperclipai/db";
 import { runningProcesses } from "../adapters/index.ts";
 import { heartbeatService } from "../services/heartbeat.ts";
+import { runActivityRegistry } from "../services/run-activity-registry.ts";
 
 type EmbeddedPostgresInstance = {
   initialise(): Promise<void>;
@@ -131,6 +132,7 @@ describe("heartbeat orphaned process recovery", () => {
 
   afterEach(async () => {
     runningProcesses.clear();
+    runActivityRegistry.reset();
     for (const child of childProcesses) {
       child.kill("SIGKILL");
     }
@@ -357,7 +359,9 @@ describe("heartbeat orphaned process recovery", () => {
     const run = await heartbeat.getRun(runId);
     expect(run?.status).toBe("failed");
     expect(run?.errorCode).toBe("timeout");
-    expect(run?.error).toMatch(/no events/i);
+    // New message format: "Run idle for <n>min since last db_event activity ..."
+    expect(run?.error).toMatch(/Run idle for/);
+    expect(run?.error).toContain("db_event");
 
     expect(runningProcesses.has(runId)).toBe(false);
 
@@ -537,6 +541,250 @@ describe("heartbeat orphaned process recovery", () => {
       expect([currentOlderRun?.status, currentNewerRun?.status]).not.toContain("running");
     });
   });
+
+  // ---------------------------------------------------------------------
+  // Idle-watchdog regression tests for Bug A (pcli-7h2):
+  //
+  // The watchdog used to read activity solely from `heartbeat_run_events`.
+  // After lifecycle/run_started + adapter/invoke the server might see no
+  // new rows for >10 minutes while the adapter was still producing useful
+  // stream events, and the run was killed mid-task. The fix routes both
+  // stream events and DB events through `runActivityRegistry`. These tests
+  // exercise the new behaviour.
+  // ---------------------------------------------------------------------
+
+  it("does NOT reap a run whose only DB events are stale, when meaningful stream activity is fresh", async () => {
+    const child = spawnAliveProcess();
+    childProcesses.add(child);
+    expect(child.pid).toBeTypeOf("number");
+
+    const { runId, companyId, agentId } = await seedRunFixture({
+      processPid: child.pid ?? null,
+      includeIssue: false,
+    });
+
+    // Fresh process so the duration watchdog can't fire.
+    const recentStart = new Date(Date.now() - 30_000);
+    await db
+      .update(heartbeatRuns)
+      .set({ processStartedAt: recentStart, startedAt: recentStart })
+      .where(eq(heartbeatRuns.id, runId));
+
+    // Stale DB event (matches the bug shape: only lifecycle/run_started persisted)
+    await db.insert(heartbeatRunEvents).values({
+      companyId,
+      runId,
+      agentId,
+      seq: 1,
+      eventType: "lifecycle",
+      stream: "system",
+      level: "info",
+      message: "run started",
+      createdAt: new Date("2026-03-19T00:00:00.000Z"),
+    });
+
+    // Fresh stream activity recorded by the on-log pump.
+    runActivityRegistry.record(runId, "stream", new Date());
+    runningProcesses.set(runId, { child, graceSec: 1 });
+
+    const heartbeat = heartbeatService(db);
+    const result = await heartbeat.reapOrphanedRuns({ eventSilenceThresholdMs: 60 * 1000 });
+
+    expect(result.reaped).toBe(0);
+    const run = await heartbeat.getRun(runId);
+    expect(run?.status).toBe("running");
+    expect(child.pid && isAlive(child.pid)).toBe(true);
+  }, 20_000);
+
+  it("reaps a run when both DB events and stream activity are older than the idle threshold", async () => {
+    const child = spawnAliveProcess();
+    childProcesses.add(child);
+
+    const { runId, companyId, agentId } = await seedRunFixture({
+      processPid: child.pid ?? null,
+      includeIssue: false,
+    });
+
+    const recentStart = new Date(Date.now() - 30_000);
+    await db
+      .update(heartbeatRuns)
+      .set({ processStartedAt: recentStart, startedAt: recentStart })
+      .where(eq(heartbeatRuns.id, runId));
+
+    await db.insert(heartbeatRunEvents).values({
+      companyId,
+      runId,
+      agentId,
+      seq: 1,
+      eventType: "lifecycle",
+      stream: "system",
+      level: "info",
+      message: "run started",
+      createdAt: new Date("2026-03-19T00:00:00.000Z"),
+    });
+    // Stream activity is also old.
+    runActivityRegistry.record(runId, "stream", new Date("2026-03-19T00:05:00.000Z"));
+
+    runningProcesses.set(runId, { child, graceSec: 1 });
+
+    const heartbeat = heartbeatService(db);
+    const result = await heartbeat.reapOrphanedRuns({ eventSilenceThresholdMs: 60 * 1000 });
+
+    expect(result.reaped).toBe(1);
+    const run = await heartbeat.getRun(runId);
+    expect(run?.status).toBe("failed");
+    expect(run?.errorCode).toBe("timeout");
+    expect(run?.error).toMatch(/Run idle for/);
+    // Most recent activity was a stream event in the registry, so the message
+    // should attribute the idle period to the stream source.
+    expect(run?.error).toContain("stream");
+  }, 20_000);
+
+  it("synthetic 30s-cadence/15min run is not killed when threshold is 10min", async () => {
+    const child = spawnAliveProcess();
+    childProcesses.add(child);
+
+    const { runId } = await seedRunFixture({
+      processPid: child.pid ?? null,
+      includeIssue: false,
+    });
+    const recentStart = new Date(Date.now() - 16 * 60_000);
+    await db
+      .update(heartbeatRuns)
+      .set({ processStartedAt: recentStart, startedAt: recentStart })
+      .where(eq(heartbeatRuns.id, runId));
+
+    // Replay 15 minutes of activity at 30s cadence, ending "now".
+    const end = Date.now();
+    for (let i = 30; i >= 0; i -= 1) {
+      const at = new Date(end - i * 30_000);
+      runActivityRegistry.record(runId, "stream", at);
+    }
+    runningProcesses.set(runId, { child, graceSec: 1 });
+
+    const heartbeat = heartbeatService(db);
+    const result = await heartbeat.reapOrphanedRuns({ eventSilenceThresholdMs: 10 * 60_000 });
+
+    expect(result.reaped).toBe(0);
+    expect(child.pid && isAlive(child.pid)).toBe(true);
+  }, 20_000);
+
+  it("synthetic 11-min-cadence run IS killed when threshold is 10min", async () => {
+    const child = spawnAliveProcess();
+    childProcesses.add(child);
+
+    const { runId } = await seedRunFixture({
+      processPid: child.pid ?? null,
+      includeIssue: false,
+    });
+    const recentStart = new Date(Date.now() - 12 * 60_000);
+    await db
+      .update(heartbeatRuns)
+      .set({ processStartedAt: recentStart, startedAt: recentStart })
+      .where(eq(heartbeatRuns.id, runId));
+
+    // Last stream activity was 11 minutes ago — past the 10min threshold.
+    runActivityRegistry.record(runId, "stream", new Date(Date.now() - 11 * 60_000));
+    runningProcesses.set(runId, { child, graceSec: 1 });
+
+    const heartbeat = heartbeatService(db);
+    const result = await heartbeat.reapOrphanedRuns({ eventSilenceThresholdMs: 10 * 60_000 });
+
+    expect(result.reaped).toBe(1);
+    const run = await heartbeat.getRun(runId);
+    expect(run?.status).toBe("failed");
+    expect(run?.errorCode).toBe("timeout");
+    expect(run?.error).toMatch(/Run idle for 1\dmin/);
+    expect(run?.error).toContain("stream");
+  }, 20_000);
+
+  it("falls back to heartbeat_run_events when the registry has no entry for the run (server restart case)", async () => {
+    const child = spawnAliveProcess();
+    childProcesses.add(child);
+
+    const { runId, companyId, agentId } = await seedRunFixture({
+      processPid: child.pid ?? null,
+      includeIssue: false,
+    });
+
+    const recentStart = new Date(Date.now() - 30_000);
+    await db
+      .update(heartbeatRuns)
+      .set({ processStartedAt: recentStart, startedAt: recentStart })
+      .where(eq(heartbeatRuns.id, runId));
+
+    // Fresh DB event, no registry entry → fallback path should keep run alive.
+    await db.insert(heartbeatRunEvents).values({
+      companyId,
+      runId,
+      agentId,
+      seq: 1,
+      eventType: "adapter",
+      stream: "system",
+      level: "info",
+      message: "adapter invoke",
+      createdAt: new Date(),
+    });
+    // Registry intentionally not touched.
+    expect(runActivityRegistry.get(runId)).toBeNull();
+    runningProcesses.set(runId, { child, graceSec: 1 });
+
+    const heartbeat = heartbeatService(db);
+    const result = await heartbeat.reapOrphanedRuns({ eventSilenceThresholdMs: 60 * 1000 });
+
+    expect(result.reaped).toBe(0);
+    expect(child.pid && isAlive(child.pid)).toBe(true);
+  }, 20_000);
+
+  it("watchdog does NOT read run log files from disk during a tick", async () => {
+    const child = spawnAliveProcess();
+    childProcesses.add(child);
+
+    const { runId, companyId, agentId } = await seedRunFixture({
+      processPid: child.pid ?? null,
+      includeIssue: false,
+    });
+    const recentStart = new Date(Date.now() - 30_000);
+    await db
+      .update(heartbeatRuns)
+      .set({ processStartedAt: recentStart, startedAt: recentStart })
+      .where(eq(heartbeatRuns.id, runId));
+    await db.insert(heartbeatRunEvents).values({
+      companyId,
+      runId,
+      agentId,
+      seq: 1,
+      eventType: "lifecycle",
+      stream: "system",
+      level: "info",
+      message: "run started",
+      createdAt: new Date("2026-03-19T00:00:00.000Z"),
+    });
+    runActivityRegistry.record(runId, "stream", new Date());
+    runningProcesses.set(runId, { child, graceSec: 1 });
+
+    // Spy on fs read paths that would suggest a full run-log rescan.
+    const readFileSpy = vi.spyOn(fs.promises, "readFile");
+    const readFileSyncSpy = vi.spyOn(fs, "readFileSync");
+
+    try {
+      const heartbeat = heartbeatService(db);
+      await heartbeat.reapOrphanedRuns({ eventSilenceThresholdMs: 60 * 1000 });
+
+      const offenderCalls = [
+        ...readFileSpy.mock.calls,
+        ...readFileSyncSpy.mock.calls,
+      ].filter((call) => {
+        const target = call[0];
+        if (typeof target !== "string") return false;
+        return target.includes("run-logs") || target.endsWith(".ndjson") || target.endsWith(".ndjson.gz");
+      });
+      expect(offenderCalls).toEqual([]);
+    } finally {
+      readFileSpy.mockRestore();
+      readFileSyncSpy.mockRestore();
+    }
+  }, 20_000);
 });
 
 /**

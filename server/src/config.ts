@@ -333,15 +333,38 @@ export function loadConfig(): Config {
     storageS3Endpoint,
     storageS3Prefix,
     storageS3ForcePathStyle,
+    // Heartbeat watchdog configuration.
+    //
+    // Env vars use the project-wide `PAPERCLIP_*` prefix to match the
+    // `PAPERCLIP_RUN_LOG_*` family. The legacy `HEARTBEAT_*` names continue
+    // to work as fallbacks for existing operator setups; the `PAPERCLIP_*`
+    // name wins when both are set.
+    //
+    //   PAPERCLIP_HEARTBEAT_SCHEDULER_INTERVAL_MS        watchdog tick (default 30s)
+    //   PAPERCLIP_HEARTBEAT_MAX_RUN_DURATION_MS          hard duration cap (default 45min)
+    //   PAPERCLIP_HEARTBEAT_EVENT_SILENCE_THRESHOLD_MS   idle-activity threshold (default 10min)
+    //
+    // The idle threshold is measured against the most recent meaningful
+    // adapter-stream activity OR the most recent heartbeat_run_events row,
+    // whichever is newer. See `run-activity-registry.ts`.
     heartbeatSchedulerEnabled: process.env.HEARTBEAT_SCHEDULER_ENABLED !== "false",
-    heartbeatSchedulerIntervalMs: Math.max(10000, Number(process.env.HEARTBEAT_SCHEDULER_INTERVAL_MS) || 30000),
+    heartbeatSchedulerIntervalMs: Math.max(
+      10_000,
+      Number(process.env.PAPERCLIP_HEARTBEAT_SCHEDULER_INTERVAL_MS) ||
+        Number(process.env.HEARTBEAT_SCHEDULER_INTERVAL_MS) ||
+        30_000,
+    ),
     heartbeatMaxRunDurationMs: Math.max(
       5 * 60 * 1000,
-      Number(process.env.HEARTBEAT_MAX_RUN_DURATION_MS) || 45 * 60 * 1000,
+      Number(process.env.PAPERCLIP_HEARTBEAT_MAX_RUN_DURATION_MS) ||
+        Number(process.env.HEARTBEAT_MAX_RUN_DURATION_MS) ||
+        45 * 60 * 1000,
     ),
     heartbeatEventSilenceThresholdMs: Math.max(
       60 * 1000,
-      Number(process.env.HEARTBEAT_EVENT_SILENCE_THRESHOLD_MS) || 10 * 60 * 1000,
+      Number(process.env.PAPERCLIP_HEARTBEAT_EVENT_SILENCE_THRESHOLD_MS) ||
+        Number(process.env.HEARTBEAT_EVENT_SILENCE_THRESHOLD_MS) ||
+        10 * 60 * 1000,
     ),
     companyDeletionEnabled,
   };

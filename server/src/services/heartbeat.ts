@@ -21,6 +21,20 @@ import { conflict, notFound } from "../errors.js";
 import { logger } from "../middleware/logger.js";
 import { publishLiveEvent } from "./live-events.js";
 import { getRunLogStore, type RunLogHandle } from "./run-log-store.js";
+import {
+  runActivityRegistry,
+  chunkHasMeaningfulActivity,
+  type ActivitySource,
+} from "./run-activity-registry.js";
+
+// Run statuses that mean the run has stopped progressing. Used to drop the
+// run from the in-memory activity registry so the map doesn't grow forever.
+const TERMINAL_RUN_STATUSES = new Set([
+  "succeeded",
+  "failed",
+  "cancelled",
+  "timed_out",
+]);
 import { getServerAdapter, runningProcesses } from "../adapters/index.js";
 import type { AdapterExecutionResult, AdapterInvocationMeta, AdapterSessionCodec, UsageSummary } from "../adapters/index.js";
 import { createLocalAgentJwt } from "../agent-auth-jwt.js";
@@ -1495,6 +1509,10 @@ export function heartbeatService(db: Db) {
       .returning()
       .then((rows) => rows[0] ?? null);
 
+    if (updated && TERMINAL_RUN_STATUSES.has(updated.status)) {
+      runActivityRegistry.clear(updated.id);
+    }
+
     if (updated) {
       publishLiveEvent({
         companyId: updated.companyId,
@@ -1560,6 +1578,7 @@ export function heartbeatService(db: Db) {
       message: sanitizedMessage,
       payload: sanitizedPayload,
     });
+    runActivityRegistry.record(run.id, "db_event");
 
     publishLiveEvent({
       companyId: run.companyId,
@@ -2052,27 +2071,78 @@ export function heartbeatService(db: Db) {
         }
       }
 
-      // 2) Silence watchdog. If the run has produced no event_seq progress for
-      //    `eventSilenceThresholdMs`, the adapter pump is stuck. Kill regardless
-      //    of in-memory tracking — same wedge mode, different signal.
+      // 2) Idle watchdog. If the run has produced no meaningful activity
+      //    for `eventSilenceThresholdMs`, the adapter pump is stuck. Kill
+      //    regardless of in-memory tracking — same wedge mode, different
+      //    signal.
+      //
+      //    Activity is sourced from two places that update the in-memory
+      //    `runActivityRegistry`:
+      //      * `stream`   — meaningful adapter stdout JSON events (see
+      //                     `chunkHasMeaningfulActivity`).
+      //      * `db_event` — any row written to `heartbeat_run_events` via
+      //                     `appendRunEvent`.
+      //    When the registry has no entry for this run (e.g. after a server
+      //    restart) we fall back to the persisted `heartbeat_run_events`
+      //    timestamp directly. The fallback path is intentionally narrower
+      //    than the original behaviour: it still reaps genuinely idle runs,
+      //    but it no longer kills runs that are mid-task with active stream
+      //    output. A single watchdog tick performs at most one fallback DB
+      //    query per run and never reads the run log files from disk.
       if (pidAlive && eventSilenceThresholdMs > 0) {
-        const lastEventAt = await getLastRunEventAt(run.id);
-        const refDate = lastEventAt ?? (run.startedAt ? new Date(run.startedAt) : null);
-        if (refDate && now.getTime() - refDate.getTime() > eventSilenceThresholdMs) {
-          const silenceMin = Math.round((now.getTime() - refDate.getTime()) / 60_000);
-          const thresholdMin = Math.round(eventSilenceThresholdMs / 60_000);
-          logger.warn(
-            { runId: run.id, pid: run.processPid, silenceMin, thresholdMin },
-            `killing event-silent process after ${silenceMin}min idle (threshold ${thresholdMin}min)`,
-          );
-          await killAndFinalizeAsTimeout(
-            run,
-            now,
-            `Run produced no events for ${silenceMin}min (threshold ${thresholdMin}min); process killed`,
-            { silenceMin, silenceThresholdMin: thresholdMin, reason: "event_silence" },
-          );
-          reaped.push(run.id);
-          continue;
+        const activity = runActivityRegistry.get(run.id);
+        let lastActivityAt: Date | null = null;
+        let lastActivitySource: ActivitySource | "run_started" | null = null;
+        if (activity) {
+          lastActivityAt = activity.lastActivityAt;
+          lastActivitySource = activity.lastActivitySource;
+        } else {
+          const lastEventAt = await getLastRunEventAt(run.id);
+          if (lastEventAt) {
+            lastActivityAt = lastEventAt;
+            lastActivitySource = "db_event";
+          } else if (run.startedAt) {
+            lastActivityAt = new Date(run.startedAt);
+            lastActivitySource = "run_started";
+          }
+        }
+        if (lastActivityAt && lastActivitySource) {
+          const observedIdleMs = now.getTime() - lastActivityAt.getTime();
+          if (observedIdleMs > eventSilenceThresholdMs) {
+            const observedIdleMin = Math.round(observedIdleMs / 60_000);
+            const thresholdMin = Math.round(eventSilenceThresholdMs / 60_000);
+            const timeoutMessage = `Run idle for ${observedIdleMin}min since last ${lastActivitySource} activity (threshold ${thresholdMin}min); process killed`;
+            logger.warn(
+              {
+                runId: run.id,
+                agentId: run.agentId,
+                adapter: adapterType,
+                pid: run.processPid,
+                lastActivityAt: lastActivityAt.toISOString(),
+                lastActivitySource,
+                idleThresholdMs: eventSilenceThresholdMs,
+                observedIdleMs,
+              },
+              timeoutMessage,
+            );
+            await killAndFinalizeAsTimeout(
+              run,
+              now,
+              timeoutMessage,
+              {
+                runId: run.id,
+                agentId: run.agentId,
+                adapter: adapterType,
+                lastActivityAt: lastActivityAt.toISOString(),
+                lastActivitySource,
+                idleThresholdMs: eventSilenceThresholdMs,
+                observedIdleMs,
+                reason: "idle_timeout",
+              },
+            );
+            reaped.push(run.id);
+            continue;
+          }
         }
       }
 
@@ -2719,6 +2789,17 @@ export function heartbeatService(db: Db) {
         const sanitizedChunk = redactCurrentUserText(chunk, currentUserRedactionOptions);
         if (stream === "stdout") stdoutExcerpt = appendExcerpt(stdoutExcerpt, sanitizedChunk);
         if (stream === "stderr") stderrExcerpt = appendExcerpt(stderrExcerpt, sanitizedChunk);
+        // Update the watchdog activity signal on meaningful stream events
+        // before any DB/log work — see `run-activity-registry.ts` for the
+        // definition of "meaningful". Stderr is intentionally ignored so that
+        // recurring noise (e.g. codex_models_manager refresh errors) cannot
+        // keep a dead adapter alive.
+        if (stream === "stdout") {
+          const meaningful = chunkHasMeaningfulActivity(stream, sanitizedChunk);
+          if (meaningful.meaningful) {
+            runActivityRegistry.record(run.id, "stream");
+          }
+        }
         const ts = new Date().toISOString();
 
         if (handle) {
