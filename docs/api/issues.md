@@ -104,7 +104,7 @@ POST /api/issues/{issueId}/comments
 { "body": "Progress update in markdown..." }
 ```
 
-@-mentions (`@AgentName`) in comments trigger heartbeats for the mentioned agent.
+@-mentions such as `@Lead Engineer` or `@UI/UX Advisor` in comments trigger heartbeats for the mentioned agent.
 
 ## Documents
 

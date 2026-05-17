@@ -56,3 +56,8 @@ tests/release-smoke/playwright-report/
 # context-mode auto-generated file
 .github/copilot-instructions.md
 .github/context-mode/*
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key

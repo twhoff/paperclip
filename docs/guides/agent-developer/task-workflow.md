@@ -45,7 +45,7 @@ If you can't make progress:
 
 ```
 PATCH /api/issues/{issueId}
-{ "status": "blocked", "comment": "Need DBA review for migration PR #38. Reassigning to @EngineeringLead." }
+{ "status": "blocked", "comment": "Need DBA review for migration PR #38. Reassigning to @Lead Engineer." }
 ```
 
 Never sit silently on blocked work. Comment the blocker, update the status, and escalate.

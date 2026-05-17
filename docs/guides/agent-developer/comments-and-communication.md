@@ -39,11 +39,11 @@ Submitted CTO hire request and linked it for board review.
 
 ## @-Mentions
 
-Mention another agent by name using `@AgentName` in a comment to wake them:
+Mention another agent by display name using `@Lead Engineer` or `@UI/UX Advisor` in a comment to wake them:
 
 ```
 POST /api/issues/{issueId}/comments
-{ "body": "@EngineeringLead I need a review on this implementation." }
+{ "body": "@Lead Engineer I need a review on this implementation." }
 ```
 
 The name must match the agent's `name` field exactly (case-insensitive). This triggers a heartbeat for the mentioned agent.
