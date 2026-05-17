@@ -290,6 +290,86 @@ export const CANONICAL_EFFORT_LEVELS: Record<string, CanonicalEffortLevel> = {
 };
 
 /**
+ * Allowed effort levels per (adapter, canonical model). pcli-b9o.
+ *
+ * Used by the AgentConfigForm to populate the effort dropdown for the
+ * currently-selected (adapter, model) tuple. If a model isn't listed for an
+ * adapter, the adapter's `DEFAULT_ALLOWED_EFFORT_LEVELS[adapter]` is the
+ * fallback (the union of all levels the adapter supports across its models).
+ *
+ * The same model can expose different effort levels via different platforms
+ * (e.g. gpt-5.4 supports `xhigh` on copilot_cli but not codex_local). When
+ * the user switches adapter or model, AgentConfigForm should reset the
+ * `effort` field if its current value is no longer in the allowed set for
+ * the new tuple.
+ *
+ * Keys are canonical model IDs from CANONICAL_MODELS. Map values are the
+ * canonical effort level IDs (keys of CANONICAL_EFFORT_LEVELS) the
+ * adapter+model combination accepts.
+ */
+export const ALLOWED_EFFORT_LEVELS: Partial<
+  Record<AdapterType, Record<string, readonly string[]>>
+> = {
+  copilot_cli: {
+    // GPT-5.x models on Copilot CLI accept up to xhigh.
+    "gpt-5.5": ["low", "medium", "high", "xhigh"],
+    "gpt-5.4": ["low", "medium", "high", "xhigh"],
+    "gpt-5.4-codex": ["low", "medium", "high", "xhigh"],
+    "gpt-5.3-codex": ["low", "medium", "high", "xhigh"],
+    "gpt-5.2-codex": ["low", "medium", "high", "xhigh"],
+    "gpt-5.1-codex-max": ["low", "medium", "high", "xhigh"],
+    // Claude models proxied via Copilot stay on the Claude effort surface.
+    "claude-opus-4.7": ["low", "medium", "high", "xhigh"],
+    "claude-opus-4.7-1m": ["low", "medium", "high", "xhigh"],
+    "claude-sonnet-4.6": ["low", "medium", "high", "xhigh"],
+    "claude-sonnet-4.6-1m": ["low", "medium", "high", "xhigh"],
+    "claude-opus-4.5": ["low", "medium", "high", "xhigh"],
+    "claude-sonnet-4.5": ["low", "medium", "high", "xhigh"],
+    "claude-haiku-4.5": ["low", "medium", "high", "xhigh"],
+    // gpt-4.1 and older Claude/Gemini have no effort control.
+    "gpt-4.1": [],
+  },
+};
+
+/**
+ * Per-adapter default effort levels (used as the fallback when a canonical
+ * model has no explicit entry in ALLOWED_EFFORT_LEVELS, e.g. for adapters
+ * that take the same effort surface regardless of model).
+ */
+export const DEFAULT_ALLOWED_EFFORT_LEVELS: Partial<Record<AdapterType, readonly string[]>> = {
+  // claude_local: every shipped Claude model accepts the full canonical Claude surface.
+  claude_local: ["low", "medium", "high", "xhigh", "max"],
+  // codex_local: codex CLI surfaces minimal/low/medium/high uniformly.
+  codex_local: ["minimal", "low", "medium", "high"],
+  // copilot_cli: see per-model entries above; the default is the GPT-5.x surface
+  // for any model that ALLOWED_EFFORT_LEVELS doesn't enumerate.
+  copilot_cli: ["low", "medium", "high", "xhigh"],
+  opencode_local: ["minimal", "low", "medium", "high", "max"],
+  pi_local: ["off", "minimal", "low", "medium", "high", "xhigh"],
+};
+
+/**
+ * Resolve the allowed canonical effort levels for the given (adapter, model)
+ * tuple. Returns an empty array when the adapter doesn't support effort
+ * configuration at all (e.g. gemini_local, oz_local, openclaw_gateway).
+ *
+ * @param adapterType  The adapter type currently configured.
+ * @param canonicalModelId Canonical model ID (key of CANONICAL_MODELS), or
+ *   the adapter-specific model ID (in which case the reverse map is used).
+ */
+export function getAllowedEffortLevels(
+  adapterType: AdapterType | string,
+  canonicalModelId: string | null | undefined,
+): readonly string[] {
+  const adapter = adapterType as AdapterType;
+  const perModel = ALLOWED_EFFORT_LEVELS[adapter];
+  if (canonicalModelId && perModel && canonicalModelId in perModel) {
+    return perModel[canonicalModelId];
+  }
+  return DEFAULT_ALLOWED_EFFORT_LEVELS[adapter] ?? [];
+}
+
+/**
  * Fields that are semantically shared across most local adapters and should be
  * preserved verbatim when switching adapter types (unless already overridden in
  * the overlay by the user).

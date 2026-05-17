@@ -48,6 +48,7 @@ import {
   resolveCanonicalModel,
   translateModel,
   getAdapterEffortValue,
+  getAllowedEffortLevels,
   resolveCanonicalEffort,
   translateEffort,
 } from "../lib/canonical-models";
@@ -389,22 +390,23 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
     ? val!.model
     : eff("adapterConfig", "model", String(config.model ?? ""));
 
+  // pcli-b9o: claude_local / codex_local / copilot_cli all use config.effort.
+  // cursor uses config.mode (semantic concept, not effort) and opencode_local
+  // uses config.variant — keep those distinct so we don't conflate concepts.
   const thinkingEffortKey =
-    adapterType === "codex_local"
-      ? "modelReasoningEffort"
-      : adapterType === "copilot_cli"
-        ? "reasoningEffort"
-        : adapterType === "cursor"
-          ? "mode"
-          : adapterType === "opencode_local"
-            ? "variant"
-            : "effort";
+    adapterType === "cursor"
+      ? "mode"
+      : adapterType === "opencode_local"
+        ? "variant"
+        : "effort";
   const copilotModelEffort = adapterType === "copilot_cli" ? copilotModelEffortSupport[currentModelId] : undefined;
-  const thinkingEffortOptions =
+  // The full per-adapter options array (used as the label catalogue), then
+  // filtered through `getAllowedEffortLevels` for the current (adapter,
+  // canonical-model) tuple so the dropdown only shows levels the platform
+  // accepts. Bare cursor + opencode keep their concept-specific lists.
+  const adapterEffortLabels =
     adapterType === "copilot_cli"
-      ? copilotModelEffort
-        ? copilotThinkingEffortOptions.filter((o) => !o.id || copilotModelEffort.includes(o.id))
-        : copilotThinkingEffortOptions
+      ? copilotThinkingEffortOptions
       : adapterType === "codex_local"
       ? codexThinkingEffortOptions
       : adapterType === "cursor"
@@ -412,21 +414,37 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
         : adapterType === "opencode_local"
           ? openCodeThinkingEffortOptions
           : claudeThinkingEffortOptions;
+  const canonicalCurrentModel = currentModelId
+    ? resolveCanonicalModel(adapterType, currentModelId)
+    : undefined;
+  const allowedEffortIds = (adapterType === "cursor" || adapterType === "opencode_local")
+    ? null
+    : new Set(getAllowedEffortLevels(adapterType, canonicalCurrentModel));
+  const thinkingEffortOptions =
+    adapterType === "copilot_cli" && copilotModelEffort
+      ? adapterEffortLabels.filter((o) => !o.id || copilotModelEffort.includes(o.id))
+      : allowedEffortIds
+        ? adapterEffortLabels.filter((o) => !o.id || allowedEffortIds.has(o.id))
+        : adapterEffortLabels;
   const currentThinkingEffort = isCreate
     ? val!.thinkingEffort
-    : adapterType === "codex_local"
-      ? eff(
-          "adapterConfig",
-          "modelReasoningEffort",
-          String(config.modelReasoningEffort ?? config.reasoningEffort ?? ""),
-        )
-      : adapterType === "copilot_cli"
-        ? eff("adapterConfig", "reasoningEffort", String(config.reasoningEffort ?? ""))
-      : adapterType === "cursor"
-        ? eff("adapterConfig", "mode", String(config.mode ?? ""))
+    : adapterType === "cursor"
+      ? eff("adapterConfig", "mode", String(config.mode ?? ""))
       : adapterType === "opencode_local"
         ? eff("adapterConfig", "variant", String(config.variant ?? ""))
-      : eff("adapterConfig", "effort", String(config.effort ?? ""));
+        // pcli-b9o: claude_local / codex_local / copilot_cli share `effort`.
+        // Legacy modelReasoningEffort / reasoningEffort kept as read fallback
+        // for un-migrated rows (migration 0048 strips them but be defensive).
+        : eff(
+            "adapterConfig",
+            "effort",
+            String(
+              config.effort
+                ?? config.modelReasoningEffort
+                ?? config.reasoningEffort
+                ?? "",
+            ),
+          );
   const showThinkingEffort =
     adapterType === "gemini_local" || adapterType === "oz_local"
       ? false
