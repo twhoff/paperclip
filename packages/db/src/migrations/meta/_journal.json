@@ -337,6 +337,13 @@
       "when": 1744531200000,
       "tag": "0047_adapter_status_probes",
       "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1747526400000,
+      "tag": "0048_unify_effort_field",
+      "breakpoints": true
     }
   ]
 }

@@ -54,7 +54,7 @@ Don't use when:
 Core fields:
 - cwd (string, optional): default absolute working directory for the agent process (created if missing)
 - model (string, optional): model id (e.g. claude-sonnet-4.6, gpt-5.5)
-- reasoningEffort (string, optional): reasoning effort level (low|medium|high|xhigh); also accepts "effort" as a legacy alias. Not all models support all levels — GPT 5.5/5.4/5.3-Codex/5.2-Codex/5.1-Codex-Max/5.4-Mini support xhigh; gpt-4.1 and older Claude/Gemini models have no reasoning effort
+- effort (string, optional): reasoning effort level (low|medium|high|xhigh). Legacy alias "reasoningEffort" is still accepted as a read-only fallback until the pcli-b9o migration deletes it. Not all models support all levels — GPT 5.5/5.4/5.3-Codex/5.2-Codex/5.1-Codex-Max/5.4-Mini support xhigh; gpt-4.1 and older Claude/Gemini models have no reasoning effort
 - promptTemplate (string, optional): run prompt template
 - bootstrapPromptTemplate (string, optional): one-time prompt prepended on fresh sessions (when no session to resume); supports the same template variables as promptTemplate
 - maxAutopilotContinues (number, optional): max autonomous turns via --max-autopilot-continues

@@ -255,7 +255,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     "You are agent {{agent.id}} ({{agent.name}}). Continue your Paperclip work.",
   );
   const model = asString(config.model, "");
-  const reasoningEffort = asString(config.reasoningEffort, asString(config.effort, ""));
+  // Effort source-of-truth: `config.effort` (pcli-b9o). Legacy `reasoningEffort`
+  // remains a read-only fallback for un-migrated configs.
+  const reasoningEffort = asString(config.effort, asString(config.reasoningEffort, ""));
   const modelSupportsEffort = !model || model in modelEffortSupport;
   const allowAll = asBoolean(config.allowAll, true);
   const maxAutopilotContinues = asNumber(config.maxAutopilotContinues, 0);

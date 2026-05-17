@@ -232,8 +232,8 @@ export const CANONICAL_EFFORT_LEVELS: Record<string, CanonicalEffortLevel> = {
     label: "Low",
     adapters: {
       claude_local: { field: "effort", value: "low" },
-      codex_local: { field: "modelReasoningEffort", value: "low" },
-      copilot_cli: { field: "reasoningEffort", value: "low" },
+      codex_local: { field: "effort", value: "low" },
+      copilot_cli: { field: "effort", value: "low" },
       opencode_local: { field: "variant", value: "low" },
       pi_local: { field: "thinking", value: "low" },
     },
@@ -242,8 +242,8 @@ export const CANONICAL_EFFORT_LEVELS: Record<string, CanonicalEffortLevel> = {
     label: "Medium",
     adapters: {
       claude_local: { field: "effort", value: "medium" },
-      codex_local: { field: "modelReasoningEffort", value: "medium" },
-      copilot_cli: { field: "reasoningEffort", value: "medium" },
+      codex_local: { field: "effort", value: "medium" },
+      copilot_cli: { field: "effort", value: "medium" },
       opencode_local: { field: "variant", value: "medium" },
       pi_local: { field: "thinking", value: "medium" },
     },
@@ -252,8 +252,8 @@ export const CANONICAL_EFFORT_LEVELS: Record<string, CanonicalEffortLevel> = {
     label: "High",
     adapters: {
       claude_local: { field: "effort", value: "high" },
-      codex_local: { field: "modelReasoningEffort", value: "high" },
-      copilot_cli: { field: "reasoningEffort", value: "high" },
+      codex_local: { field: "effort", value: "high" },
+      copilot_cli: { field: "effort", value: "high" },
       opencode_local: { field: "variant", value: "high" },
       pi_local: { field: "thinking", value: "high" },
     },
@@ -262,14 +262,14 @@ export const CANONICAL_EFFORT_LEVELS: Record<string, CanonicalEffortLevel> = {
     label: "Extra High",
     adapters: {
       claude_local: { field: "effort", value: "xhigh" },
-      copilot_cli: { field: "reasoningEffort", value: "xhigh" },
+      copilot_cli: { field: "effort", value: "xhigh" },
       pi_local: { field: "thinking", value: "xhigh" },
     },
   },
   minimal: {
     label: "Minimal",
     adapters: {
-      codex_local: { field: "modelReasoningEffort", value: "minimal" },
+      codex_local: { field: "effort", value: "minimal" },
       opencode_local: { field: "variant", value: "minimal" },
       pi_local: { field: "thinking", value: "minimal" },
     },
@@ -371,6 +371,13 @@ export function translateModel(
 /**
  * Extract the raw effort value from an adapterConfig object, using the correct
  * field name for the given adapter type.
+ *
+ * As of pcli-b9o (2026-05-17) all stdio adapters (claude_local, codex_local,
+ * copilot_cli) share a single `effort` field. The legacy `modelReasoningEffort`
+ * (codex_local) and `reasoningEffort` (copilot_cli) names are still read as
+ * fallbacks so already-persisted configs continue to work until the one-shot
+ * migration has run; once the migration runs the fallbacks become dead paths
+ * that can be removed in a follow-up.
  */
 export function getAdapterEffortValue(
   adapterType: string,
@@ -378,9 +385,11 @@ export function getAdapterEffortValue(
 ): string {
   switch (adapterType) {
     case "codex_local":
-      return String(config.modelReasoningEffort ?? "");
+      return String(
+        config.effort ?? config.modelReasoningEffort ?? "",
+      );
     case "copilot_cli":
-      return String(config.reasoningEffort ?? "");
+      return String(config.effort ?? config.reasoningEffort ?? "");
     case "opencode_local":
       return String(config.variant ?? "");
     case "pi_local":

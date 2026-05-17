@@ -119,7 +119,8 @@ export async function testEnvironment(
       });
     } else {
       const model = asString(config.model, "").trim();
-      const reasoningEffort = asString(config.reasoningEffort, "").trim();
+      // pcli-b9o: prefer `effort`; legacy `reasoningEffort` is a read-only fallback.
+      const reasoningEffort = asString(config.effort, asString(config.reasoningEffort, "")).trim();
       const allowAll = asBoolean(config.allowAll, false);
       const extraArgs = (() => {
         const fromExtraArgs = asStringArray(config.extraArgs);

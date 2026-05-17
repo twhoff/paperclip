@@ -49,9 +49,9 @@ describe("buildCopilotCliConfig", () => {
     expect(ac.model).toBe("gpt-5.5");
   });
 
-  it("maps thinkingEffort to reasoningEffort", () => {
+  it("maps thinkingEffort to effort (pcli-b9o)", () => {
     const ac = buildCopilotCliConfig(baseValues({ thinkingEffort: "high" }));
-    expect(ac.reasoningEffort).toBe("high");
+    expect(ac.effort).toBe("high");
   });
 
   it("maps promptTemplate", () => {

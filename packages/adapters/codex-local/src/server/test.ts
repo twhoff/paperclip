@@ -129,9 +129,11 @@ export async function testEnvironment(
       });
     } else {
       const model = asString(config.model, "").trim();
+      // Effort source-of-truth: `config.effort` (pcli-b9o). Legacy fields
+      // remain read-only fallbacks pending data migration.
       const modelReasoningEffort = asString(
-        config.modelReasoningEffort,
-        asString(config.reasoningEffort, ""),
+        config.effort,
+        asString(config.modelReasoningEffort, asString(config.reasoningEffort, "")),
       ).trim();
       const search = asBoolean(config.search, false);
       const bypass = asBoolean(

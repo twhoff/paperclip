@@ -220,9 +220,15 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   );
   const command = asString(config.command, "codex");
   const model = asString(config.model, "");
+  // Effort source-of-truth is `config.effort` (pcli-b9o). `modelReasoningEffort`
+  // and `reasoningEffort` are kept as read-only fallbacks for configs that
+  // haven't been migrated yet; the one-shot migration (see
+  // server/src/db/migrations/) COALESCEs them into `effort` and deletes the
+  // legacy keys. Drop the fallbacks once the migration has been applied
+  // everywhere.
   const modelReasoningEffort = asString(
-    config.modelReasoningEffort,
-    asString(config.reasoningEffort, ""),
+    config.effort,
+    asString(config.modelReasoningEffort, asString(config.reasoningEffort, "")),
   );
   const search = asBoolean(config.search, false);
   const bypass = asBoolean(
