@@ -39,11 +39,11 @@ packages/adapters/<name>/
 
 Three separate registries consume adapter modules:
 
-| Registry | Location | Interface |
-|----------|----------|-----------|
-| Server | `server/src/adapters/registry.ts` | `ServerAdapterModule` |
-| UI | `ui/src/adapters/registry.ts` | `UIAdapterModule` |
-| CLI | `cli/src/adapters/registry.ts` | `CLIAdapterModule` |
+| Registry | Location                          | Interface             |
+| -------- | --------------------------------- | --------------------- |
+| Server   | `server/src/adapters/registry.ts` | `ServerAdapterModule` |
+| UI       | `ui/src/adapters/registry.ts`     | `UIAdapterModule`     |
+| CLI      | `cli/src/adapters/registry.ts`    | `CLIAdapterModule`    |
 
 ---
 
@@ -56,37 +56,37 @@ All adapter interfaces live in `packages/adapter-utils/src/types.ts`. Import fro
 ```ts
 // The execute function signature — every adapter must implement this
 interface AdapterExecutionContext {
-  runId: string;
-  agent: AdapterAgent;          // { id, companyId, name, adapterType, adapterConfig }
-  runtime: AdapterRuntime;      // { sessionId, sessionParams, sessionDisplayId, taskKey }
-  config: Record<string, unknown>;  // The agent's adapterConfig blob
-  context: Record<string, unknown>; // Runtime context (taskId, wakeReason, approvalId, etc.)
-  onLog: (stream: "stdout" | "stderr", chunk: string) => Promise<void>;
-  onMeta?: (meta: AdapterInvocationMeta) => Promise<void>;
-  authToken?: string;
+  runId: string
+  agent: AdapterAgent // { id, companyId, name, adapterType, adapterConfig }
+  runtime: AdapterRuntime // { sessionId, sessionParams, sessionDisplayId, taskKey }
+  config: Record<string, unknown> // The agent's adapterConfig blob
+  context: Record<string, unknown> // Runtime context (taskId, wakeReason, approvalId, etc.)
+  onLog: (stream: 'stdout' | 'stderr', chunk: string) => Promise<void>
+  onMeta?: (meta: AdapterInvocationMeta) => Promise<void>
+  authToken?: string
 }
 
 interface AdapterExecutionResult {
-  exitCode: number | null;
-  signal: string | null;
-  timedOut: boolean;
-  errorMessage?: string | null;
-  usage?: UsageSummary;           // { inputTokens, outputTokens, cachedInputTokens? }
-  sessionId?: string | null;      // Legacy — prefer sessionParams
-  sessionParams?: Record<string, unknown> | null;  // Opaque session state persisted between runs
-  sessionDisplayId?: string | null;
-  provider?: string | null;       // "anthropic", "openai", etc.
-  model?: string | null;
-  costUsd?: number | null;
-  resultJson?: Record<string, unknown> | null;
-  summary?: string | null;        // Human-readable summary of what the agent did
-  clearSession?: boolean;         // true = tell Paperclip to forget the stored session
+  exitCode: number | null
+  signal: string | null
+  timedOut: boolean
+  errorMessage?: string | null
+  usage?: UsageSummary // { inputTokens, outputTokens, cachedInputTokens? }
+  sessionId?: string | null // Legacy — prefer sessionParams
+  sessionParams?: Record<string, unknown> | null // Opaque session state persisted between runs
+  sessionDisplayId?: string | null
+  provider?: string | null // "anthropic", "openai", etc.
+  model?: string | null
+  costUsd?: number | null
+  resultJson?: Record<string, unknown> | null
+  summary?: string | null // Human-readable summary of what the agent did
+  clearSession?: boolean // true = tell Paperclip to forget the stored session
 }
 
 interface AdapterSessionCodec {
-  deserialize(raw: unknown): Record<string, unknown> | null;
-  serialize(params: Record<string, unknown> | null): Record<string, unknown> | null;
-  getDisplayId?(params: Record<string, unknown> | null): string | null;
+  deserialize(raw: unknown): Record<string, unknown> | null
+  serialize(params: Record<string, unknown> | null): Record<string, unknown> | null
+  getDisplayId?(params: Record<string, unknown> | null): string | null
 }
 ```
 
@@ -95,28 +95,28 @@ interface AdapterSessionCodec {
 ```ts
 // Server — registered in server/src/adapters/registry.ts
 interface ServerAdapterModule {
-  type: string;
-  execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult>;
-  testEnvironment(ctx: AdapterEnvironmentTestContext): Promise<AdapterEnvironmentTestResult>;
-  sessionCodec?: AdapterSessionCodec;
-  supportsLocalAgentJwt?: boolean;
-  models?: { id: string; label: string }[];
-  agentConfigurationDoc?: string;
+  type: string
+  execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult>
+  testEnvironment(ctx: AdapterEnvironmentTestContext): Promise<AdapterEnvironmentTestResult>
+  sessionCodec?: AdapterSessionCodec
+  supportsLocalAgentJwt?: boolean
+  models?: { id: string; label: string }[]
+  agentConfigurationDoc?: string
 }
 
 // UI — registered in ui/src/adapters/registry.ts
 interface UIAdapterModule {
-  type: string;
-  label: string;
-  parseStdoutLine: (line: string, ts: string) => TranscriptEntry[];
-  ConfigFields: ComponentType<AdapterConfigFieldsProps>;
-  buildAdapterConfig: (values: CreateConfigValues) => Record<string, unknown>;
+  type: string
+  label: string
+  parseStdoutLine: (line: string, ts: string) => TranscriptEntry[]
+  ConfigFields: ComponentType<AdapterConfigFieldsProps>
+  buildAdapterConfig: (values: CreateConfigValues) => Record<string, unknown>
 }
 
 // CLI — registered in cli/src/adapters/registry.ts
 interface CLIAdapterModule {
-  type: string;
-  formatStdoutEvent: (line: string, debug: boolean) => void;
+  type: string
+  formatStdoutEvent: (line: string, debug: boolean) => void
 }
 ```
 
@@ -127,28 +127,28 @@ interface CLIAdapterModule {
 Every server adapter must implement `testEnvironment(...)`. This powers the board UI "Test environment" button in agent configuration.
 
 ```ts
-type AdapterEnvironmentCheckLevel = "info" | "warn" | "error";
-type AdapterEnvironmentTestStatus = "pass" | "warn" | "fail";
+type AdapterEnvironmentCheckLevel = 'info' | 'warn' | 'error'
+type AdapterEnvironmentTestStatus = 'pass' | 'warn' | 'fail'
 
 interface AdapterEnvironmentCheck {
-  code: string;
-  level: AdapterEnvironmentCheckLevel;
-  message: string;
-  detail?: string | null;
-  hint?: string | null;
+  code: string
+  level: AdapterEnvironmentCheckLevel
+  message: string
+  detail?: string | null
+  hint?: string | null
 }
 
 interface AdapterEnvironmentTestResult {
-  adapterType: string;
-  status: AdapterEnvironmentTestStatus;
-  checks: AdapterEnvironmentCheck[];
-  testedAt: string; // ISO timestamp
+  adapterType: string
+  status: AdapterEnvironmentTestStatus
+  checks: AdapterEnvironmentCheck[]
+  testedAt: string // ISO timestamp
 }
 
 interface AdapterEnvironmentTestContext {
-  companyId: string;
-  adapterType: string;
-  config: Record<string, unknown>; // runtime-resolved adapterConfig
+  companyId: string
+  adapterType: string
+  config: Record<string, unknown> // runtime-resolved adapterConfig
 }
 ```
 
@@ -213,20 +213,21 @@ packages/adapters/<name>/
 This file is imported by **all three** consumers (server, UI, CLI). Keep it dependency-free (no Node APIs, no React).
 
 ```ts
-export const type = "my_agent";        // snake_case, globally unique
-export const label = "My Agent (local)";
+export const type = 'my_agent' // snake_case, globally unique
+export const label = 'My Agent (local)'
 
 export const models = [
-  { id: "model-a", label: "Model A" },
-  { id: "model-b", label: "Model B" },
-];
+  { id: 'model-a', label: 'Model A' },
+  { id: 'model-b', label: 'Model B' }
+]
 
 export const agentConfigurationDoc = `# my_agent agent configuration
 ...document all config fields here...
-`;
+`
 ```
 
 **Required exports:**
+
 - `type` — the adapter type key, stored in `agents.adapter_type`
 - `label` — human-readable name for the UI
 - `models` — available model options for the agent creation form
@@ -254,7 +255,7 @@ Don't use when:
 Core fields:
 - cwd (string, required): absolute working directory for the agent process
 ...
-`;
+`
 ```
 
 Adding explicit negative cases improves adapter selection accuracy. One concrete anti-pattern is worth more than three paragraphs of description.
@@ -279,19 +280,19 @@ This is the most important file. It receives an `AdapterExecutionContext` and mu
 
 **Environment variables the server always injects:**
 
-| Variable | Source |
-|----------|--------|
-| `PAPERCLIP_AGENT_ID` | `agent.id` |
-| `PAPERCLIP_COMPANY_ID` | `agent.companyId` |
-| `PAPERCLIP_API_URL` | Server's own URL |
-| `PAPERCLIP_RUN_ID` | Current run id |
-| `PAPERCLIP_TASK_ID` | `context.taskId` or `context.issueId` |
-| `PAPERCLIP_WAKE_REASON` | `context.wakeReason` |
-| `PAPERCLIP_WAKE_COMMENT_ID` | `context.wakeCommentId` or `context.commentId` |
-| `PAPERCLIP_APPROVAL_ID` | `context.approvalId` |
-| `PAPERCLIP_APPROVAL_STATUS` | `context.approvalStatus` |
-| `PAPERCLIP_LINKED_ISSUE_IDS` | `context.issueIds` (comma-separated) |
-| `PAPERCLIP_API_KEY` | `authToken` (if no explicit key in config) |
+| Variable                     | Source                                         |
+| ---------------------------- | ---------------------------------------------- |
+| `PAPERCLIP_AGENT_ID`         | `agent.id`                                     |
+| `PAPERCLIP_COMPANY_ID`       | `agent.companyId`                              |
+| `PAPERCLIP_API_URL`          | Server's own URL                               |
+| `PAPERCLIP_RUN_ID`           | Current run id                                 |
+| `PAPERCLIP_TASK_ID`          | `context.taskId` or `context.issueId`          |
+| `PAPERCLIP_WAKE_REASON`      | `context.wakeReason`                           |
+| `PAPERCLIP_WAKE_COMMENT_ID`  | `context.wakeCommentId` or `context.commentId` |
+| `PAPERCLIP_APPROVAL_ID`      | `context.approvalId`                           |
+| `PAPERCLIP_APPROVAL_STATUS`  | `context.approvalStatus`                       |
+| `PAPERCLIP_LINKED_ISSUE_IDS` | `context.issueIds` (comma-separated)           |
+| `PAPERCLIP_API_KEY`          | `authToken` (if no explicit key in config)     |
 
 #### `server/parse.ts` — Output Parser
 
@@ -305,6 +306,7 @@ Parse the agent's stdout format into structured data. Must handle:
 - **Unknown session detection** — export an `is<Agent>UnknownSessionError()` function for retry logic
 
 **Treat agent output as untrusted.** The stdout you're parsing comes from an LLM-driven process that may have executed arbitrary tool calls, fetched external content, or been influenced by prompt injection in the files it read. Parse defensively:
+
 - Never `eval()` or dynamically execute anything from output
 - Use safe extraction helpers (`asString`, `asNumber`, `parseJson`) — they return fallbacks on unexpected types
 - Validate session IDs and other structured data before passing them through
@@ -313,16 +315,22 @@ Parse the agent's stdout format into structured data. Must handle:
 #### `server/index.ts` — Server Exports
 
 ```ts
-export { execute } from "./execute.js";
-export { testEnvironment } from "./test.js";
-export { parseMyAgentOutput, isMyAgentUnknownSessionError } from "./parse.js";
+export { execute } from './execute.js'
+export { testEnvironment } from './test.js'
+export { parseMyAgentOutput, isMyAgentUnknownSessionError } from './parse.js'
 
 // Session codec — required for session persistence
 export const sessionCodec: AdapterSessionCodec = {
-  deserialize(raw) { /* raw DB JSON -> typed params or null */ },
-  serialize(params) { /* typed params -> JSON for DB storage */ },
-  getDisplayId(params) { /* -> human-readable session id string */ },
-};
+  deserialize(raw) {
+    /* raw DB JSON -> typed params or null */
+  },
+  serialize(params) {
+    /* typed params -> JSON for DB storage */
+  },
+  getDisplayId(params) {
+    /* -> human-readable session id string */
+  }
+}
 ```
 
 #### `server/test.ts` — Environment Diagnostics
@@ -369,14 +377,14 @@ Converts the UI form's `CreateConfigValues` into the `adapterConfig` JSON blob s
 
 ```ts
 export function buildMyAgentConfig(v: CreateConfigValues): Record<string, unknown> {
-  const ac: Record<string, unknown> = {};
-  if (v.cwd) ac.cwd = v.cwd;
-  if (v.promptTemplate) ac.promptTemplate = v.promptTemplate;
-  if (v.model) ac.model = v.model;
-  ac.timeoutSec = 0;
-  ac.graceSec = 15;
+  const ac: Record<string, unknown> = {}
+  if (v.cwd) ac.cwd = v.cwd
+  if (v.promptTemplate) ac.promptTemplate = v.promptTemplate
+  if (v.model) ac.model = v.model
+  ac.timeoutSec = 0
+  ac.graceSec = 15
   // ... adapter-specific fields
-  return ac;
+  return ac
 }
 ```
 
@@ -385,6 +393,7 @@ export function buildMyAgentConfig(v: CreateConfigValues): Record<string, unknow
 Create `ui/src/adapters/<name>/config-fields.tsx` with a React component implementing `AdapterConfigFieldsProps`. This renders adapter-specific form fields in the agent creation/edit form.
 
 Use the shared primitives from `ui/src/components/agent-config-primitives`:
+
 - `Field` — labeled form field wrapper
 - `ToggleField` — boolean toggle with label and hint
 - `DraftInput` — text input with draft/commit behavior
@@ -400,7 +409,7 @@ The component must support both `create` mode (using `values`/`set`) and `edit` 
 Pretty-prints stdout lines for `paperclipai run --watch`. Use `picocolors` for coloring.
 
 ```ts
-import pc from "picocolors";
+import pc from 'picocolors'
 
 export function printMyAgentStreamEvent(raw: string, debug: boolean): void {
   // Parse JSON line from agent stdout
@@ -422,8 +431,8 @@ After creating the adapter package, register it in **all consumers and UI gates*
 ```ts
 export const AGENT_ADAPTER_TYPES = [
   // ... existing types ...
-  "my_agent",
-] as const;
+  'my_agent'
+] as const
 ```
 
 **`server/package.json`, `ui/package.json`, `cli/package.json`** — add the workspace dependency:
@@ -468,29 +477,29 @@ const adaptersByType = new Map<string, UIAdapterModule>(
 With `ui/src/adapters/my-agent/index.ts`:
 
 ```ts
-import type { UIAdapterModule } from "../types";
-import { parseMyAgentStdoutLine } from "@paperclipai/adapter-my-agent/ui";
-import { MyAgentConfigFields } from "./config-fields";
-import { buildMyAgentConfig } from "@paperclipai/adapter-my-agent/ui";
+import type { UIAdapterModule } from '../types'
+import { parseMyAgentStdoutLine } from '@paperclipai/adapter-my-agent/ui'
+import { MyAgentConfigFields } from './config-fields'
+import { buildMyAgentConfig } from '@paperclipai/adapter-my-agent/ui'
 
 export const myAgentUIAdapter: UIAdapterModule = {
-  type: "my_agent",
-  label: "My Agent",
+  type: 'my_agent',
+  label: 'My Agent',
   parseStdoutLine: parseMyAgentStdoutLine,
   ConfigFields: MyAgentConfigFields,
-  buildAdapterConfig: buildMyAgentConfig,
-};
+  buildAdapterConfig: buildMyAgentConfig
+}
 ```
 
 ### 4.3 CLI Registry (`cli/src/adapters/registry.ts`)
 
 ```ts
-import { printMyAgentStreamEvent } from "@paperclipai/adapter-my-agent/cli";
+import { printMyAgentStreamEvent } from '@paperclipai/adapter-my-agent/cli'
 
 const myAgentCLIAdapter: CLIAdapterModule = {
-  type: "my_agent",
-  formatStdoutEvent: printMyAgentStreamEvent,
-};
+  type: 'my_agent',
+  formatStdoutEvent: printMyAgentStreamEvent
+}
 
 // Add to the adaptersByType map
 ```
@@ -500,27 +509,32 @@ const myAgentCLIAdapter: CLIAdapterModule = {
 These are separate from the adapter registries and control whether the adapter appears in UI forms and dialogs:
 
 **`ui/src/components/AgentConfigForm.tsx`** — multiple gates:
+
 - `ENABLED_ADAPTER_TYPES` set (~line 994) — add your type so it appears as selectable (not "Coming soon") in the adapter dropdown
 - `isLocal` boolean (~line 304) — add your type if it's a local CLI adapter, to show prompt template, model dropdown, command field, and permissions section
 - Command placeholder ternary (~line 696) — add your type to show the correct CLI command name as placeholder
 - `showThinkingEffort` (~line 418) — set to `false` if the adapter's model IDs already encode effort level (e.g. `model-high`, `model-max`), making a separate effort dropdown redundant
 
 **`ui/src/components/agent-config-primitives.tsx`** — `adapterLabels` record (~line 60):
+
 ```ts
 export const adapterLabels: Record<string, string> = {
   // ... existing labels ...
-  my_agent: "My Agent (local)",
-};
+  my_agent: 'My Agent (local)'
+}
 ```
 
 **`ui/src/pages/NewAgent.tsx`** — `SUPPORTED_ADVANCED_ADAPTER_TYPES` set (~line 31):
+
 - Add your type so the `/agents/new?adapterType=my_agent` URL preset works
 
 **`ui/src/components/NewAgentDialog.tsx`** — TWO changes:
+
 - Add to `AdvancedAdapterType` union
 - Add entry to `ADVANCED_ADAPTER_OPTIONS` array with label, icon, and description
 
 **`ui/src/components/OnboardingWizard.tsx`** — FOUR changes:
+
 - Add to `AdapterType` union
 - Add to `isLocalAdapter` check
 - Add card to the "More Agent Adapter Types" array
@@ -535,6 +549,7 @@ Sessions allow agents to maintain conversation context across runs. The system i
 **Design for long runs from the start.** Treat session reuse as the default primitive, not an optimization to add later. An agent working on an issue may be woken dozens of times — for the initial assignment, approval callbacks, re-assignments, manual nudges. Each wake should resume the existing conversation so the agent retains full context about what it has already done, what files it has read, and what decisions it has made. Starting fresh each time wastes tokens on re-reading the same files and risks contradictory decisions.
 
 **Key concepts:**
+
 - `sessionParams` is an opaque `Record<string, unknown>` stored in the DB per task
 - The adapter's `sessionCodec.serialize()` converts execution result data to storable params
 - `sessionCodec.deserialize()` converts stored params back for the next run
@@ -549,15 +564,15 @@ If the agent runtime supports any form of context compaction or conversation com
 ```ts
 const canResumeSession =
   runtimeSessionId.length > 0 &&
-  (runtimeSessionCwd.length === 0 || path.resolve(runtimeSessionCwd) === path.resolve(cwd));
-const sessionId = canResumeSession ? runtimeSessionId : null;
+  (runtimeSessionCwd.length === 0 || path.resolve(runtimeSessionCwd) === path.resolve(cwd))
+const sessionId = canResumeSession ? runtimeSessionId : null
 
 // ... run attempt ...
 
 // If resume failed with unknown session, retry fresh
 if (sessionId && !proc.timedOut && exitCode !== 0 && isUnknownSessionError(output)) {
-  const retry = await runAttempt(null);
-  return toResult(retry, { clearSessionOnMissingSession: true });
+  const retry = await runAttempt(null)
+  return toResult(retry, { clearSessionOnMissingSession: true })
 }
 ```
 
@@ -567,48 +582,53 @@ if (sessionId && !proc.timedOut && exitCode !== 0 && isUnknownSessionError(outpu
 
 Import from `@paperclipai/adapter-utils/server-utils`:
 
-| Helper | Purpose |
-|--------|---------|
-| `asString(val, fallback)` | Safe string extraction |
-| `asNumber(val, fallback)` | Safe number extraction |
-| `asBoolean(val, fallback)` | Safe boolean extraction |
-| `asStringArray(val)` | Safe string array extraction |
-| `parseObject(val)` | Safe `Record<string, unknown>` extraction |
-| `parseJson(str)` | Safe JSON.parse returning `Record` or null |
-| `renderTemplate(tmpl, data)` | `{{path.to.value}}` template rendering |
-| `buildPaperclipEnv(agent)` | Standard `PAPERCLIP_*` env vars |
-| `redactEnvForLogs(env)` | Redact sensitive keys for onMeta |
-| `ensureAbsoluteDirectory(cwd)` | Validate cwd exists and is absolute |
-| `ensureCommandResolvable(cmd, cwd, env)` | Validate command is in PATH |
-| `ensurePathInEnv(env)` | Ensure PATH exists in env |
-| `runChildProcess(runId, cmd, args, opts)` | Spawn with timeout, logging, capture |
+| Helper                                    | Purpose                                    |
+| ----------------------------------------- | ------------------------------------------ |
+| `asString(val, fallback)`                 | Safe string extraction                     |
+| `asNumber(val, fallback)`                 | Safe number extraction                     |
+| `asBoolean(val, fallback)`                | Safe boolean extraction                    |
+| `asStringArray(val)`                      | Safe string array extraction               |
+| `parseObject(val)`                        | Safe `Record<string, unknown>` extraction  |
+| `parseJson(str)`                          | Safe JSON.parse returning `Record` or null |
+| `renderTemplate(tmpl, data)`              | `{{path.to.value}}` template rendering     |
+| `buildPaperclipEnv(agent)`                | Standard `PAPERCLIP_*` env vars            |
+| `redactEnvForLogs(env)`                   | Redact sensitive keys for onMeta           |
+| `ensureAbsoluteDirectory(cwd)`            | Validate cwd exists and is absolute        |
+| `ensureCommandResolvable(cmd, cwd, env)`  | Validate command is in PATH                |
+| `ensurePathInEnv(env)`                    | Ensure PATH exists in env                  |
+| `runChildProcess(runId, cmd, args, opts)` | Spawn with timeout, logging, capture       |
 
 ---
 
 ## 7. Conventions and Patterns
 
 ### Naming
+
 - Adapter type: `snake_case` (e.g. `claude_local`, `codex_local`)
 - Package name: `@paperclipai/adapter-<kebab-name>`
 - Package directory: `packages/adapters/<kebab-name>/`
 
 ### Config Parsing
+
 - Never trust `config` values directly — always use `asString`, `asNumber`, etc.
 - Provide sensible defaults for every optional field
 - Document all fields in `agentConfigurationDoc`
 
 ### Prompt Templates
+
 - Support `promptTemplate` for every run
 - Use `renderTemplate()` with the standard variable set
-- Default prompt: `"You are agent {{agent.id}} ({{agent.name}}). Continue your Paperclip work."`
+- Default prompt: `"You are Paperclip-native agent {{agent.id}} ({{agent.name}}). Continue your Paperclip work."`
 
 ### Error Handling
+
 - Differentiate timeout vs process error vs parse failure
 - Always populate `errorMessage` on failure
 - Include raw stdout/stderr in `resultJson` when parsing fails
 - Handle the agent CLI not being installed (command not found)
 
 ### Logging
+
 - Call `onLog("stdout", ...)` and `onLog("stderr", ...)` for all process output — this feeds the real-time run viewer
 - Call `onMeta(...)` before spawning to record invocation details
 - Use `redactEnvForLogs()` when including env in meta
@@ -632,24 +652,21 @@ Paperclip ships shared skills (in the repo's top-level `skills/` directory) that
 ```ts
 // From claude-local execute.ts
 async function buildSkillsDir(): Promise<string> {
-  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-skills-"));
-  const target = path.join(tmp, ".claude", "skills");
-  await fs.mkdir(target, { recursive: true });
-  const entries = await fs.readdir(PAPERCLIP_SKILLS_DIR, { withFileTypes: true });
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'paperclip-skills-'))
+  const target = path.join(tmp, '.claude', 'skills')
+  await fs.mkdir(target, { recursive: true })
+  const entries = await fs.readdir(PAPERCLIP_SKILLS_DIR, { withFileTypes: true })
   for (const entry of entries) {
     if (entry.isDirectory()) {
-      await fs.symlink(
-        path.join(PAPERCLIP_SKILLS_DIR, entry.name),
-        path.join(target, entry.name),
-      );
+      await fs.symlink(path.join(PAPERCLIP_SKILLS_DIR, entry.name), path.join(target, entry.name))
     }
   }
-  return tmp;
+  return tmp
 }
 
 // In execute(): pass --add-dir to Claude Code
-const skillsDir = await buildSkillsDir();
-args.push("--add-dir", skillsDir);
+const skillsDir = await buildSkillsDir()
+args.push('--add-dir', skillsDir)
 // ... run process ...
 // In finally: fs.rm(skillsDir, { recursive: true, force: true })
 ```
@@ -661,13 +678,13 @@ Codex has a global personal skills directory (`$CODEX_HOME/skills` or `~/.codex/
 ```ts
 // From codex-local execute.ts
 async function ensureCodexSkillsInjected(onLog) {
-  const skillsHome = path.join(codexHomeDir(), "skills");
-  await fs.mkdir(skillsHome, { recursive: true });
+  const skillsHome = path.join(codexHomeDir(), 'skills')
+  await fs.mkdir(skillsHome, { recursive: true })
   for (const entry of entries) {
-    const target = path.join(skillsHome, entry.name);
-    const existing = await fs.lstat(target).catch(() => null);
-    if (existing) continue;  // Don't overwrite user's own skills
-    await fs.symlink(source, target);
+    const target = path.join(skillsHome, entry.name)
+    const existing = await fs.lstat(target).catch(() => null)
+    if (existing) continue // Don't overwrite user's own skills
+    await fs.symlink(source, target)
   }
 }
 ```
@@ -696,10 +713,10 @@ When an agent's CLI profile restricts the default `curl` command (for security),
 **Solution:** Prepend a clear, prioritized instruction:
 
 ```ts
-const PCURL_NOTE = `System Note: To make network requests to Paperclip APIs or external services, use the 'pcurl' command instead of 'curl'. The 'pcurl' wrapper is available in your PATH and adds authentication headers and output compression automatically. Use it identically to curl: 'pcurl https://...'`;
+const PCURL_NOTE = `System Note: To make network requests to Paperclip APIs or external services, use the 'pcurl' command instead of 'curl'. The 'pcurl' wrapper is available in your PATH and adds authentication headers and output compression automatically. Use it identically to curl: 'pcurl https://...'`
 
 // In execute.ts, prepend to the prompt
-const fullPrompt = PCURL_NOTE + "\n\n" + (config.promptTemplate || defaultPrompt);
+const fullPrompt = PCURL_NOTE + '\n\n' + (config.promptTemplate || defaultPrompt)
 ```
 
 This ensures agents discover the safe escape hatch before attempting the blocked command.
@@ -720,11 +737,11 @@ async function syncOzSkills() {
   // Symlink each skill from repo skills/ into the agent's discoverable path
 }
 
-await syncOzSkills();
+await syncOzSkills()
 
 // If no --skill flags configured, pass the primary skill explicitly
 if (!config.skills || config.skills.length === 0) {
-  args.push("--skill", "paperclipai/paperclip:paperclip");
+  args.push('--skill', 'paperclipai/paperclip:paperclip')
 }
 ```
 
@@ -741,15 +758,15 @@ Agent runtimes that expose run metadata (cost, token usage) through a separate q
 ```ts
 // In execute.ts, after runChildProcess completes
 if (parsed.runId) {
-  const metaCmd = `oz run get ${parsed.runId} --output-format json`;
-  const meta = await runChildProcess(ctx.runId, metaCmd, [], { cwd, env });
-  const metaJson = parseJson(meta.stdout);
-  
+  const metaCmd = `oz run get ${parsed.runId} --output-format json`
+  const meta = await runChildProcess(ctx.runId, metaCmd, [], { cwd, env })
+  const metaJson = parseJson(meta.stdout)
+
   // Extract cost from inference_cost + compute_cost
-  const inferenceCost = asNumber(metaJson?.request_usage?.inference_cost, 0);
-  const computeCost = asNumber(metaJson?.request_usage?.compute_cost, 0);
-  result.costUsd = inferenceCost + computeCost;
-  result.billingType = "credits"; // or "tokens", depending on the runtime
+  const inferenceCost = asNumber(metaJson?.request_usage?.inference_cost, 0)
+  const computeCost = asNumber(metaJson?.request_usage?.compute_cost, 0)
+  result.costUsd = inferenceCost + computeCost
+  result.billingType = 'credits' // or "tokens", depending on the runtime
 }
 ```
 
@@ -795,18 +812,18 @@ If your agent runtime supports network access controls (sandboxing, allowlists),
 
 The UI run viewer displays these entry kinds:
 
-| Kind | Fields | Usage |
-|------|--------|-------|
-| `init` | `model`, `sessionId` | Agent initialization |
-| `assistant` | `text` | Agent text response |
-| `thinking` | `text` | Agent reasoning/thinking |
-| `user` | `text` | User message |
-| `tool_call` | `name`, `input` | Tool invocation |
-| `tool_result` | `toolUseId`, `content`, `isError` | Tool result |
-| `result` | `text`, `inputTokens`, `outputTokens`, `cachedTokens`, `costUsd`, `subtype`, `isError`, `errors` | Final result with usage |
-| `stderr` | `text` | Stderr output |
-| `system` | `text` | System messages |
-| `stdout` | `text` | Raw stdout fallback |
+| Kind          | Fields                                                                                           | Usage                    |
+| ------------- | ------------------------------------------------------------------------------------------------ | ------------------------ |
+| `init`        | `model`, `sessionId`                                                                             | Agent initialization     |
+| `assistant`   | `text`                                                                                           | Agent text response      |
+| `thinking`    | `text`                                                                                           | Agent reasoning/thinking |
+| `user`        | `text`                                                                                           | User message             |
+| `tool_call`   | `name`, `input`                                                                                  | Tool invocation          |
+| `tool_result` | `toolUseId`, `content`, `isError`                                                                | Tool result              |
+| `result`      | `text`, `inputTokens`, `outputTokens`, `cachedTokens`, `costUsd`, `subtype`, `isError`, `errors` | Final result with usage  |
+| `stderr`      | `text`                                                                                           | Stderr output            |
+| `system`      | `text`                                                                                           | System messages          |
+| `stdout`      | `text`                                                                                           | Raw stdout fallback      |
 
 ---
 
@@ -824,6 +841,7 @@ Create tests in `server/src/__tests__/<adapter-name>-adapter.test.ts`. Test:
 ## 11. Minimal Adapter Checklist
 
 Package:
+
 - [ ] `packages/adapters/<name>/package.json` with four exports (`.`, `./server`, `./ui`, `./cli`)
 - [ ] Root `index.ts` with `type`, `label`, `models`, `agentConfigurationDoc`
 - [ ] `server/execute.ts` implementing `AdapterExecutionContext -> AdapterExecutionResult`
@@ -838,6 +856,7 @@ Package:
 - [ ] `cli/index.ts` exporting the formatter
 
 Shared constants and dependencies:
+
 - [ ] Added to `AGENT_ADAPTER_TYPES` in `packages/shared/src/constants.ts`
 - [ ] Added `"@paperclipai/adapter-<name>": "workspace:*"` to `server/package.json`
 - [ ] Added `"@paperclipai/adapter-<name>": "workspace:*"` to `ui/package.json`
@@ -845,11 +864,13 @@ Shared constants and dependencies:
 - [ ] Run `pnpm install` to link
 
 Registry registration:
+
 - [ ] Registered in `server/src/adapters/registry.ts` with `supportsLocalAgentJwt: true` (for local CLI adapters — required for `authenticated` deployment mode)
 - [ ] Registered in `ui/src/adapters/registry.ts`
 - [ ] Registered in `cli/src/adapters/registry.ts`
 
 UI visibility gates:
+
 - [ ] Added to `ENABLED_ADAPTER_TYPES` in `AgentConfigForm.tsx`
 - [ ] Added to `isLocal` check in `AgentConfigForm.tsx` (if local CLI adapter)
 - [ ] Added to command placeholder ternary in `AgentConfigForm.tsx`
@@ -861,6 +882,7 @@ UI visibility gates:
 - [ ] Added to `isLocal` check in `AgentDetail.tsx` `PromptsTab` (enables Instructions tab)
 
 Verification:
+
 - [ ] Added to workspace in root `pnpm-workspace.yaml` (if not already covered by glob)
 - [ ] `pnpm install` succeeds
 - [ ] `pnpm -r typecheck` passes (or only pre-existing errors remain)

@@ -1,10 +1,10 @@
-import { createHash } from "node:crypto";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import type { AdapterExecutionContext, AdapterExecutionResult } from "@paperclipai/adapter-utils";
-import type { RunProcessResult } from "@paperclipai/adapter-utils/server-utils";
+import { createHash } from 'node:crypto'
+import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import type { AdapterExecutionContext, AdapterExecutionResult } from '@paperclipai/adapter-utils'
+import type { RunProcessResult } from '@paperclipai/adapter-utils/server-utils'
 import {
   asString,
   asNumber,
@@ -20,21 +20,21 @@ import {
   ensureCommandResolvable,
   ensurePathInEnv,
   renderTemplate,
-  runChildProcess,
-} from "@paperclipai/adapter-utils/server-utils";
-import { CLAUDE_BASE_ARGS } from "./base-args.js";
-import { createClaudeLogFilter } from "./format-event.js";
+  runChildProcess
+} from '@paperclipai/adapter-utils/server-utils'
+import { CLAUDE_BASE_ARGS } from './base-args.js'
+import { createClaudeLogFilter } from './format-event.js'
 import {
   parseClaudeStreamJson,
   describeClaudeFailure,
   detectClaudeLoginRequired,
   isClaudeMaxTurnsResult,
-  isClaudeUnknownSessionError,
-} from "./parse.js";
-import { resolveClaudeDesiredSkillNames } from "./skills.js";
-import { shouldUseBatch, serializeToBatchRequest, generateCustomId } from "./batch.js";
+  isClaudeUnknownSessionError
+} from './parse.js'
+import { resolveClaudeDesiredSkillNames } from './skills.js'
+import { shouldUseBatch, serializeToBatchRequest, generateCustomId } from './batch.js'
 
-const __moduleDir = path.dirname(fileURLToPath(import.meta.url));
+const __moduleDir = path.dirname(fileURLToPath(import.meta.url))
 
 /**
  * Tools that Paperclip agents need without interactive approval.
@@ -43,16 +43,16 @@ const __moduleDir = path.dirname(fileURLToPath(import.meta.url));
  */
 const PAPERCLIP_AGENT_ALLOWED_TOOLS = [
   // context-mode MCP sandbox tools (used for Paperclip API calls via paperclip-ctx-auth skill)
-  "mcp__context-mode__ctx_execute(*)",
-  "mcp__context-mode__ctx_batch_execute(*)",
-  "mcp__context-mode__ctx_execute_file(*)",
-  "mcp__context-mode__ctx_search(*)",
-  "mcp__context-mode__ctx_fetch_and_index(*)",
-  "mcp__context-mode__ctx_index(*)",
-  "mcp__context-mode__ctx_stats(*)",
-  "mcp__context-mode__ctx_upgrade(*)",
-  "mcp__context-mode__ctx_doctor(*)",
-];
+  'mcp__context-mode__ctx_execute(*)',
+  'mcp__context-mode__ctx_batch_execute(*)',
+  'mcp__context-mode__ctx_execute_file(*)',
+  'mcp__context-mode__ctx_search(*)',
+  'mcp__context-mode__ctx_fetch_and_index(*)',
+  'mcp__context-mode__ctx_index(*)',
+  'mcp__context-mode__ctx_stats(*)',
+  'mcp__context-mode__ctx_upgrade(*)',
+  'mcp__context-mode__ctx_doctor(*)'
+]
 
 /**
  * Create a directory with `.claude/skills/` containing symlinks to skills from
@@ -69,246 +69,252 @@ const PAPERCLIP_AGENT_ALLOWED_TOOLS = [
  */
 async function buildSkillsDir(
   config: Record<string, unknown>,
-  onLog?: AdapterExecutionContext["onLog"],
+  onLog?: AdapterExecutionContext['onLog']
 ): Promise<string> {
-  const extraAllowedTools = asStringArray(config.allowedTools);
-  const allowedTools = [...PAPERCLIP_AGENT_ALLOWED_TOOLS, ...extraAllowedTools];
+  const extraAllowedTools = asStringArray(config.allowedTools)
+  const allowedTools = [...PAPERCLIP_AGENT_ALLOWED_TOOLS, ...extraAllowedTools]
 
-  const availableEntries = await readPaperclipRuntimeSkillEntries(config, __moduleDir);
-  const desiredNames = new Set(
-    resolveClaudeDesiredSkillNames(config, availableEntries),
-  );
+  const availableEntries = await readPaperclipRuntimeSkillEntries(config, __moduleDir)
+  const desiredNames = new Set(resolveClaudeDesiredSkillNames(config, availableEntries))
   const desiredEntries = availableEntries
     .filter((entry) => desiredNames.has(entry.key))
     .map((entry) => ({ key: entry.key, runtimeName: entry.runtimeName, source: entry.source }))
-    .sort((a, b) => a.key.localeCompare(b.key));
+    .sort((a, b) => a.key.localeCompare(b.key))
 
   const hashInput = JSON.stringify({
     allowedTools: [...allowedTools].sort(),
-    entries: desiredEntries,
-  });
-  const cacheKey = createHash("sha256").update(hashInput).digest("hex").slice(0, 16);
-  const cacheDir = path.join(os.tmpdir(), `paperclip-skills-cache-${cacheKey}`);
+    entries: desiredEntries
+  })
+  const cacheKey = createHash('sha256').update(hashInput).digest('hex').slice(0, 16)
+  const cacheDir = path.join(os.tmpdir(), `paperclip-skills-cache-${cacheKey}`)
 
   // Cache hit: directory already populated from a prior run with the same hash.
   try {
-    const stat = await fs.stat(cacheDir);
+    const stat = await fs.stat(cacheDir)
     if (stat.isDirectory()) {
       if (onLog) {
-        await onLog("stdout", `[paperclip] Reusing skills dir cache: ${cacheDir}\n`);
+        await onLog('stdout', `[paperclip] Reusing skills dir cache: ${cacheDir}\n`)
       }
-      return cacheDir;
+      return cacheDir
     }
   } catch {
     // Cache miss — fall through and build it.
   }
 
-  const claudeDir = path.join(cacheDir, ".claude");
-  const target = path.join(claudeDir, "skills");
-  await fs.mkdir(target, { recursive: true });
+  const claudeDir = path.join(cacheDir, '.claude')
+  const target = path.join(claudeDir, 'skills')
+  await fs.mkdir(target, { recursive: true })
 
   await fs.writeFile(
-    path.join(claudeDir, "settings.json"),
-    JSON.stringify({ permissions: { allow: allowedTools } }, null, 2),
-  );
+    path.join(claudeDir, 'settings.json'),
+    JSON.stringify({ permissions: { allow: allowedTools } }, null, 2)
+  )
 
   for (const entry of desiredEntries) {
     try {
-      await fs.symlink(entry.source, path.join(target, entry.runtimeName));
+      await fs.symlink(entry.source, path.join(target, entry.runtimeName))
     } catch (err) {
       // Concurrent run may have just created the symlink — accept EEXIST.
-      if ((err as { code?: string }).code !== "EEXIST") throw err;
+      if ((err as { code?: string }).code !== 'EEXIST') throw err
     }
   }
-  return cacheDir;
+  return cacheDir
 }
 
 interface ClaudeExecutionInput {
-  runId: string;
-  agent: AdapterExecutionContext["agent"];
-  config: Record<string, unknown>;
-  context: Record<string, unknown>;
-  authToken?: string;
+  runId: string
+  agent: AdapterExecutionContext['agent']
+  config: Record<string, unknown>
+  context: Record<string, unknown>
+  authToken?: string
 }
 
 interface ClaudeRuntimeConfig {
-  command: string;
-  cwd: string;
-  workspaceId: string | null;
-  workspaceRepoUrl: string | null;
-  workspaceRepoRef: string | null;
-  env: Record<string, string>;
-  timeoutSec: number;
-  graceSec: number;
-  extraArgs: string[];
+  command: string
+  cwd: string
+  workspaceId: string | null
+  workspaceRepoUrl: string | null
+  workspaceRepoRef: string | null
+  env: Record<string, string>
+  timeoutSec: number
+  graceSec: number
+  extraArgs: string[]
 }
 
-function buildLoginResult(input: {
-  proc: RunProcessResult;
-  loginUrl: string | null;
-}) {
+function buildLoginResult(input: { proc: RunProcessResult; loginUrl: string | null }) {
   return {
     exitCode: input.proc.exitCode,
     signal: input.proc.signal,
     timedOut: input.proc.timedOut,
     stdout: input.proc.stdout,
     stderr: input.proc.stderr,
-    loginUrl: input.loginUrl,
-  };
+    loginUrl: input.loginUrl
+  }
 }
 
 function hasNonEmptyEnvValue(env: Record<string, string>, key: string): boolean {
-  const raw = env[key];
-  return typeof raw === "string" && raw.trim().length > 0;
+  const raw = env[key]
+  return typeof raw === 'string' && raw.trim().length > 0
 }
 
-function resolveClaudeBillingType(env: Record<string, string>): "api" | "subscription" {
+function resolveClaudeBillingType(env: Record<string, string>): 'api' | 'subscription' {
   // Claude uses API-key auth when ANTHROPIC_API_KEY is present; otherwise rely on local login/session auth.
-  return hasNonEmptyEnvValue(env, "ANTHROPIC_API_KEY") ? "api" : "subscription";
+  return hasNonEmptyEnvValue(env, 'ANTHROPIC_API_KEY') ? 'api' : 'subscription'
 }
 
 async function buildClaudeRuntimeConfig(input: ClaudeExecutionInput): Promise<ClaudeRuntimeConfig> {
-  const { runId, agent, config, context, authToken } = input;
+  const { runId, agent, config, context, authToken } = input
 
-  const command = asString(config.command, "claude");
-  const workspaceContext = parseObject(context.paperclipWorkspace);
-  const workspaceCwd = asString(workspaceContext.cwd, "");
-  const workspaceSource = asString(workspaceContext.source, "");
-  const workspaceStrategy = asString(workspaceContext.strategy, "");
-  const workspaceId = asString(workspaceContext.workspaceId, "") || null;
-  const workspaceRepoUrl = asString(workspaceContext.repoUrl, "") || null;
-  const workspaceRepoRef = asString(workspaceContext.repoRef, "") || null;
-  const workspaceBranch = asString(workspaceContext.branchName, "") || null;
-  const workspaceWorktreePath = asString(workspaceContext.worktreePath, "") || null;
-  const agentHome = asString(workspaceContext.agentHome, "") || null;
+  const command = asString(config.command, 'claude')
+  const workspaceContext = parseObject(context.paperclipWorkspace)
+  const workspaceCwd = asString(workspaceContext.cwd, '')
+  const workspaceSource = asString(workspaceContext.source, '')
+  const workspaceStrategy = asString(workspaceContext.strategy, '')
+  const workspaceId = asString(workspaceContext.workspaceId, '') || null
+  const workspaceRepoUrl = asString(workspaceContext.repoUrl, '') || null
+  const workspaceRepoRef = asString(workspaceContext.repoRef, '') || null
+  const workspaceBranch = asString(workspaceContext.branchName, '') || null
+  const workspaceWorktreePath = asString(workspaceContext.worktreePath, '') || null
+  const agentHome = asString(workspaceContext.agentHome, '') || null
   const workspaceHints = Array.isArray(context.paperclipWorkspaces)
     ? context.paperclipWorkspaces.filter(
-        (value): value is Record<string, unknown> => typeof value === "object" && value !== null,
+        (value): value is Record<string, unknown> => typeof value === 'object' && value !== null
       )
-    : [];
+    : []
   const runtimeServiceIntents = Array.isArray(context.paperclipRuntimeServiceIntents)
     ? context.paperclipRuntimeServiceIntents.filter(
-        (value): value is Record<string, unknown> => typeof value === "object" && value !== null,
+        (value): value is Record<string, unknown> => typeof value === 'object' && value !== null
       )
-    : [];
+    : []
   const runtimeServices = Array.isArray(context.paperclipRuntimeServices)
     ? context.paperclipRuntimeServices.filter(
-        (value): value is Record<string, unknown> => typeof value === "object" && value !== null,
+        (value): value is Record<string, unknown> => typeof value === 'object' && value !== null
       )
-    : [];
-  const runtimePrimaryUrl = asString(context.paperclipRuntimePrimaryUrl, "");
-  const configuredCwd = asString(config.cwd, "");
-  const useConfiguredInsteadOfAgentHome = workspaceSource === "agent_home" && configuredCwd.length > 0;
-  const effectiveWorkspaceCwd = useConfiguredInsteadOfAgentHome ? "" : workspaceCwd;
-  const cwd = effectiveWorkspaceCwd || configuredCwd || process.cwd();
-  await ensureAbsoluteDirectory(cwd, { createIfMissing: true });
+    : []
+  const runtimePrimaryUrl = asString(context.paperclipRuntimePrimaryUrl, '')
+  const configuredCwd = asString(config.cwd, '')
+  const useConfiguredInsteadOfAgentHome =
+    workspaceSource === 'agent_home' && configuredCwd.length > 0
+  const effectiveWorkspaceCwd = useConfiguredInsteadOfAgentHome ? '' : workspaceCwd
+  const cwd = effectiveWorkspaceCwd || configuredCwd || process.cwd()
+  await ensureAbsoluteDirectory(cwd, { createIfMissing: true })
 
-  const envConfig = parseObject(config.env);
+  const envConfig = parseObject(config.env)
   const hasExplicitApiKey =
-    typeof envConfig.PAPERCLIP_API_KEY === "string" && envConfig.PAPERCLIP_API_KEY.trim().length > 0;
-  const env: Record<string, string> = { ...buildPaperclipEnv(agent) };
-  env.PAPERCLIP_RUN_ID = runId;
+    typeof envConfig.PAPERCLIP_API_KEY === 'string' && envConfig.PAPERCLIP_API_KEY.trim().length > 0
+  const env: Record<string, string> = { ...buildPaperclipEnv(agent) }
+  env.PAPERCLIP_RUN_ID = runId
 
   const wakeTaskId =
-    (typeof context.taskId === "string" && context.taskId.trim().length > 0 && context.taskId.trim()) ||
-    (typeof context.issueId === "string" && context.issueId.trim().length > 0 && context.issueId.trim()) ||
-    null;
+    (typeof context.taskId === 'string' &&
+      context.taskId.trim().length > 0 &&
+      context.taskId.trim()) ||
+    (typeof context.issueId === 'string' &&
+      context.issueId.trim().length > 0 &&
+      context.issueId.trim()) ||
+    null
   const wakeReason =
-    typeof context.wakeReason === "string" && context.wakeReason.trim().length > 0
+    typeof context.wakeReason === 'string' && context.wakeReason.trim().length > 0
       ? context.wakeReason.trim()
-      : null;
+      : null
   const wakeCommentId =
-    (typeof context.wakeCommentId === "string" && context.wakeCommentId.trim().length > 0 && context.wakeCommentId.trim()) ||
-    (typeof context.commentId === "string" && context.commentId.trim().length > 0 && context.commentId.trim()) ||
-    null;
+    (typeof context.wakeCommentId === 'string' &&
+      context.wakeCommentId.trim().length > 0 &&
+      context.wakeCommentId.trim()) ||
+    (typeof context.commentId === 'string' &&
+      context.commentId.trim().length > 0 &&
+      context.commentId.trim()) ||
+    null
   const approvalId =
-    typeof context.approvalId === "string" && context.approvalId.trim().length > 0
+    typeof context.approvalId === 'string' && context.approvalId.trim().length > 0
       ? context.approvalId.trim()
-      : null;
+      : null
   const approvalStatus =
-    typeof context.approvalStatus === "string" && context.approvalStatus.trim().length > 0
+    typeof context.approvalStatus === 'string' && context.approvalStatus.trim().length > 0
       ? context.approvalStatus.trim()
-      : null;
+      : null
   const linkedIssueIds = Array.isArray(context.issueIds)
-    ? context.issueIds.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
-    : [];
+    ? context.issueIds.filter(
+        (value): value is string => typeof value === 'string' && value.trim().length > 0
+      )
+    : []
 
   if (wakeTaskId) {
-    env.PAPERCLIP_TASK_ID = wakeTaskId;
+    env.PAPERCLIP_TASK_ID = wakeTaskId
   }
   if (wakeReason) {
-    env.PAPERCLIP_WAKE_REASON = wakeReason;
+    env.PAPERCLIP_WAKE_REASON = wakeReason
   }
   if (wakeCommentId) {
-    env.PAPERCLIP_WAKE_COMMENT_ID = wakeCommentId;
+    env.PAPERCLIP_WAKE_COMMENT_ID = wakeCommentId
   }
   if (approvalId) {
-    env.PAPERCLIP_APPROVAL_ID = approvalId;
+    env.PAPERCLIP_APPROVAL_ID = approvalId
   }
   if (approvalStatus) {
-    env.PAPERCLIP_APPROVAL_STATUS = approvalStatus;
+    env.PAPERCLIP_APPROVAL_STATUS = approvalStatus
   }
   if (linkedIssueIds.length > 0) {
-    env.PAPERCLIP_LINKED_ISSUE_IDS = linkedIssueIds.join(",");
+    env.PAPERCLIP_LINKED_ISSUE_IDS = linkedIssueIds.join(',')
   }
   if (effectiveWorkspaceCwd) {
-    env.PAPERCLIP_WORKSPACE_CWD = effectiveWorkspaceCwd;
+    env.PAPERCLIP_WORKSPACE_CWD = effectiveWorkspaceCwd
   }
   if (workspaceSource) {
-    env.PAPERCLIP_WORKSPACE_SOURCE = workspaceSource;
+    env.PAPERCLIP_WORKSPACE_SOURCE = workspaceSource
   }
   if (workspaceStrategy) {
-    env.PAPERCLIP_WORKSPACE_STRATEGY = workspaceStrategy;
+    env.PAPERCLIP_WORKSPACE_STRATEGY = workspaceStrategy
   }
   if (workspaceId) {
-    env.PAPERCLIP_WORKSPACE_ID = workspaceId;
+    env.PAPERCLIP_WORKSPACE_ID = workspaceId
   }
   if (workspaceRepoUrl) {
-    env.PAPERCLIP_WORKSPACE_REPO_URL = workspaceRepoUrl;
+    env.PAPERCLIP_WORKSPACE_REPO_URL = workspaceRepoUrl
   }
   if (workspaceRepoRef) {
-    env.PAPERCLIP_WORKSPACE_REPO_REF = workspaceRepoRef;
+    env.PAPERCLIP_WORKSPACE_REPO_REF = workspaceRepoRef
   }
   if (workspaceBranch) {
-    env.PAPERCLIP_WORKSPACE_BRANCH = workspaceBranch;
+    env.PAPERCLIP_WORKSPACE_BRANCH = workspaceBranch
   }
   if (workspaceWorktreePath) {
-    env.PAPERCLIP_WORKSPACE_WORKTREE_PATH = workspaceWorktreePath;
+    env.PAPERCLIP_WORKSPACE_WORKTREE_PATH = workspaceWorktreePath
   }
   if (agentHome) {
-    env.AGENT_HOME = agentHome;
+    env.AGENT_HOME = agentHome
   }
   if (workspaceHints.length > 0) {
-    env.PAPERCLIP_WORKSPACES_JSON = JSON.stringify(workspaceHints);
+    env.PAPERCLIP_WORKSPACES_JSON = JSON.stringify(workspaceHints)
   }
   if (runtimeServiceIntents.length > 0) {
-    env.PAPERCLIP_RUNTIME_SERVICE_INTENTS_JSON = JSON.stringify(runtimeServiceIntents);
+    env.PAPERCLIP_RUNTIME_SERVICE_INTENTS_JSON = JSON.stringify(runtimeServiceIntents)
   }
   if (runtimeServices.length > 0) {
-    env.PAPERCLIP_RUNTIME_SERVICES_JSON = JSON.stringify(runtimeServices);
+    env.PAPERCLIP_RUNTIME_SERVICES_JSON = JSON.stringify(runtimeServices)
   }
   if (runtimePrimaryUrl) {
-    env.PAPERCLIP_RUNTIME_PRIMARY_URL = runtimePrimaryUrl;
+    env.PAPERCLIP_RUNTIME_PRIMARY_URL = runtimePrimaryUrl
   }
 
   for (const [key, value] of Object.entries(envConfig)) {
-    if (typeof value === "string") env[key] = value;
+    if (typeof value === 'string') env[key] = value
   }
 
   if (!hasExplicitApiKey && authToken) {
-    env.PAPERCLIP_API_KEY = authToken;
+    env.PAPERCLIP_API_KEY = authToken
   }
 
-  const runtimeEnv = ensurePathInEnv({ ...process.env, ...env });
-  await ensureCommandResolvable(command, cwd, runtimeEnv);
+  const runtimeEnv = ensurePathInEnv({ ...process.env, ...env })
+  await ensureCommandResolvable(command, cwd, runtimeEnv)
 
-  const timeoutSec = asNumber(config.timeoutSec, 0);
-  const graceSec = asNumber(config.graceSec, 20);
+  const timeoutSec = asNumber(config.timeoutSec, 0)
+  const graceSec = asNumber(config.graceSec, 20)
   const extraArgs = (() => {
-    const fromExtraArgs = asStringArray(config.extraArgs);
-    if (fromExtraArgs.length > 0) return fromExtraArgs;
-    return asStringArray(config.args);
-  })();
+    const fromExtraArgs = asStringArray(config.extraArgs)
+    if (fromExtraArgs.length > 0) return fromExtraArgs
+    return asStringArray(config.args)
+  })()
 
   return {
     command,
@@ -319,82 +325,83 @@ async function buildClaudeRuntimeConfig(input: ClaudeExecutionInput): Promise<Cl
     env,
     timeoutSec,
     graceSec,
-    extraArgs,
-  };
+    extraArgs
+  }
 }
 
 export async function runClaudeLogin(input: {
-  runId: string;
-  agent: AdapterExecutionContext["agent"];
-  config: Record<string, unknown>;
-  context?: Record<string, unknown>;
-  authToken?: string;
-  onLog?: (stream: "stdout" | "stderr", chunk: string) => Promise<void>;
+  runId: string
+  agent: AdapterExecutionContext['agent']
+  config: Record<string, unknown>
+  context?: Record<string, unknown>
+  authToken?: string
+  onLog?: (stream: 'stdout' | 'stderr', chunk: string) => Promise<void>
 }) {
-  const onLog = input.onLog ?? (async () => {});
+  const onLog = input.onLog ?? (async () => {})
   const runtime = await buildClaudeRuntimeConfig({
     runId: input.runId,
     agent: input.agent,
     config: input.config,
     context: input.context ?? {},
-    authToken: input.authToken,
-  });
+    authToken: input.authToken
+  })
 
-  const proc = await runChildProcess(input.runId, runtime.command, ["login"], {
+  const proc = await runChildProcess(input.runId, runtime.command, ['login'], {
     cwd: runtime.cwd,
     env: runtime.env,
     timeoutSec: runtime.timeoutSec,
     graceSec: runtime.graceSec,
-    onLog,
-  });
+    onLog
+  })
 
   const loginMeta = detectClaudeLoginRequired({
     parsed: null,
     stdout: proc.stdout,
-    stderr: proc.stderr,
-  });
+    stderr: proc.stderr
+  })
 
   return buildLoginResult({
     proc,
-    loginUrl: loginMeta.loginUrl,
-  });
+    loginUrl: loginMeta.loginUrl
+  })
 }
 
 export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult> {
-  const { runId, agent, runtime, config, context, onLog, onMeta, onSpawn, authToken } = ctx;
+  const { runId, agent, runtime, config, context, onLog, onMeta, onSpawn, authToken } = ctx
 
   const promptTemplate = asString(
     config.promptTemplate,
-    "You are agent {{agent.id}} ({{agent.name}}). Continue your Paperclip work.",
-  );
-  const model = asString(config.model, "");
-  const effort = asString(config.effort, "");
-  const chrome = asBoolean(config.chrome, false);
-  const maxTurns = asNumber(config.maxTurnsPerRun, 0);
-  const dangerouslySkipPermissions = asBoolean(config.dangerouslySkipPermissions, false);
-  const sessionPolicy = asString(config.sessionPolicy, "resume");
-  const skipSkills = asBoolean(config.skipSkills, false);
-  const batchMode = asString(config.batchMode, "never") as "never" | "smart" | "always";
-  const fallbackModel = asString(config.fallbackModel, "").trim();
-  const maxBudgetUsd = asNumber(config.maxBudgetUsd, 0);
-  const includeHookEvents = asBoolean(config.includeHookEvents, false);
-  const debugFile = asString(config.debugFile, "").trim();
-  const inputFormat = asString(config.inputFormat, "text") === "stream-json" ? "stream-json" : "text";
-  const instructionsFilePath = asString(config.instructionsFilePath, "").trim();
-  const instructionsFileDir = instructionsFilePath ? `${path.dirname(instructionsFilePath)}/` : "";
+    'You are Paperclip-native agent {{agent.id}} ({{agent.name}}). Continue your Paperclip work.'
+  )
+  const model = asString(config.model, '')
+  const effort = asString(config.effort, '')
+  const chrome = asBoolean(config.chrome, false)
+  const maxTurns = asNumber(config.maxTurnsPerRun, 0)
+  const dangerouslySkipPermissions = asBoolean(config.dangerouslySkipPermissions, false)
+  const sessionPolicy = asString(config.sessionPolicy, 'resume')
+  const skipSkills = asBoolean(config.skipSkills, false)
+  const batchMode = asString(config.batchMode, 'never') as 'never' | 'smart' | 'always'
+  const fallbackModel = asString(config.fallbackModel, '').trim()
+  const maxBudgetUsd = asNumber(config.maxBudgetUsd, 0)
+  const includeHookEvents = asBoolean(config.includeHookEvents, false)
+  const debugFile = asString(config.debugFile, '').trim()
+  const inputFormat =
+    asString(config.inputFormat, 'text') === 'stream-json' ? 'stream-json' : 'text'
+  const instructionsFilePath = asString(config.instructionsFilePath, '').trim()
+  const instructionsFileDir = instructionsFilePath ? `${path.dirname(instructionsFilePath)}/` : ''
   const commandNotes = instructionsFilePath
     ? [
-        `Injected agent instructions via --append-system-prompt-file ${instructionsFilePath} (with path directive appended)`,
+        `Injected agent instructions via --append-system-prompt-file ${instructionsFilePath} (with path directive appended)`
       ]
-    : [];
+    : []
 
   const runtimeConfig = await buildClaudeRuntimeConfig({
     runId,
     agent,
     config,
     context,
-    authToken,
-  });
+    authToken
+  })
   const {
     command,
     cwd,
@@ -404,70 +411,72 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     env,
     timeoutSec,
     graceSec,
-    extraArgs,
-  } = runtimeConfig;
+    extraArgs
+  } = runtimeConfig
   const effectiveEnv = Object.fromEntries(
     Object.entries({ ...process.env, ...env }).filter(
-      (entry): entry is [string, string] => typeof entry[1] === "string",
-    ),
-  );
-  const billingType = resolveClaudeBillingType(effectiveEnv);
-  const skillsDir = skipSkills ? null : await buildSkillsDir(config, onLog);
+      (entry): entry is [string, string] => typeof entry[1] === 'string'
+    )
+  )
+  const billingType = resolveClaudeBillingType(effectiveEnv)
+  const skillsDir = skipSkills ? null : await buildSkillsDir(config, onLog)
 
   // When instructionsFilePath is configured, create a combined temp file that
   // includes both the file content and the path directive, so we only need
   // --append-system-prompt-file (Claude CLI forbids using both flags together).
-  let effectiveInstructionsFilePath: string | undefined = instructionsFilePath;
-  let instructionsTmpDir: string | null = null;
+  let effectiveInstructionsFilePath: string | undefined = instructionsFilePath
+  let instructionsTmpDir: string | null = null
   if (instructionsFilePath) {
     try {
-      const instructionsContent = await fs.readFile(instructionsFilePath, "utf-8");
-      const pathDirective = `\nThe above agent instructions were loaded from ${instructionsFilePath}. Resolve any relative file references from ${instructionsFileDir}.`;
-      const parentDir = skillsDir ?? (instructionsTmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-instr-")));
-      const combinedPath = path.join(parentDir, "agent-instructions.md");
-      const combinedContent = instructionsContent + pathDirective;
-      let needsWrite = true;
+      const instructionsContent = await fs.readFile(instructionsFilePath, 'utf-8')
+      const pathDirective = `\nThe above agent instructions were loaded from ${instructionsFilePath}. Resolve any relative file references from ${instructionsFileDir}.`
+      const parentDir =
+        skillsDir ??
+        (instructionsTmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'paperclip-instr-')))
+      const combinedPath = path.join(parentDir, 'agent-instructions.md')
+      const combinedContent = instructionsContent + pathDirective
+      let needsWrite = true
       try {
-        const existing = await fs.readFile(combinedPath, "utf-8");
-        needsWrite = existing !== combinedContent;
+        const existing = await fs.readFile(combinedPath, 'utf-8')
+        needsWrite = existing !== combinedContent
       } catch {
         // file does not exist yet — write it
       }
       if (needsWrite) {
-        await fs.writeFile(combinedPath, combinedContent, "utf-8");
+        await fs.writeFile(combinedPath, combinedContent, 'utf-8')
       }
-      effectiveInstructionsFilePath = combinedPath;
-      await onLog("stdout", `[paperclip] Loaded agent instructions file: ${instructionsFilePath}\n`);
+      effectiveInstructionsFilePath = combinedPath
+      await onLog('stdout', `[paperclip] Loaded agent instructions file: ${instructionsFilePath}\n`)
     } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err);
+      const reason = err instanceof Error ? err.message : String(err)
       await onLog(
-        "stderr",
-        `[paperclip] Warning: could not read agent instructions file "${instructionsFilePath}": ${reason}\n`,
-      );
-      effectiveInstructionsFilePath = undefined;
+        'stderr',
+        `[paperclip] Warning: could not read agent instructions file "${instructionsFilePath}": ${reason}\n`
+      )
+      effectiveInstructionsFilePath = undefined
     }
   }
 
   if (chrome) {
     await onLog(
-      "stdout",
-      `[paperclip] Warning: --chrome requires the Claude in Chrome companion app to be running; the flag is a no-op otherwise.\n`,
-    );
+      'stdout',
+      `[paperclip] Warning: --chrome requires the Claude in Chrome companion app to be running; the flag is a no-op otherwise.\n`
+    )
   }
 
-  const runtimeSessionParams = parseObject(runtime.sessionParams);
+  const runtimeSessionParams = parseObject(runtime.sessionParams)
 
   // Check if we're resuming from a batch
-  const batchPending = asBoolean(runtimeSessionParams.batchPending, false);
-  if (batchPending && typeof runtimeSessionParams.batchEntryId === "string") {
+  const batchPending = asBoolean(runtimeSessionParams.batchPending, false)
+  if (batchPending && typeof runtimeSessionParams.batchEntryId === 'string') {
     // Batch result will be handled by heartbeat service - just return waiting state
     // The heartbeat service will put the result in sessionParams when available
-    const batchResult = parseObject(runtimeSessionParams.batchResult);
+    const batchResult = parseObject(runtimeSessionParams.batchResult)
 
     if (Object.keys(batchResult).length > 0) {
       // Result is available - deserialize and return
-      const resultType = asString(batchResult.type, "");
-      if (resultType === "succeeded") {
+      const resultType = asString(batchResult.type, '')
+      if (resultType === 'succeeded') {
         return {
           exitCode: 0,
           signal: null,
@@ -476,29 +485,32 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           usage: {
             inputTokens: asNumber(batchResult.input_tokens, 0),
             outputTokens: asNumber(batchResult.output_tokens, 0),
-            cachedInputTokens: asNumber(batchResult.cache_read_input_tokens, 0),
+            cachedInputTokens: asNumber(batchResult.cache_read_input_tokens, 0)
           },
-          sessionParams: { sessionId: asString(runtimeSessionParams.sessionId, "") || null, cwd } as Record<string, unknown>,
-          provider: "anthropic",
-          biller: "anthropic",
-          billingType: "api" as const,
+          sessionParams: {
+            sessionId: asString(runtimeSessionParams.sessionId, '') || null,
+            cwd
+          } as Record<string, unknown>,
+          provider: 'anthropic',
+          biller: 'anthropic',
+          billingType: 'api' as const,
           model: asString(batchResult.model, model),
           costUsd: asNumber(batchResult.costUsd, 0),
-          summary: asString(batchResult.summary, ""),
-          resultJson: batchResult.resultData as Record<string, unknown> | null | undefined,
-        };
+          summary: asString(batchResult.summary, ''),
+          resultJson: batchResult.resultData as Record<string, unknown> | null | undefined
+        }
       } else {
         // Batch failed - fall back to sync CLI execution if configured
         if (asBoolean(config.batchFallbackOnError, true)) {
           await onLog(
-            "stdout",
-            `[paperclip] Batch result ${resultType}; falling back to sync CLI execution.\n`,
-          );
+            'stdout',
+            `[paperclip] Batch result ${resultType}; falling back to sync CLI execution.\n`
+          )
           // Clear batch state and continue to CLI execution below
-          delete runtimeSessionParams.batchPending;
-          delete runtimeSessionParams.batchEntryId;
-          delete runtimeSessionParams.batchQueuedAt;
-          delete runtimeSessionParams.batchResult;
+          delete runtimeSessionParams.batchPending
+          delete runtimeSessionParams.batchEntryId
+          delete runtimeSessionParams.batchQueuedAt
+          delete runtimeSessionParams.batchResult
         } else {
           return {
             exitCode: 1,
@@ -506,13 +518,16 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
             timedOut: false,
             errorMessage: `Batch result ${resultType}: ${asString(batchResult.error_message, resultType)}`,
             errorCode: `batch_${resultType}`,
-            sessionParams: { sessionId: asString(runtimeSessionParams.sessionId, "") || null, cwd } as Record<string, unknown>,
-          };
+            sessionParams: {
+              sessionId: asString(runtimeSessionParams.sessionId, '') || null,
+              cwd
+            } as Record<string, unknown>
+          }
         }
       }
     } else {
       // No result yet - return waiting state
-      const entryId = asString(runtimeSessionParams.batchEntryId, "");
+      const entryId = asString(runtimeSessionParams.batchEntryId, '')
       return {
         exitCode: 0,
         signal: null,
@@ -520,53 +535,53 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         errorMessage: null,
         sessionParams: runtimeSessionParams as Record<string, unknown>,
         sessionDisplayId: `batch:${entryId.slice(0, 8)}`,
-        provider: "anthropic",
-        biller: "anthropic",
-        billingType: "api" as const,
+        provider: 'anthropic',
+        biller: 'anthropic',
+        billingType: 'api' as const,
         model,
-        summary: "Waiting for batch result...",
-      };
+        summary: 'Waiting for batch result...'
+      }
     }
   }
 
-  const runtimeSessionId = asString(runtimeSessionParams.sessionId, runtime.sessionId ?? "");
-  const runtimeSessionCwd = asString(runtimeSessionParams.cwd, "");
-  const alwaysFresh = sessionPolicy === "always_fresh";
+  const runtimeSessionId = asString(runtimeSessionParams.sessionId, runtime.sessionId ?? '')
+  const runtimeSessionCwd = asString(runtimeSessionParams.cwd, '')
+  const alwaysFresh = sessionPolicy === 'always_fresh'
   const canResumeSession =
     !alwaysFresh &&
     runtimeSessionId.length > 0 &&
-    (runtimeSessionCwd.length === 0 || path.resolve(runtimeSessionCwd) === path.resolve(cwd));
-  const sessionId = canResumeSession ? runtimeSessionId : null;
+    (runtimeSessionCwd.length === 0 || path.resolve(runtimeSessionCwd) === path.resolve(cwd))
+  const sessionId = canResumeSession ? runtimeSessionId : null
   if (runtimeSessionId && !canResumeSession && !alwaysFresh) {
     await onLog(
-      "stdout",
-      `[paperclip] Claude session "${runtimeSessionId}" was saved for cwd "${runtimeSessionCwd}" and will not be resumed in "${cwd}".\n`,
-    );
+      'stdout',
+      `[paperclip] Claude session "${runtimeSessionId}" was saved for cwd "${runtimeSessionCwd}" and will not be resumed in "${cwd}".\n`
+    )
   }
-  const bootstrapPromptTemplate = asString(config.bootstrapPromptTemplate, "");
+  const bootstrapPromptTemplate = asString(config.bootstrapPromptTemplate, '')
   const templateData = {
     agentId: agent.id,
     companyId: agent.companyId,
     runId,
     company: { id: agent.companyId },
     agent,
-    run: { id: runId, source: "on_demand" },
-    context,
-  };
-  const renderedPrompt = renderTemplate(promptTemplate, templateData);
+    run: { id: runId, source: 'on_demand' },
+    context
+  }
+  const renderedPrompt = renderTemplate(promptTemplate, templateData)
   const renderedBootstrapPrompt =
     !sessionId && bootstrapPromptTemplate.trim().length > 0
       ? renderTemplate(bootstrapPromptTemplate, templateData).trim()
-      : "";
+      : ''
 
   // Check if we should batch this new task
-  if (batchMode !== "never") {
-    const hasApiKey = hasNonEmptyEnvValue(effectiveEnv, "ANTHROPIC_API_KEY");
-    const taskType = asString(parseObject(context).paperclipTaskType, "");
-    const priority = asNumber(parseObject(context).paperclipPriority, 5);
-    const deadlineIso = asString(parseObject(context).paperclipDeadline, "");
-    const isBlocked = asBoolean(parseObject(context).paperclipIsBlocked, false);
-    const isInteractive = asBoolean(parseObject(context).paperclipIsInteractive, false);
+  if (batchMode !== 'never') {
+    const hasApiKey = hasNonEmptyEnvValue(effectiveEnv, 'ANTHROPIC_API_KEY')
+    const taskType = asString(parseObject(context).paperclipTaskType, '')
+    const priority = asNumber(parseObject(context).paperclipPriority, 5)
+    const deadlineIso = asString(parseObject(context).paperclipDeadline, '')
+    const isBlocked = asBoolean(parseObject(context).paperclipIsBlocked, false)
+    const isInteractive = asBoolean(parseObject(context).paperclipIsInteractive, false)
 
     const batchDecisionCtx = {
       batchMode,
@@ -576,8 +591,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       deadlineIso: deadlineIso || null,
       queueDepth: 0, // Set by heartbeat service
       isBlocked,
-      isInteractive,
-    };
+      isInteractive
+    }
 
     if (shouldUseBatch(batchDecisionCtx)) {
       // Create batch request
@@ -585,13 +600,13 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         ctx,
         config,
         renderedPrompt || promptTemplate,
-        renderedBootstrapPrompt || "",
-        templateData,
-      );
+        renderedBootstrapPrompt || '',
+        templateData
+      )
 
-      const customId = generateCustomId(runId); // Use runId as the entry ID
+      const customId = generateCustomId(runId) // Use runId as the entry ID
 
-      await onLog("stdout", `[paperclip] Queuing task for Anthropic Batch API (${customId}).\n`);
+      await onLog('stdout', `[paperclip] Queuing task for Anthropic Batch API (${customId}).\n`)
 
       // Return batch queue signal for heartbeat service to process
       return {
@@ -602,77 +617,73 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         sessionParams: {
           batchQueue: {
             customId,
-            requestParamsJson: batchRequestParams,
+            requestParamsJson: batchRequestParams
           },
           sessionParamsSnapshot: runtimeSessionParams,
-          batchQueuedAt: new Date().toISOString(),
+          batchQueuedAt: new Date().toISOString()
         } as Record<string, unknown>,
-        provider: "anthropic",
-        biller: "anthropic",
-        billingType: "api" as const,
+        provider: 'anthropic',
+        biller: 'anthropic',
+        billingType: 'api' as const,
         model,
-        summary: "Queued for batch processing",
-      };
+        summary: 'Queued for batch processing'
+      }
     }
   }
 
-  const sessionHandoffNote = asString(context.paperclipSessionHandoffMarkdown, "").trim();
-  const prompt = joinPromptSections([
-    renderedBootstrapPrompt,
-    sessionHandoffNote,
-    renderedPrompt,
-  ]);
+  const sessionHandoffNote = asString(context.paperclipSessionHandoffMarkdown, '').trim()
+  const prompt = joinPromptSections([renderedBootstrapPrompt, sessionHandoffNote, renderedPrompt])
   const promptMetrics = {
     promptChars: prompt.length,
     bootstrapPromptChars: renderedBootstrapPrompt.length,
     sessionHandoffChars: sessionHandoffNote.length,
-    heartbeatPromptChars: renderedPrompt.length,
-  };
+    heartbeatPromptChars: renderedPrompt.length
+  }
 
   const buildClaudeArgs = (resumeSessionId: string | null) => {
-    const args = [...CLAUDE_BASE_ARGS];
-    if (resumeSessionId) args.push("--resume", resumeSessionId);
-    if (dangerouslySkipPermissions) args.push("--dangerously-skip-permissions");
-    if (chrome) args.push("--chrome");
-    if (model) args.push("--model", model);
-    if (fallbackModel) args.push("--fallback-model", fallbackModel);
-    if (effort) args.push("--effort", effort);
-    if (maxTurns > 0) args.push("--max-turns", String(maxTurns));
-    if (maxBudgetUsd > 0) args.push("--max-budget-usd", String(maxBudgetUsd));
-    if (includeHookEvents) args.push("--include-hook-events");
-    if (debugFile) args.push("--debug-file", debugFile);
-    if (inputFormat === "stream-json") {
-      args.push("--input-format", "stream-json", "--replay-user-messages");
+    const args = [...CLAUDE_BASE_ARGS]
+    if (resumeSessionId) args.push('--resume', resumeSessionId)
+    if (dangerouslySkipPermissions) args.push('--dangerously-skip-permissions')
+    if (chrome) args.push('--chrome')
+    if (model) args.push('--model', model)
+    if (fallbackModel) args.push('--fallback-model', fallbackModel)
+    if (effort) args.push('--effort', effort)
+    if (maxTurns > 0) args.push('--max-turns', String(maxTurns))
+    if (maxBudgetUsd > 0) args.push('--max-budget-usd', String(maxBudgetUsd))
+    if (includeHookEvents) args.push('--include-hook-events')
+    if (debugFile) args.push('--debug-file', debugFile)
+    if (inputFormat === 'stream-json') {
+      args.push('--input-format', 'stream-json', '--replay-user-messages')
     }
     if (effectiveInstructionsFilePath) {
-      args.push("--append-system-prompt-file", effectiveInstructionsFilePath);
+      args.push('--append-system-prompt-file', effectiveInstructionsFilePath)
     }
-    if (skillsDir) args.push("--add-dir", skillsDir);
-    if (extraArgs.length > 0) args.push(...extraArgs);
-    return args;
-  };
+    if (skillsDir) args.push('--add-dir', skillsDir)
+    if (extraArgs.length > 0) args.push(...extraArgs)
+    return args
+  }
 
   const parseFallbackErrorMessage = (proc: RunProcessResult) => {
     const stderrLine =
       proc.stderr
         .split(/\r?\n/)
         .map((line) => line.trim())
-        .find(Boolean) ?? "";
+        .find(Boolean) ?? ''
 
     if ((proc.exitCode ?? 0) === 0) {
-      return "Failed to parse claude JSON output";
+      return 'Failed to parse claude JSON output'
     }
 
     return stderrLine
       ? `Claude exited with code ${proc.exitCode ?? -1}: ${stderrLine}`
-      : `Claude exited with code ${proc.exitCode ?? -1}`;
-  };
+      : `Claude exited with code ${proc.exitCode ?? -1}`
+  }
 
   const runAttempt = async (resumeSessionId: string | null) => {
-    const args = buildClaudeArgs(resumeSessionId);
+    const args = buildClaudeArgs(resumeSessionId)
     if (onMeta) {
       await onMeta({
-        adapterType: "claude_local",
+        adapterType: 'claude_local',
         command,
         cwd,
         commandArgs: args,
@@ -680,19 +691,19 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         env: redactEnvForLogs(env),
         prompt,
         promptMetrics,
-        context,
-      });
+        context
+      })
     }
 
     const stdinPayload =
-      inputFormat === "stream-json"
+      inputFormat === 'stream-json'
         ? `${JSON.stringify({
-            type: "user",
-            message: { role: "user", content: [{ type: "text", text: prompt }] },
+            type: 'user',
+            message: { role: 'user', content: [{ type: 'text', text: prompt }] }
           })}\n`
-        : prompt;
+        : prompt
 
-    const logFilter = createClaudeLogFilter(onLog);
+    const logFilter = createClaudeLogFilter(onLog)
     const proc = await runChildProcess(runId, command, args, {
       cwd,
       env,
@@ -700,35 +711,35 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       timeoutSec,
       graceSec,
       onSpawn,
-      onLog: logFilter.onLog,
-    });
-    await logFilter.flush();
+      onLog: logFilter.onLog
+    })
+    await logFilter.flush()
 
-    const parsedStream = parseClaudeStreamJson(proc.stdout);
-    const parsed = parsedStream.resultJson ?? parseJson(proc.stdout);
-    return { proc, parsedStream, parsed };
-  };
+    const parsedStream = parseClaudeStreamJson(proc.stdout)
+    const parsed = parsedStream.resultJson ?? parseJson(proc.stdout)
+    return { proc, parsedStream, parsed }
+  }
 
   const toAdapterResult = (
     attempt: {
-      proc: RunProcessResult;
-      parsedStream: ReturnType<typeof parseClaudeStreamJson>;
-      parsed: Record<string, unknown> | null;
+      proc: RunProcessResult
+      parsedStream: ReturnType<typeof parseClaudeStreamJson>
+      parsed: Record<string, unknown> | null
     },
-    opts: { fallbackSessionId: string | null; clearSessionOnMissingSession?: boolean },
+    opts: { fallbackSessionId: string | null; clearSessionOnMissingSession?: boolean }
   ): AdapterExecutionResult => {
-    const { proc, parsedStream, parsed } = attempt;
+    const { proc, parsedStream, parsed } = attempt
     const loginMeta = detectClaudeLoginRequired({
       parsed,
       stdout: proc.stdout,
-      stderr: proc.stderr,
-    });
+      stderr: proc.stderr
+    })
     const errorMeta =
       loginMeta.loginUrl != null
         ? {
-            loginUrl: loginMeta.loginUrl,
+            loginUrl: loginMeta.loginUrl
           }
-        : undefined;
+        : undefined
 
     if (proc.timedOut) {
       return {
@@ -736,10 +747,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         signal: proc.signal,
         timedOut: true,
         errorMessage: `Timed out after ${timeoutSec}s`,
-        errorCode: "timeout",
+        errorCode: 'timeout',
         errorMeta,
-        clearSession: alwaysFresh || Boolean(opts.clearSessionOnMissingSession),
-      };
+        clearSession: alwaysFresh || Boolean(opts.clearSessionOnMissingSession)
+      }
     }
 
     if (!parsed) {
@@ -748,40 +759,40 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         signal: proc.signal,
         timedOut: false,
         errorMessage: parseFallbackErrorMessage(proc),
-        errorCode: loginMeta.requiresLogin ? "claude_auth_required" : null,
+        errorCode: loginMeta.requiresLogin ? 'claude_auth_required' : null,
         errorMeta,
         resultJson: {
           stdout: proc.stdout,
-          stderr: proc.stderr,
+          stderr: proc.stderr
         },
-        clearSession: alwaysFresh || Boolean(opts.clearSessionOnMissingSession),
-      };
+        clearSession: alwaysFresh || Boolean(opts.clearSessionOnMissingSession)
+      }
     }
 
     const usage =
       parsedStream.usage ??
       (() => {
-        const usageObj = parseObject(parsed.usage);
+        const usageObj = parseObject(parsed.usage)
         return {
           inputTokens: asNumber(usageObj.input_tokens, 0),
           cachedInputTokens: asNumber(usageObj.cache_read_input_tokens, 0),
-          outputTokens: asNumber(usageObj.output_tokens, 0),
-        };
-      })();
+          outputTokens: asNumber(usageObj.output_tokens, 0)
+        }
+      })()
 
     const resolvedSessionId =
       parsedStream.sessionId ??
-      (asString(parsed.session_id, opts.fallbackSessionId ?? "") || opts.fallbackSessionId);
+      (asString(parsed.session_id, opts.fallbackSessionId ?? '') || opts.fallbackSessionId)
     const resolvedSessionParams = resolvedSessionId
       ? ({
-        sessionId: resolvedSessionId,
-        cwd,
-        ...(workspaceId ? { workspaceId } : {}),
-        ...(workspaceRepoUrl ? { repoUrl: workspaceRepoUrl } : {}),
-        ...(workspaceRepoRef ? { repoRef: workspaceRepoRef } : {}),
-      } as Record<string, unknown>)
-      : null;
-    const clearSessionForMaxTurns = isClaudeMaxTurnsResult(parsed);
+          sessionId: resolvedSessionId,
+          cwd,
+          ...(workspaceId ? { workspaceId } : {}),
+          ...(workspaceRepoUrl ? { repoUrl: workspaceRepoUrl } : {}),
+          ...(workspaceRepoRef ? { repoRef: workspaceRepoRef } : {})
+        } as Record<string, unknown>)
+      : null
+    const clearSessionForMaxTurns = isClaudeMaxTurnsResult(parsed)
 
     return {
       exitCode: proc.exitCode,
@@ -790,26 +801,29 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       errorMessage:
         (proc.exitCode ?? 0) === 0
           ? null
-          : describeClaudeFailure(parsed) ?? `Claude exited with code ${proc.exitCode ?? -1}`,
-      errorCode: loginMeta.requiresLogin ? "claude_auth_required" : null,
+          : (describeClaudeFailure(parsed) ?? `Claude exited with code ${proc.exitCode ?? -1}`),
+      errorCode: loginMeta.requiresLogin ? 'claude_auth_required' : null,
       errorMeta,
       usage,
       sessionId: resolvedSessionId,
       sessionParams: resolvedSessionParams,
       sessionDisplayId: resolvedSessionId,
-      provider: "anthropic",
-      biller: "anthropic",
+      provider: 'anthropic',
+      biller: 'anthropic',
       model: parsedStream.model || asString(parsed.model, model),
       billingType,
       costUsd: parsedStream.costUsd ?? asNumber(parsed.total_cost_usd, 0),
       resultJson: parsed,
-      summary: parsedStream.summary || asString(parsed.result, ""),
-      clearSession: alwaysFresh || clearSessionForMaxTurns || Boolean(opts.clearSessionOnMissingSession && !resolvedSessionId),
-    };
-  };
+      summary: parsedStream.summary || asString(parsed.result, ''),
+      clearSession:
+        alwaysFresh ||
+        clearSessionForMaxTurns ||
+        Boolean(opts.clearSessionOnMissingSession && !resolvedSessionId)
+    }
+  }
 
   try {
-    const initial = await runAttempt(sessionId ?? null);
+    const initial = await runAttempt(sessionId ?? null)
     if (
       sessionId &&
       !initial.proc.timedOut &&
@@ -818,16 +832,17 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       isClaudeUnknownSessionError(initial.parsed)
     ) {
       await onLog(
-        "stdout",
-        `[paperclip] Claude resume session "${sessionId}" is unavailable; retrying with a fresh session.\n`,
-      );
-      const retry = await runAttempt(null);
-      return toAdapterResult(retry, { fallbackSessionId: null, clearSessionOnMissingSession: true });
+        'stdout',
+        `[paperclip] Claude resume session "${sessionId}" is unavailable; retrying with a fresh session.\n`
+      )
+      const retry = await runAttempt(null)
+      return toAdapterResult(retry, { fallbackSessionId: null, clearSessionOnMissingSession: true })
     }
 
-    return toAdapterResult(initial, { fallbackSessionId: runtimeSessionId || runtime.sessionId });
+    return toAdapterResult(initial, { fallbackSessionId: runtimeSessionId || runtime.sessionId })
   } finally {
-    if (skillsDir) fs.rm(skillsDir, { recursive: true, force: true }).catch(() => {});
-    if (instructionsTmpDir) fs.rm(instructionsTmpDir, { recursive: true, force: true }).catch(() => {});
+    if (skillsDir) fs.rm(skillsDir, { recursive: true, force: true }).catch(() => {})
+    if (instructionsTmpDir)
+      fs.rm(instructionsTmpDir, { recursive: true, force: true }).catch(() => {})
   }
 }
