@@ -922,16 +922,9 @@ export function AgentDetail() {
         </p>
       )}
 
-      {/* Floating Save/Cancel (desktop) */}
-      {!isMobile && (
-        <div
-          className={cn(
-            "sticky top-6 z-10 float-right transition-opacity duration-150",
-            showConfigActionBar
-              ? "opacity-100"
-              : "opacity-0 pointer-events-none"
-          )}
-        >
+      {/* Sticky Save/Cancel (desktop) */}
+      {!isMobile && showConfigActionBar && (
+        <div className="sticky top-4 z-30 flex justify-end">
           <div className="flex items-center gap-2 bg-background/90 backdrop-blur-sm border border-border rounded-lg px-3 py-1.5 shadow-lg">
             <Button
               variant="ghost"
