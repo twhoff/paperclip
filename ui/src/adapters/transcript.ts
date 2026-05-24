@@ -13,6 +13,16 @@ export function appendTranscriptEntry(entries: TranscriptEntry[], entry: Transcr
       return;
     }
   }
+  // Copilot CLI streams text via deltas and then re-emits the assembled
+  // content as a final non-delta entry. Replace the delta accumulator with
+  // the final entry when the text matches, instead of rendering it twice.
+  if ((entry.kind === "assistant" || entry.kind === "thinking") && !entry.delta) {
+    const last = entries[entries.length - 1];
+    if (last && last.kind === entry.kind && last.delta && last.text === entry.text) {
+      entries[entries.length - 1] = entry;
+      return;
+    }
+  }
   entries.push(entry);
 }
 

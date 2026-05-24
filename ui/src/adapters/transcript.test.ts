@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parseClaudeStdoutLine } from "@paperclipai/adapter-claude-local/ui";
-import { buildTranscript, type RunLogChunk } from "./transcript";
+import { appendTranscriptEntry, buildTranscript, type RunLogChunk } from "./transcript";
+import type { TranscriptEntry } from "@paperclipai/adapter-utils";
 
 describe("buildTranscript", () => {
   const ts = "2026-03-20T13:00:00.000Z";
@@ -122,6 +123,30 @@ describe("buildTranscript", () => {
 
     expect(buildTranscript(claudeChunks, parseClaudeStdoutLine)).toEqual([
       { kind: "system", ts: ts2, text: "Hook: PreToolUse:Bash ✓" },
+    ]);
+  });
+
+  it("dedups a final assistant entry that matches the accumulated delta text (Copilot CLI)", () => {
+    const entries: TranscriptEntry[] = [];
+    const ts1 = "2026-03-20T13:00:00.000Z";
+    const ts2 = "2026-03-20T13:00:00.100Z";
+    appendTranscriptEntry(entries, { kind: "assistant", ts: ts1, text: "Hello ", delta: true });
+    appendTranscriptEntry(entries, { kind: "assistant", ts: ts1, text: "world", delta: true });
+    // Final non-delta entry with the same accumulated text — should replace, not duplicate.
+    appendTranscriptEntry(entries, { kind: "assistant", ts: ts2, text: "Hello world" });
+
+    expect(entries).toEqual([{ kind: "assistant", ts: ts2, text: "Hello world" }]);
+  });
+
+  it("keeps a final assistant entry when its text differs from the accumulated delta", () => {
+    const entries: TranscriptEntry[] = [];
+    const ts1 = "2026-03-20T13:00:00.000Z";
+    appendTranscriptEntry(entries, { kind: "assistant", ts: ts1, text: "Hello", delta: true });
+    appendTranscriptEntry(entries, { kind: "assistant", ts: ts1, text: "Goodbye" });
+
+    expect(entries).toEqual([
+      { kind: "assistant", ts: ts1, text: "Hello", delta: true },
+      { kind: "assistant", ts: ts1, text: "Goodbye" },
     ]);
   });
 
