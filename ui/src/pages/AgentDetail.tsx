@@ -2168,7 +2168,7 @@ function PromptsTab({
             <textarea
               value={displayValue}
               onChange={(event) => setDraft(event.target.value)}
-              className="min-h-105 w-full rounded-md border border-border bg-transparent px-3 py-2 font-mono text-sm outline-none"
+              className="h-[60svh] min-h-[28rem] max-h-[52rem] w-full resize-y overflow-auto rounded-md border border-border bg-transparent px-3 py-2 font-mono text-sm leading-6 outline-none"
               placeholder="File contents"
             />
           )}
