@@ -374,7 +374,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     'You are Paperclip-native agent {{agent.id}} ({{agent.name}}). Continue your Paperclip work.'
   )
   const model = asString(config.model, '')
-  const effort = asString(config.effort, '')
+  // Default reasoning effort is 'high' when unset (matches the Claude CLI's own
+  // default). Operators can still pick low/medium/xhigh/max/ultracode; the UI
+  // "Auto" option persists no effort and resolves to this default at run time.
+  const effort = asString(config.effort, 'high')
   const chrome = asBoolean(config.chrome, false)
   const maxTurns = asNumber(config.maxTurnsPerRun, 0)
   const dangerouslySkipPermissions = asBoolean(config.dangerouslySkipPermissions, false)

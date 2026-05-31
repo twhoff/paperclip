@@ -40,6 +40,20 @@ export interface CanonicalEffortLevel {
  */
 export const CANONICAL_MODELS: Record<string, CanonicalModel> = {
   // ── Claude ──────────────────────────────────────────────────────────────
+  "claude-opus-4.8": {
+    label: "Claude Opus 4.8",
+    adapters: {
+      claude_local: "claude-opus-4-8",
+      copilot_cli: "claude-opus-4.8",
+    },
+  },
+  "claude-opus-4.8-1m": {
+    label: "Claude Opus 4.8 (1M)",
+    adapters: {
+      claude_local: "claude-opus-4-8",
+      copilot_cli: "claude-opus-4.8-1m",
+    },
+  },
   "claude-opus-4.7": {
     label: "Claude Opus 4.7",
     adapters: {
@@ -281,6 +295,14 @@ export const CANONICAL_EFFORT_LEVELS: Record<string, CanonicalEffortLevel> = {
       opencode_local: { field: "variant", value: "max" },
     },
   },
+  ultracode: {
+    label: "Ultracode",
+    adapters: {
+      // claude_local only — for dynamic workflow generation and long, complex,
+      // multi-file coding tasks. Copilot/codex/etc. have no ultracode level.
+      claude_local: { field: "effort", value: "ultracode" },
+    },
+  },
   off: {
     label: "Off",
     adapters: {
@@ -319,6 +341,9 @@ export const ALLOWED_EFFORT_LEVELS: Partial<
     "gpt-5.2-codex": ["low", "medium", "high", "xhigh"],
     "gpt-5.1-codex-max": ["low", "medium", "high", "xhigh"],
     // Claude models proxied via Copilot stay on the Claude effort surface.
+    // Note: max/ultracode are claude_local only — never exposed on copilot_cli.
+    "claude-opus-4.8": ["low", "medium", "high", "xhigh"],
+    "claude-opus-4.8-1m": ["low", "medium", "high", "xhigh"],
     "claude-opus-4.7": ["low", "medium", "high", "xhigh"],
     "claude-opus-4.7-1m": ["low", "medium", "high", "xhigh"],
     "claude-sonnet-4.6": ["low", "medium", "high", "xhigh"],
@@ -338,7 +363,7 @@ export const ALLOWED_EFFORT_LEVELS: Partial<
  */
 export const DEFAULT_ALLOWED_EFFORT_LEVELS: Partial<Record<AdapterType, readonly string[]>> = {
   // claude_local: every shipped Claude model accepts the full canonical Claude surface.
-  claude_local: ["low", "medium", "high", "xhigh", "max"],
+  claude_local: ["low", "medium", "high", "xhigh", "max", "ultracode"],
   // codex_local: codex CLI surfaces minimal/low/medium/high uniformly.
   codex_local: ["minimal", "low", "medium", "high"],
   // copilot_cli: see per-model entries above; the default is the GPT-5.x surface
@@ -507,7 +532,11 @@ export function translateEffort(
   if (direct) return direct;
 
   // Graceful fallback: unsupported extreme levels → high
-  if (canonicalLevel === "xhigh" || canonicalLevel === "max") {
+  if (
+    canonicalLevel === "xhigh" ||
+    canonicalLevel === "max" ||
+    canonicalLevel === "ultracode"
+  ) {
     return CANONICAL_EFFORT_LEVELS["high"]?.adapters[toAdapter as AdapterType];
   }
 

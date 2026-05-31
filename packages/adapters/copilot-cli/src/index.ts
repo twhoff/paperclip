@@ -15,6 +15,8 @@ export const modelEffortSupport: Record<string, readonly string[]> = {
   "gpt-5.4-mini": ["low", "medium", "high", "xhigh"],
   "gpt-5-mini": ["low", "medium", "high"],
   "claude-sonnet-4.6": ["low", "medium", "high"],
+  "claude-opus-4.8": ["low", "medium", "high", "xhigh"],
+  "claude-opus-4.8-1m": ["low", "medium", "high", "xhigh"],
 };
 
 export const models = [
@@ -30,6 +32,8 @@ export const models = [
   { id: "claude-sonnet-4.6", label: "Claude Sonnet 4.6" },
   { id: "claude-sonnet-4.5", label: "Claude Sonnet 4.5" },
   { id: "claude-haiku-4.5", label: "Claude Haiku 4.5" },
+  { id: "claude-opus-4.8", label: "Claude Opus 4.8" },
+  { id: "claude-opus-4.8-1m", label: "Claude Opus 4.8 (1M)" },
   { id: "claude-opus-4.7", label: "Claude Opus 4.7" },
   { id: "claude-sonnet-4", label: "Claude Sonnet 4" },
 ];
@@ -54,7 +58,7 @@ Don't use when:
 Core fields:
 - cwd (string, optional): default absolute working directory for the agent process (created if missing)
 - model (string, optional): model id (e.g. claude-sonnet-4.6, gpt-5.5)
-- effort (string, optional): reasoning effort level (low|medium|high|xhigh). Legacy alias "reasoningEffort" is still accepted as a read-only fallback until the pcli-b9o migration deletes it. Not all models support all levels — GPT 5.5/5.4/5.3-Codex/5.2-Codex/5.1-Codex-Max/5.4-Mini support xhigh; gpt-4.1 and older Claude/Gemini models have no reasoning effort
+- effort (string, optional): reasoning effort level (low|medium|high|xhigh). Legacy alias "reasoningEffort" is still accepted as a read-only fallback until the pcli-b9o migration deletes it. Not all models support all levels — GPT 5.5/5.4/5.3-Codex/5.2-Codex/5.1-Codex-Max/5.4-Mini and Claude Opus 4.8 support xhigh; gpt-4.1 and older Gemini models have no reasoning effort. NOTE: Copilot has no max/ultracode efforts — those are claude_local only.
 - promptTemplate (string, optional): run prompt template
 - bootstrapPromptTemplate (string, optional): one-time prompt prepended on fresh sessions (when no session to resume); supports the same template variables as promptTemplate
 - maxAutopilotContinues (number, optional): max autonomous turns via --max-autopilot-continues

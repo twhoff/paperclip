@@ -112,6 +112,82 @@ describe("copilot execute", () => {
     });
   });
 
+  it("does not pass --no-auto-update when launching Copilot", async () => {
+    runChildProcessMock.mockResolvedValue({
+      exitCode: 0,
+      signal: null,
+      timedOut: false,
+      stdout: [
+        JSON.stringify({
+          type: "assistant.message",
+          data: {
+            messageId: "m1",
+            content: "Done.",
+            toolRequests: [],
+            interactionId: "i1",
+            outputTokens: 1,
+          },
+        }),
+        JSON.stringify({
+          type: "result",
+          timestamp: "2026-05-26T00:00:00.000Z",
+          sessionId: "session-456",
+          exitCode: 0,
+          usage: {
+            premiumRequests: 0,
+            totalApiDurationMs: 1000,
+            sessionDurationMs: 1000,
+            codeChanges: {
+              linesAdded: 0,
+              linesRemoved: 0,
+              filesModified: [],
+            },
+          },
+        }),
+      ].join("\n"),
+      stderr: "",
+    });
+
+    const onMeta = vi.fn(async () => {});
+
+    await execute({
+      runId: "run-789",
+      agent: {
+        id: "agent-123",
+        name: "Lead Engineer",
+        companyId: "company-123",
+      },
+      runtime: {
+        sessionId: null,
+        sessionDisplayId: null,
+        sessionParams: null,
+      },
+      config: {
+        command: "copilot",
+        cwd: "/tmp/paperclip-copilot-test",
+        allowAll: true,
+        model: "gpt-5.5",
+        skillsEnabled: false,
+      },
+      context: {},
+      onLog: async () => {},
+      onMeta,
+      onSpawn: async () => {},
+    } as never);
+
+    expect(runChildProcessMock).toHaveBeenCalledTimes(1);
+    const args = runChildProcessMock.mock.calls[0]?.[2] ?? [];
+    expect(args).toContain("--model");
+    expect(args).toContain("gpt-5.5");
+    expect(args).not.toContain("--no-auto-update");
+
+    expect(onMeta).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commandArgs: expect.not.arrayContaining(["--no-auto-update"]),
+      }),
+    );
+  });
+
   it("retries without session when resume fails before a result event is emitted", async () => {
     runChildProcessMock
       .mockResolvedValueOnce({

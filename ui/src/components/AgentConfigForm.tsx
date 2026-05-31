@@ -174,6 +174,7 @@ const claudeThinkingEffortOptions = [
   { id: "high", label: "High" },
   { id: "xhigh", label: "Extra High" },
   { id: "max", label: "Max" },
+  { id: "ultracode", label: "Ultracode" },
 ] as const;
 
 const copilotThinkingEffortOptions = [

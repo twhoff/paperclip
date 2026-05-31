@@ -128,7 +128,7 @@ export async function testEnvironment(
         return asStringArray(config.args);
       })();
 
-      const args = ["-p", "Respond with exactly: hello", "--output-format", "json", "--silent", "--no-ask-user", "--no-auto-update"];
+      const args = ["-p", "Respond with exactly: hello", "--output-format", "json", "--silent", "--no-ask-user"];
       if (allowAll) args.push("--yolo");
       if (model) args.push("--model", model);
       if (reasoningEffort && (!model || model in modelEffortSupport)) args.push("--reasoning-effort", reasoningEffort);

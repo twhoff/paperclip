@@ -55,7 +55,7 @@ export const help: Record<string, string> = {
   cooldownSec: "Minimum seconds between consecutive heartbeat runs.",
   maxConcurrentRuns: "Maximum number of heartbeat runs that can execute simultaneously for this agent.",
   budgetMonthlyCents: "Monthly spending limit in cents. 0 means no limit.",
-  fallbackModel: "Claude model id used as fallback when the primary model is overloaded. Pass --fallback-model. Example: claude-opus-4-7 paired with claude-opus-4-7[1m].",
+  fallbackModel: "Claude model id used as fallback when the primary model is overloaded. Pass --fallback-model. Example: claude-opus-4-8 paired with claude-opus-4-8[1m].",
   maxBudgetUsd: "Hard $ cap per run. Pass --max-budget-usd. 0 disables the cap. Pairs with maxTurnsPerRun for cost safety.",
   includeHookEvents: "Surface PreToolUse / PostToolUse hook firings in the stream output for diagnostics. Pass --include-hook-events.",
   debugFile: "Absolute path. Claude writes its internal debug log to this file instead of stdout/stderr. Pass --debug-file.",

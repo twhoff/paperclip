@@ -497,8 +497,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       '--output-format',
       'json',
       '--silent',
-      '--no-ask-user',
-      '--no-auto-update'
+      '--no-ask-user'
     ]
     if (resumeSessionId) args.push(`--resume=${resumeSessionId}`)
     if (allowAll) args.push('--yolo')
