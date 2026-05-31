@@ -115,3 +115,99 @@ describe("claude_local max-turn detection", () => {
     }
   });
 });
+
+describe("claude_local skills environment", () => {
+  it("exposes PAPERCLIP_SKILLS_DIR pointing at the materialized .claude/skills dir", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-claude-skillsenv-"));
+    const workspace = path.join(root, "workspace");
+    const commandPath = path.join(root, "claude");
+    let capturedEnv: Record<string, string> | undefined;
+
+    await fs.mkdir(workspace, { recursive: true });
+    await writeFakeClaudeCommand(commandPath);
+
+    try {
+      const result = await execute({
+        runId: "run-claude-skillsenv",
+        agent: {
+          id: "agent-1",
+          companyId: "company-1",
+          name: "Claude Coder",
+          adapterType: "claude_local",
+          adapterConfig: {},
+        },
+        runtime: {
+          sessionId: null,
+          sessionParams: null,
+          sessionDisplayId: null,
+          taskKey: null,
+        },
+        config: {
+          command: commandPath,
+          cwd: workspace,
+          // skipSkills omitted → the skills directory is materialized.
+        },
+        context: {},
+        authToken: "run-jwt-token",
+        onLog: async () => {},
+        onMeta: async (meta) => {
+          capturedEnv = meta.env;
+        },
+      });
+
+      expect(result.exitCode).toBe(0);
+      const skillsDir = capturedEnv?.PAPERCLIP_SKILLS_DIR;
+      expect(skillsDir).toBeDefined();
+      expect(skillsDir!.endsWith(path.join(".claude", "skills"))).toBe(true);
+      const stat = await fs.stat(skillsDir!);
+      expect(stat.isDirectory()).toBe(true);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("omits PAPERCLIP_SKILLS_DIR when skills are skipped", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-claude-skillsenv-skip-"));
+    const workspace = path.join(root, "workspace");
+    const commandPath = path.join(root, "claude");
+    let capturedEnv: Record<string, string> | undefined;
+
+    await fs.mkdir(workspace, { recursive: true });
+    await writeFakeClaudeCommand(commandPath);
+
+    try {
+      const result = await execute({
+        runId: "run-claude-skillsenv-skip",
+        agent: {
+          id: "agent-1",
+          companyId: "company-1",
+          name: "Claude Coder",
+          adapterType: "claude_local",
+          adapterConfig: {},
+        },
+        runtime: {
+          sessionId: null,
+          sessionParams: null,
+          sessionDisplayId: null,
+          taskKey: null,
+        },
+        config: {
+          command: commandPath,
+          cwd: workspace,
+          skipSkills: true,
+        },
+        context: {},
+        authToken: "run-jwt-token",
+        onLog: async () => {},
+        onMeta: async (meta) => {
+          capturedEnv = meta.env;
+        },
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(capturedEnv?.PAPERCLIP_SKILLS_DIR).toBeUndefined();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+});

@@ -424,6 +424,17 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const billingType = resolveClaudeBillingType(effectiveEnv)
   const skillsDir = skipSkills ? null : await buildSkillsDir(config, onLog)
 
+  // Expose the materialized skills directory so agent instructions can resolve
+  // bundled skill helpers dynamically (e.g. the paperclip-ctx-auth
+  // `paperclip_context_mode_request.mjs` import) instead of hardcoding an
+  // absolute path that only exists for an interactive `~/.claude/skills`
+  // install. The skills live at `<skillsDir>/.claude/skills/<skill-name>/...`,
+  // so this points at that `.claude/skills` root. `runChildProcess` merges this
+  // over `process.env`, so it reaches the spawned `claude` process.
+  if (skillsDir) {
+    env.PAPERCLIP_SKILLS_DIR = path.join(skillsDir, '.claude', 'skills')
+  }
+
   // When instructionsFilePath is configured, create a combined temp file that
   // includes both the file content and the path directive, so we only need
   // --append-system-prompt-file (Claude CLI forbids using both flags together).

@@ -10,13 +10,26 @@ This is an injected file-backed skill, not a callable tool. In Codex runtimes, P
 
 The key point: inside `ctx_execute`, `PAPERCLIP_API_KEY` may be the fallback `pcli-local`. In authenticated mode that fails. Mint a real local agent JWT inside the sandbox instead.
 
+## Resolving the helper path
+
+Do **not** hardcode `~/.claude/skills/...` — that path only exists for an interactive Claude Code install, not for a headless runtime. The `claude_local` runtime sets `PAPERCLIP_SKILLS_DIR` to the materialized `.claude/skills` directory (where it has symlinked this skill in via `--add-dir`), and that env var is visible inside `ctx_execute`. Resolve the helper from it, with a fallback for runtimes that do not set it:
+
+```javascript
+const skillsDir = process.env.PAPERCLIP_SKILLS_DIR // set by the claude_local runtime
+const HELPER = skillsDir
+  ? `file://${skillsDir}/paperclip-ctx-auth/scripts/paperclip_context_mode_request.mjs`
+  // Fallback (e.g. Codex links the skill into the workspace under .agents/skills):
+  : 'file:///absolute/path/to/.agents/skills/paperclip-ctx-auth/scripts/paperclip_context_mode_request.mjs'
+```
+
+The examples below import from this `HELPER` value.
+
 ## Quick start — use `callApi` (preferred)
 
 `callApi(method, path, body?)` returns **parsed JSON directly** — no `.json()` call, no destructuring, no raw Response object to manage. Use this for all routine board reads and writes.
 
 ```javascript
-const { callApi } =
-  await import('file:///absolute/path/to/.agents/skills/paperclip-ctx-auth/scripts/paperclip_context_mode_request.mjs')
+const { callApi } = await import(HELPER) // see "Resolving the helper path" above
 
 // Read
 const me = await callApi('GET', '/agents/me')
@@ -36,8 +49,7 @@ await callApi('POST', `/api/issues/${id}/comments`, { body: 'done' })
 Use `paperclipRequest` only when you need the raw `Response` object or the `runId`/`identity` metadata.
 
 ```javascript
-const { paperclipRequest } =
-  await import('file:///absolute/path/to/.agents/skills/paperclip-ctx-auth/scripts/paperclip_context_mode_request.mjs')
+const { paperclipRequest } = await import(HELPER) // see "Resolving the helper path" above
 
 // (apiPath, options?) — original form
 const { response, runId, identity } = await paperclipRequest('/agents/me')
@@ -48,7 +60,7 @@ const { response: r2 } = await paperclipRequest('GET', '/agents/me')
 const body2 = await r2.json()
 ```
 
-If you are working from a worktree, change the absolute prefix but keep the `.agents/skills/paperclip-ctx-auth/...` suffix.
+When `PAPERCLIP_SKILLS_DIR` is set (claude_local runtime), the `HELPER` resolution above is worktree- and machine-independent. Only the fallback branch needs an absolute prefix adjusted per worktree.
 
 ## Workflow
 
