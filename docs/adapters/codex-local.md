@@ -15,12 +15,38 @@ The `codex_local` adapter runs OpenAI's Codex CLI locally. It supports session p
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `cwd` | string | Yes | Working directory for the agent process (absolute path; created automatically if missing when permissions allow) |
-| `model` | string | No | Model to use |
+| `model` | string | No | Codex model to use. Defaults to `gpt-5.5` |
+| `effort` | string | No | Reasoning effort override passed as `model_reasoning_effort` when supported |
 | `promptTemplate` | string | No | Prompt used for all runs |
 | `env` | object | No | Environment variables (supports secret refs) |
 | `timeoutSec` | number | No | Process timeout (0 = no timeout) |
 | `graceSec` | number | No | Grace period before force-kill |
 | `dangerouslyBypassApprovalsAndSandbox` | boolean | No | Skip safety checks (dev only) |
+
+## Models And Effort
+
+Curated Codex Local choices:
+
+| Model | Effort choices |
+|-------|----------------|
+| `gpt-5.5` | `none`, `low`, `medium`, `high`, `xhigh` |
+| `gpt-5.4` | `none`, `low`, `medium`, `high`, `xhigh` |
+| `gpt-5.4-mini` | `none`, `low`, `medium`, `high`, `xhigh` |
+| `gpt-5.3-codex` | `low`, `medium`, `high`, `xhigh` |
+| `gpt-5.3-codex-spark` | Leave unset; effort support is undocumented |
+| `gpt-5.2` | `none`, `low`, `medium`, `high`, `xhigh` |
+
+Legacy saved values such as `gpt-5` or `minimal` remain readable for existing configs, but they are not curated choices and adapter switching will not introduce them.
+
+## Adapter Switching Remapping
+
+When switching between `codex_local` and `copilot_cli`, `claude_local`, or `oz_local`, the UI uses canonical model and effort helpers. It preserves only real supported semantic equivalents and clears invalid combinations.
+
+- `codex_local` <-> `copilot_cli`: shared GPT models preserve where both adapters support them. Unsupported efforts such as Codex `none`, or `xhigh` on Copilot `gpt-5.2`, are cleared.
+- `codex_local` <-> `claude_local`: no model equivalence exists, so the target adapter default model is used. Shared effort levels such as `low`, `medium`, `high`, and `xhigh` preserve where supported; Claude `max` and `ultracode` do not map to Codex.
+- `codex_local` <-> `oz_local`: only real Oz equivalents map. Codex `gpt-5.4` with `high` maps to Oz `gpt-5-4-high`, and back to Codex `gpt-5.4` with `high`. Oz has no separate effort field.
+
+Adapter pairs that do not involve `codex_local` are unchanged by this remapping.
 
 ## Session Persistence
 

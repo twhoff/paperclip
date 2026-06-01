@@ -15,8 +15,14 @@ import {
   DEFAULT_CODEX_LOCAL_BYPASS_APPROVALS_AND_SANDBOX,
   DEFAULT_CODEX_LOCAL_MODEL,
 } from "@paperclipai/adapter-codex-local";
+import { models as claudeLocalModels } from "@paperclipai/adapter-claude-local";
+import {
+  modelEffortSupport as copilotModelEffortSupport,
+  models as copilotCliModels,
+} from "@paperclipai/adapter-copilot-cli";
 import { DEFAULT_CURSOR_LOCAL_MODEL } from "@paperclipai/adapter-cursor-local";
 import { DEFAULT_GEMINI_LOCAL_MODEL } from "@paperclipai/adapter-gemini-local";
+import { DEFAULT_OZ_MODEL } from "@paperclipai/adapter-oz-local";
 import {
   Popover,
   PopoverContent,
@@ -42,13 +48,13 @@ import { defaultCreateValues } from "./agent-config-defaults";
 import { getUIAdapter } from "../adapters";
 import { ClaudeLocalAdvancedFields } from "../adapters/claude-local/config-fields";
 import { CopilotCliAdvancedFields } from "../adapters/copilot-cli/config-fields";
-import { modelEffortSupport as copilotModelEffortSupport } from "@paperclipai/adapter-copilot-cli";
 import {
   CURSOR_THINKING_MODELS,
   resolveCanonicalModel,
   translateModel,
   getAdapterEffortValue,
   getAllowedEffortLevels,
+  remapScopedCodexAdapterSwitch,
   resolveCanonicalEffort,
   translateEffort,
 } from "../lib/canonical-models";
@@ -146,11 +152,27 @@ function formatArgList(value: unknown): string {
 
 const codexThinkingEffortOptions = [
   { id: "", label: "Auto" },
-  { id: "minimal", label: "Minimal" },
+  { id: "none", label: "None" },
   { id: "low", label: "Low" },
   { id: "medium", label: "Medium" },
   { id: "high", label: "High" },
+  { id: "xhigh", label: "Extra High" },
 ] as const;
+
+function getScopedSwitchTargetDefaultModel(adapterType: string): string {
+  switch (adapterType) {
+    case "codex_local":
+      return DEFAULT_CODEX_LOCAL_MODEL;
+    case "copilot_cli":
+      return copilotCliModels[0]?.id ?? "";
+    case "claude_local":
+      return claudeLocalModels[0]?.id ?? "";
+    case "oz_local":
+      return DEFAULT_OZ_MODEL;
+    default:
+      return "";
+  }
+}
 
 const openCodeThinkingEffortOptions = [
   { id: "", label: "Auto" },
@@ -619,20 +641,32 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
                     // - cursor: thinking level is encoded in the model ID, not a config field
                     // - other adapters: read the effort field from the effective config
                     let canonicalEffort: string | undefined;
+                    let rawEffort = "";
                     if (oldAdapterType === "cursor") {
                       canonicalEffort = CURSOR_THINKING_MODELS[currentModelId];
                     } else {
                       const effectiveConfig = { ...config, ...overlay.adapterConfig };
-                      const rawEffort = getAdapterEffortValue(oldAdapterType, effectiveConfig);
+                      rawEffort = getAdapterEffortValue(oldAdapterType, effectiveConfig);
                       canonicalEffort = resolveCanonicalEffort(oldAdapterType, rawEffort);
                     }
 
-                    const translatedModel = canonicalModel
-                      ? translateModel(canonicalModel, t, canonicalEffort)
-                      : undefined;
-                    const translatedEffort = canonicalEffort
-                      ? translateEffort(canonicalEffort, t)
-                      : undefined;
+                    const scopedCodexRemap = remapScopedCodexAdapterSwitch({
+                      fromAdapter: oldAdapterType,
+                      toAdapter: t,
+                      sourceModel: currentModelId,
+                      sourceEffort: rawEffort,
+                      targetDefaultModel: getScopedSwitchTargetDefaultModel(t),
+                    });
+                    const translatedModel = scopedCodexRemap
+                      ? scopedCodexRemap.model
+                      : canonicalModel
+                        ? translateModel(canonicalModel, t, canonicalEffort)
+                        : undefined;
+                    const translatedEffort = scopedCodexRemap
+                      ? scopedCodexRemap.effort
+                      : canonicalEffort
+                        ? translateEffort(canonicalEffort, t)
+                        : undefined;
 
                     // Determine model for the new adapter
                     let newModel: string;

@@ -121,6 +121,13 @@ export const CANONICAL_MODELS: Record<string, CanonicalModel> = {
   },
 
   // ── GPT ─────────────────────────────────────────────────────────────────
+  "gpt-5.5": {
+    label: "GPT-5.5",
+    adapters: {
+      codex_local: "gpt-5.5",
+      copilot_cli: "gpt-5.5",
+    },
+  },
   "gpt-5.4": {
     label: "GPT-5.4",
     adapters: {
@@ -134,6 +141,12 @@ export const CANONICAL_MODELS: Record<string, CanonicalModel> = {
       codex_local: "gpt-5.3-codex",
       copilot_cli: "gpt-5.3-codex",
       cursor: "gpt-5.3-codex",
+    },
+  },
+  "gpt-5.3-codex-spark": {
+    label: "GPT-5.3 Codex Spark",
+    adapters: {
+      codex_local: "gpt-5.3-codex-spark",
     },
   },
   "gpt-5.2-codex": {
@@ -158,6 +171,7 @@ export const CANONICAL_MODELS: Record<string, CanonicalModel> = {
   "gpt-5.4-mini": {
     label: "GPT-5.4 Mini",
     adapters: {
+      codex_local: "gpt-5.4-mini",
       copilot_cli: "gpt-5.4-mini",
     },
   },
@@ -171,6 +185,7 @@ export const CANONICAL_MODELS: Record<string, CanonicalModel> = {
   "gpt-5.2": {
     label: "GPT-5.2",
     adapters: {
+      codex_local: "gpt-5.2",
       copilot_cli: "gpt-5.2",
       cursor: "gpt-5.2",
     },
@@ -242,6 +257,12 @@ export const CURSOR_THINKING_MODELS: Record<string, string> = {
  * level — so it is intentionally absent from this map.
  */
 export const CANONICAL_EFFORT_LEVELS: Record<string, CanonicalEffortLevel> = {
+  none: {
+    label: "None",
+    adapters: {
+      codex_local: { field: "effort", value: "none" },
+    },
+  },
   low: {
     label: "Low",
     adapters: {
@@ -276,6 +297,7 @@ export const CANONICAL_EFFORT_LEVELS: Record<string, CanonicalEffortLevel> = {
     label: "Extra High",
     adapters: {
       claude_local: { field: "effort", value: "xhigh" },
+      codex_local: { field: "effort", value: "xhigh" },
       copilot_cli: { field: "effort", value: "xhigh" },
       pi_local: { field: "thinking", value: "xhigh" },
     },
@@ -320,7 +342,7 @@ export const CANONICAL_EFFORT_LEVELS: Record<string, CanonicalEffortLevel> = {
  * fallback (the union of all levels the adapter supports across its models).
  *
  * The same model can expose different effort levels via different platforms
- * (e.g. gpt-5.4 supports `xhigh` on copilot_cli but not codex_local). When
+ * (e.g. Copilot's gpt-5.2 does not support `xhigh`, while Codex's does). When
  * the user switches adapter or model, AgentConfigForm should reset the
  * `effort` field if its current value is no longer in the allowed set for
  * the new tuple.
@@ -332,6 +354,14 @@ export const CANONICAL_EFFORT_LEVELS: Record<string, CanonicalEffortLevel> = {
 export const ALLOWED_EFFORT_LEVELS: Partial<
   Record<AdapterType, Record<string, readonly string[]>>
 > = {
+  codex_local: {
+    "gpt-5.5": ["none", "low", "medium", "high", "xhigh"],
+    "gpt-5.4": ["none", "low", "medium", "high", "xhigh"],
+    "gpt-5.4-mini": ["none", "low", "medium", "high", "xhigh"],
+    "gpt-5.3-codex": ["low", "medium", "high", "xhigh"],
+    "gpt-5.3-codex-spark": [],
+    "gpt-5.2": ["none", "low", "medium", "high", "xhigh"],
+  },
   copilot_cli: {
     // GPT-5.x models on Copilot CLI accept up to xhigh.
     "gpt-5.5": ["low", "medium", "high", "xhigh"],
@@ -339,6 +369,8 @@ export const ALLOWED_EFFORT_LEVELS: Partial<
     "gpt-5.4-codex": ["low", "medium", "high", "xhigh"],
     "gpt-5.3-codex": ["low", "medium", "high", "xhigh"],
     "gpt-5.2-codex": ["low", "medium", "high", "xhigh"],
+    "gpt-5.2": ["low", "medium", "high"],
+    "gpt-5.4-mini": ["low", "medium", "high", "xhigh"],
     "gpt-5.1-codex-max": ["low", "medium", "high", "xhigh"],
     // Claude models proxied via Copilot stay on the Claude effort surface.
     // Note: max/ultracode are claude_local only — never exposed on copilot_cli.
@@ -364,8 +396,8 @@ export const ALLOWED_EFFORT_LEVELS: Partial<
 export const DEFAULT_ALLOWED_EFFORT_LEVELS: Partial<Record<AdapterType, readonly string[]>> = {
   // claude_local: every shipped Claude model accepts the full canonical Claude surface.
   claude_local: ["low", "medium", "high", "xhigh", "max", "ultracode"],
-  // codex_local: codex CLI surfaces minimal/low/medium/high uniformly.
-  codex_local: ["minimal", "low", "medium", "high"],
+  // codex_local: fallback for legacy saved models that remain readable.
+  codex_local: ["none", "low", "medium", "high", "xhigh"],
   // copilot_cli: see per-model entries above; the default is the GPT-5.x surface
   // for any model that ALLOWED_EFFORT_LEVELS doesn't enumerate.
   copilot_cli: ["low", "medium", "high", "xhigh"],
@@ -541,4 +573,127 @@ export function translateEffort(
   }
 
   return undefined;
+}
+
+type ScopedCodexAdapter = "codex_local" | "copilot_cli" | "claude_local" | "oz_local";
+
+const CODEX_SCOPED_TARGETS = new Set<ScopedCodexAdapter>([
+  "copilot_cli",
+  "claude_local",
+  "oz_local",
+]);
+
+function isScopedCodexPair(fromAdapter: string, toAdapter: string): boolean {
+  if (fromAdapter === toAdapter) return false;
+  if (fromAdapter === "codex_local") {
+    return CODEX_SCOPED_TARGETS.has(toAdapter as ScopedCodexAdapter);
+  }
+  if (toAdapter === "codex_local") {
+    return CODEX_SCOPED_TARGETS.has(fromAdapter as ScopedCodexAdapter);
+  }
+  return false;
+}
+
+function resolveScopedCanonicalModel(adapterType: string, modelId: string): string | undefined {
+  const resolved = resolveCanonicalModel(adapterType, modelId);
+  if (resolved) return resolved;
+  if (adapterType === "oz_local" && modelId === "gpt-5-4-high") return "gpt-5.4";
+  return undefined;
+}
+
+function resolveScopedCanonicalEffort(
+  adapterType: string,
+  modelId: string,
+  effortValue: string,
+): string | undefined {
+  const resolved = resolveCanonicalEffort(adapterType, effortValue);
+  if (resolved) return resolved;
+  if (adapterType === "oz_local" && modelId === "gpt-5-4-high") return "high";
+  return undefined;
+}
+
+function translateScopedModel(
+  canonicalModel: string | undefined,
+  canonicalEffort: string | undefined,
+  fromAdapter: string,
+  toAdapter: string,
+  sourceModel: string,
+): string | undefined {
+  if (!canonicalModel) return undefined;
+
+  if (fromAdapter === "oz_local" && toAdapter === "codex_local" && sourceModel === "gpt-5") {
+    return undefined;
+  }
+
+  if (fromAdapter === "codex_local" && toAdapter === "oz_local") {
+    if (canonicalModel === "gpt-5.4" && canonicalEffort === "high") return "gpt-5-4-high";
+    if (canonicalModel === "gpt-5") return "gpt-5";
+    return undefined;
+  }
+
+  if (fromAdapter === "oz_local" && toAdapter === "codex_local" && sourceModel === "gpt-5-4-high") {
+    return "gpt-5.4";
+  }
+
+  return translateModel(canonicalModel, toAdapter, canonicalEffort);
+}
+
+function getAllowedEffortLevelsForResolvedTarget(
+  adapterType: string,
+  canonicalModelId: string | undefined,
+): readonly string[] {
+  const adapter = adapterType as AdapterType;
+  const perModel = ALLOWED_EFFORT_LEVELS[adapter];
+  if (perModel) {
+    if (!canonicalModelId) return [];
+    if (canonicalModelId in perModel) return perModel[canonicalModelId];
+  }
+  return DEFAULT_ALLOWED_EFFORT_LEVELS[adapter] ?? [];
+}
+
+function translateScopedEffort(
+  canonicalEffort: string | undefined,
+  toAdapter: string,
+  targetCanonicalModel: string | undefined,
+): { field: string; value: string } | undefined {
+  if (!canonicalEffort) return undefined;
+  const direct = CANONICAL_EFFORT_LEVELS[canonicalEffort]?.adapters[toAdapter as AdapterType];
+  if (!direct) return undefined;
+  const allowed = getAllowedEffortLevelsForResolvedTarget(toAdapter, targetCanonicalModel);
+  if (!allowed.includes(canonicalEffort)) return undefined;
+  return direct;
+}
+
+export function remapScopedCodexAdapterSwitch(input: {
+  fromAdapter: string;
+  toAdapter: string;
+  sourceModel?: string;
+  sourceEffort?: string;
+  targetDefaultModel: string;
+}): { model: string; effort?: { field: string; value: string } } | undefined {
+  const sourceModel = input.sourceModel ?? "";
+  if (!isScopedCodexPair(input.fromAdapter, input.toAdapter)) return undefined;
+
+  const canonicalModel = sourceModel
+    ? resolveScopedCanonicalModel(input.fromAdapter, sourceModel)
+    : undefined;
+  const canonicalEffort = resolveScopedCanonicalEffort(
+    input.fromAdapter,
+    sourceModel,
+    input.sourceEffort ?? "",
+  );
+  const translatedModel = translateScopedModel(
+    canonicalModel,
+    canonicalEffort,
+    input.fromAdapter,
+    input.toAdapter,
+    sourceModel,
+  );
+  const model = translatedModel ?? input.targetDefaultModel;
+  const targetCanonicalModel = model
+    ? resolveScopedCanonicalModel(input.toAdapter, model)
+    : undefined;
+  const effort = translateScopedEffort(canonicalEffort, input.toAdapter, targetCanonicalModel);
+
+  return effort ? { model, effort } : { model };
 }
