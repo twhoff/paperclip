@@ -1333,25 +1333,29 @@ export function DesignGuide() {
         </p>
         <div className="divide-y divide-border border border-border rounded-md overflow-hidden">
           {/* draining */}
-          <div className="flex items-center justify-between gap-4 px-4 py-2 border-b border-destructive/30 bg-destructive/10 text-sm">
-            <div className="flex items-center gap-2">
+          <div className="flex flex-col gap-3 px-4 py-3 border-b border-destructive/30 bg-destructive/10 text-sm sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-wrap items-center gap-2">
               <span className="inline-flex shrink-0 rounded-full px-2 py-0.5 text-xs font-medium bg-amber-200 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300">draining</span>
-              <span>Draining 3 agents… <span className="text-muted-foreground">90s remaining</span></span>
+              <span className="font-medium">Draining 3 agents</span>
+              <span className="text-muted-foreground">Timeout in 1m 30s</span>
+              <span className="text-muted-foreground">Server stays available.</span>
             </div>
             <Button variant="outline" size="sm">Cancel shutdown</Button>
           </div>
           {/* drained */}
-          <div className="flex items-center justify-between gap-4 px-4 py-2 bg-muted border-b border-border text-sm">
-            <div className="flex items-center gap-2">
+          <div className="flex flex-col gap-3 px-4 py-3 bg-muted border-b border-border text-sm sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-wrap items-center gap-2">
               <span className="inline-flex shrink-0 rounded-full px-2 py-0.5 text-xs font-medium bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300">drained</span>
-              <span>All agents paused — <span className="text-muted-foreground">system available for manual use.</span></span>
+              <span className="font-medium">Agents paused</span>
+              <span className="text-muted-foreground">Manual work stays available until agents resume.</span>
             </div>
             <Button size="sm">Resume agents</Button>
           </div>
           {/* stopping */}
-          <div className="flex items-center gap-4 px-4 py-2 border-b border-destructive/30 bg-destructive/10 text-sm">
+          <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-destructive/30 bg-destructive/10 text-sm">
             <span className="inline-flex shrink-0 rounded-full px-2 py-0.5 text-xs font-medium bg-red-200 text-red-700 dark:bg-red-900/50 dark:text-red-300">stopping</span>
-            <span>Stopping server…</span>
+            <span className="font-medium">Stopping server</span>
+            <span className="text-muted-foreground">The board will disconnect when shutdown completes.</span>
           </div>
         </div>
       </Section>

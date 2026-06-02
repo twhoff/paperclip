@@ -5,6 +5,7 @@ import type { ShutdownService } from "../services/shutdown.js";
 
 export function systemRoutes(shutdown: ShutdownService) {
   const router = Router();
+  const maxReasonLength = 500;
 
   router.get("/shutdown", (_req, res) => {
     res.json(shutdown.getState());
@@ -15,6 +16,7 @@ export function systemRoutes(shutdown: ShutdownService) {
     const body = (req.body ?? {}) as Record<string, unknown>;
     const timeoutMsRaw = body.timeoutMs;
     const exitProcessRaw = body.exitProcess;
+    const reasonRaw = body.reason;
 
     if (timeoutMsRaw !== undefined && (typeof timeoutMsRaw !== "number" || !Number.isFinite(timeoutMsRaw))) {
       throw badRequest("timeoutMs must be a finite number (milliseconds)");
@@ -22,10 +24,18 @@ export function systemRoutes(shutdown: ShutdownService) {
     if (exitProcessRaw !== undefined && typeof exitProcessRaw !== "boolean") {
       throw badRequest("exitProcess must be a boolean");
     }
+    if (reasonRaw !== undefined && reasonRaw !== null && typeof reasonRaw !== "string") {
+      throw badRequest("reason must be a string");
+    }
+    const reason = typeof reasonRaw === "string" ? reasonRaw.trim() : null;
+    if (reason && reason.length > maxReasonLength) {
+      throw badRequest(`reason must be ${maxReasonLength} characters or fewer`);
+    }
 
     const state = await shutdown.initiate({
       timeoutMs: typeof timeoutMsRaw === "number" ? timeoutMsRaw : undefined,
       exitProcess: typeof exitProcessRaw === "boolean" ? exitProcessRaw : undefined,
+      reason,
       actorId: req.actor.userId ?? "board",
       actorType: "user",
     });

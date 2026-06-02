@@ -12,6 +12,7 @@ function idleState(): ShutdownState {
     deadline: null,
     timeoutMs: 120_000,
     exitProcess: false,
+    reason: null,
     inFlightAgentCount: 0,
     inFlightAgentIds: [],
     initiatorActorId: null,
@@ -25,6 +26,7 @@ function drainingState(): ShutdownState {
     deadline: new Date(Date.now() + 60_000).toISOString(),
     timeoutMs: 60_000,
     exitProcess: false,
+    reason: "maintenance",
     inFlightAgentCount: 1,
     inFlightAgentIds: ["agent-1"],
     initiatorActorId: "user-1",
@@ -86,12 +88,16 @@ describe("system routes", () => {
     );
   });
 
-  it("POST /api/system/shutdown forwards timeoutMs and exitProcess", async () => {
+  it("POST /api/system/shutdown forwards timeoutMs, exitProcess, and reason", async () => {
     await request(buildApp(shutdown))
       .post("/api/system/shutdown")
-      .send({ timeoutMs: 30_000, exitProcess: true });
+      .send({ timeoutMs: 30_000, exitProcess: true, reason: "  maintenance window  " });
     expect(shutdown.initiate).toHaveBeenCalledWith(
-      expect.objectContaining({ timeoutMs: 30_000, exitProcess: true }),
+      expect.objectContaining({
+        timeoutMs: 30_000,
+        exitProcess: true,
+        reason: "maintenance window",
+      }),
     );
   });
 
@@ -107,6 +113,18 @@ describe("system routes", () => {
       .post("/api/system/shutdown")
       .send({ timeoutMs: "long" });
     expect(res.status).toBe(400);
+  });
+
+  it("POST /api/system/shutdown rejects invalid reason", async () => {
+    const nonString = await request(buildApp(shutdown))
+      .post("/api/system/shutdown")
+      .send({ reason: 123 });
+    expect(nonString.status).toBe(400);
+
+    const tooLong = await request(buildApp(shutdown))
+      .post("/api/system/shutdown")
+      .send({ reason: "x".repeat(501) });
+    expect(tooLong.status).toBe(400);
   });
 
   it("POST /api/system/shutdown is forbidden for agent actors", async () => {

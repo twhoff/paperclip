@@ -8,6 +8,7 @@ export interface ShutdownState {
   deadline: string | null;
   timeoutMs: number;
   exitProcess: boolean;
+  reason: string | null;
   inFlightAgentCount: number;
   inFlightAgentIds: string[];
   initiatorActorId: string | null;
@@ -16,6 +17,7 @@ export interface ShutdownState {
 export interface ShutdownInitiateBody {
   timeoutMs?: number;
   exitProcess?: boolean;
+  reason?: string | null;
 }
 
 export const shutdownApi = {

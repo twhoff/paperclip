@@ -16,6 +16,7 @@ export interface ShutdownState {
   deadline: string | null;
   timeoutMs: number;
   exitProcess: boolean;
+  reason: string | null;
   inFlightAgentCount: number;
   inFlightAgentIds: string[];
   initiatorActorId: string | null;
@@ -24,6 +25,7 @@ export interface ShutdownState {
 export interface ShutdownInitiateOptions {
   timeoutMs?: number;
   exitProcess?: boolean;
+  reason?: string | null;
   actorId: string;
   actorType: "user" | "agent" | "system";
 }
@@ -51,6 +53,7 @@ type InternalState = {
   deadline: Date | null;
   timeoutMs: number;
   exitProcess: boolean;
+  reason: string | null;
   inFlightAgentIds: Set<string>;
   initiatorActorId: string | null;
   affectedCompanyIds: Set<string>;
@@ -63,6 +66,7 @@ function createIdleState(): InternalState {
     deadline: null,
     timeoutMs: DEFAULT_TIMEOUT_MS,
     exitProcess: false,
+    reason: null,
     inFlightAgentIds: new Set(),
     initiatorActorId: null,
     affectedCompanyIds: new Set(),
@@ -83,6 +87,7 @@ export function shutdownService(db: Db) {
       deadline: state.deadline ? state.deadline.toISOString() : null,
       timeoutMs: state.timeoutMs,
       exitProcess: state.exitProcess,
+      reason: state.reason,
       inFlightAgentCount: state.inFlightAgentIds.size,
       inFlightAgentIds: Array.from(state.inFlightAgentIds),
       initiatorActorId: state.initiatorActorId,
@@ -227,6 +232,7 @@ export function shutdownService(db: Db) {
     }
     const timeoutMs = clampTimeout(opts.timeoutMs);
     const exitProcess = Boolean(opts.exitProcess);
+    const reason = opts.reason?.trim() || null;
     const startedAt = new Date();
     const deadline = new Date(startedAt.getTime() + timeoutMs);
 
@@ -249,6 +255,7 @@ export function shutdownService(db: Db) {
       deadline,
       timeoutMs,
       exitProcess,
+      reason,
       inFlightAgentIds: new Set(pausedRows.map((r) => r.id)),
       initiatorActorId: opts.actorId,
       affectedCompanyIds: new Set(pausedRows.map((r) => r.companyId)),
@@ -257,6 +264,7 @@ export function shutdownService(db: Db) {
     await logSystemActivity("system.shutdown.initiated", {
       exitProcess,
       timeoutMs,
+      reason,
       affectedAgentCount: pausedRows.length,
     });
 

@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, PauseCircle, Power } from "lucide-react";
+import { AlertCircle, PauseCircle, Power, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "./StatusBadge";
 import { shutdownApi, type ShutdownState } from "../api/shutdown";
 import { queryKeys } from "../lib/queryKeys";
 import { useShutdownStatus } from "../hooks/useShutdownStatus";
 import { useToast } from "../context/ToastContext";
+import { cn } from "../lib/utils";
 
 function useNow(intervalMs: number) {
   const [now, setNow] = useState(() => Date.now());
@@ -37,6 +38,14 @@ function bannerClasses(phase: ShutdownState["phase"]) {
   return "border-b border-destructive/30 bg-destructive/10 text-foreground";
 }
 
+function invalidateShutdownSurfaces(queryClient: ReturnType<typeof useQueryClient>) {
+  void queryClient.invalidateQueries({ queryKey: queryKeys.shutdown });
+  void queryClient.invalidateQueries({ queryKey: ["agents"] });
+  void queryClient.invalidateQueries({ queryKey: ["org"] });
+  void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+  void queryClient.invalidateQueries({ queryKey: ["sidebar-badges"] });
+}
+
 function DrainingDescription({ state }: BannerProps) {
   const now = useNow(1000);
   const deadline = state.deadline ? Date.parse(state.deadline) : null;
@@ -44,12 +53,17 @@ function DrainingDescription({ state }: BannerProps) {
   const count = state.inFlightAgentCount;
   const noun = count === 1 ? "agent" : "agents";
   return (
-    <span>
-      Draining {count} {noun}…
+    <>
+      <span className="font-medium">
+        Draining {count} {noun}
+      </span>
       {remaining !== null && (
-        <span className="text-muted-foreground"> {formatRemaining(remaining)} remaining</span>
+        <span className="text-muted-foreground">Timeout in {formatRemaining(remaining)}</span>
       )}
-    </span>
+      <span className="text-muted-foreground">
+        {state.exitProcess ? "Server will stop after drain." : "Server stays available."}
+      </span>
+    </>
   );
 }
 
@@ -60,6 +74,7 @@ function ResumeButton({ from }: { from: "draining" | "drained" }) {
     mutationFn: () => shutdownApi.resume(),
     onSuccess: (state) => {
       queryClient.setQueryData(queryKeys.shutdown, state);
+      invalidateShutdownSurfaces(queryClient);
       pushToast({
         title: from === "draining" ? "Shutdown cancelled." : "Agents resumed.",
         tone: "success",
@@ -77,6 +92,7 @@ function ResumeButton({ from }: { from: "draining" | "drained" }) {
       onClick={() => resume.mutate()}
       disabled={resume.isPending}
     >
+      {from === "drained" && <RotateCcw className="size-4" />}
       {from === "drained" ? "Resume agents" : "Cancel shutdown"}
     </Button>
   );
@@ -92,13 +108,18 @@ function PhaseDescription({ state }: BannerProps) {
   if (state.phase === "draining") return <DrainingDescription state={state} />;
   if (state.phase === "drained") {
     return (
-      <span>
-        All agents paused —{" "}
-        <span className="text-muted-foreground">system available for manual use.</span>
-      </span>
+      <>
+        <span className="font-medium">Agents paused</span>
+        <span className="text-muted-foreground">Manual work stays available until agents resume.</span>
+      </>
     );
   }
-  return <span>Stopping server…</span>;
+  return (
+    <>
+      <span className="font-medium">Stopping server</span>
+      <span className="text-muted-foreground">The board will disconnect when shutdown completes.</span>
+    </>
+  );
 }
 
 export function ShutdownBanner() {
@@ -106,14 +127,29 @@ export function ShutdownBanner() {
   if (!state || state.phase === "idle") return null;
 
   return (
-    <div className={`flex items-center justify-between gap-4 px-4 py-2 ${bannerClasses(state.phase)}`}>
-      <div className="flex items-center gap-2 text-sm">
+    <div
+      role="status"
+      aria-live="polite"
+      className={cn("flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between", bannerClasses(state.phase))}
+    >
+      <div className="flex min-w-0 items-start gap-3">
         <Icon phase={state.phase} />
-        <StatusBadge status={state.phase} />
-        <PhaseDescription state={state} />
+        <div className="min-w-0 space-y-1 text-sm">
+          <div className="flex flex-wrap items-center gap-2">
+            <StatusBadge status={state.phase} />
+            <PhaseDescription state={state} />
+          </div>
+          {state.reason && (
+            <div className="truncate text-xs text-muted-foreground">
+              Reason: {state.reason}
+            </div>
+          )}
+        </div>
       </div>
       {state.phase !== "stopping" && (
-        <ResumeButton from={state.phase === "draining" ? "draining" : "drained"} />
+        <div className="shrink-0 sm:self-center">
+          <ResumeButton from={state.phase === "draining" ? "draining" : "drained"} />
+        </div>
       )}
     </div>
   );
