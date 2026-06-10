@@ -1,5 +1,15 @@
-import { createWriteStream, existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from "node:fs";
+import {
+  createWriteStream,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { finished } from "node:stream/promises";
 import { basename, resolve } from "node:path";
 import postgres from "postgres";
@@ -20,6 +30,14 @@ export type RunDatabaseBackupResult = {
   backupFile: string;
   sizeBytes: number;
   prunedCount: number;
+  /**
+   * True when the freshly generated dump was byte-identical (excluding the
+   * timestamp header) to the most recent existing backup, so the redundant copy
+   * was discarded and `backupFile` points at the retained prior backup.
+   */
+  unchanged: boolean;
+  /** SHA-256 of the dump content, excluding the volatile `-- Created:` header line. */
+  contentHash: string;
 };
 
 export type RunDatabaseRestoreOptions = {
@@ -51,6 +69,53 @@ const DRIZZLE_SCHEMA = "drizzle";
 const DRIZZLE_MIGRATIONS_TABLE = "__drizzle_migrations";
 
 const STATEMENT_BREAKPOINT = "-- paperclip statement breakpoint 69f6f3f1-42fd-46a6-bf17-d1d85f8f3900";
+
+const CONTENT_HASH_SUFFIX = ".sha256";
+const CREATED_HEADER_PREFIX = "-- Created:";
+
+function contentHashPath(backupFile: string): string {
+  return `${backupFile}${CONTENT_HASH_SUFFIX}`;
+}
+
+function readContentHash(backupFile: string): string | null {
+  const path = contentHashPath(backupFile);
+  if (!existsSync(path)) return null;
+  try {
+    const value = readFileSync(path, "utf8").trim();
+    return value.length > 0 ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Find the most recent existing backup (excluding the one just written) whose
+ * recorded content hash matches `contentHash`. Returns it so an identical fresh
+ * dump can be discarded instead of stored as a duplicate. Relies on the dump
+ * being byte-stable for unchanged data: when no rows have been written between
+ * runs the emitted SQL is identical, so the hashes match.
+ */
+function findUnchangedPriorBackup(
+  backupDir: string,
+  filenamePrefix: string,
+  excludeFile: string,
+  contentHash: string,
+): { path: string; sizeBytes: number } | null {
+  if (!existsSync(backupDir)) return null;
+  const excludeBase = basename(excludeFile);
+  const entries: { path: string; mtimeMs: number }[] = [];
+  for (const name of readdirSync(backupDir)) {
+    if (!name.startsWith(`${filenamePrefix}-`) || !name.endsWith(".sql")) continue;
+    if (name === excludeBase) continue;
+    const fullPath = resolve(backupDir, name);
+    entries.push({ path: fullPath, mtimeMs: statSync(fullPath).mtimeMs });
+  }
+  entries.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  const newest = entries[0];
+  if (!newest) return null;
+  if (readContentHash(newest.path) !== contentHash) return null;
+  return { path: newest.path, sizeBytes: statSync(newest.path).size };
+}
 
 function sanitizeRestoreErrorMessage(error: unknown): string {
   if (error && typeof error === "object") {
@@ -100,7 +165,11 @@ function pruneOldBackups(
     }
   }
 
-  for (const path of toDelete) unlinkSync(path);
+  for (const path of toDelete) {
+    unlinkSync(path);
+    const sidecar = contentHashPath(path);
+    if (existsSync(sidecar)) unlinkSync(sidecar);
+  }
   return toDelete.size;
 }
 
@@ -176,7 +245,15 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
   try {
     await sql`SELECT 1`;
 
-    const emit = (line: string) => { outStream.write(line + "\n"); };
+    // Hash the dump content as it streams so we can detect when an hourly backup
+    // is identical to the previous one and avoid storing a duplicate. The
+    // `-- Created:` header line is excluded because it changes on every run.
+    const contentHash = createHash("sha256");
+    const emit = (line: string) => {
+      const data = line + "\n";
+      outStream.write(data);
+      if (!line.startsWith(CREATED_HEADER_PREFIX)) contentHash.update(data);
+    };
     const emitStatement = (statement: string) => {
       emit(statement);
       emit(STATEMENT_BREAKPOINT);
@@ -528,13 +605,32 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
     outStream.end();
     await finished(outStream);
 
+    const digest = contentHash.digest("hex");
+
+    // If the dump is identical to the most recent prior backup, discard the
+    // redundant copy and point the caller at the retained file.
+    const unchangedPrior = findUnchangedPriorBackup(opts.backupDir, filenamePrefix, backupFile, digest);
+    if (unchangedPrior) {
+      unlinkSync(backupFile);
+      return {
+        backupFile: unchangedPrior.path,
+        sizeBytes: unchangedPrior.sizeBytes,
+        prunedCount: 0,
+        unchanged: true,
+        contentHash: digest,
+      };
+    }
+
     const sizeBytes = statSync(backupFile).size;
+    writeFileSync(contentHashPath(backupFile), digest);
     const prunedCount = pruneOldBackups(opts.backupDir, retentionDays, filenamePrefix, retentionCount);
 
     return {
       backupFile,
       sizeBytes,
       prunedCount,
+      unchanged: false,
+      contentHash: digest,
     };
   } finally {
     if (!outStream.writableEnded) outStream.destroy();
@@ -574,6 +670,9 @@ export async function runDatabaseRestore(opts: RunDatabaseRestoreOptions): Promi
 
 export function formatDatabaseBackupResult(result: RunDatabaseBackupResult): string {
   const size = formatBackupSize(result.sizeBytes);
+  if (result.unchanged) {
+    return `${result.backupFile} (${size}; unchanged since last backup, no new file written)`;
+  }
   const pruned = result.prunedCount > 0 ? `; pruned ${result.prunedCount} old backup(s)` : "";
   return `${result.backupFile} (${size}${pruned})`;
 }

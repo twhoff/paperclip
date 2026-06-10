@@ -1,6 +1,7 @@
 /// <reference path="./types/express.d.ts" />
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, unlinkSync, writeSync } from "node:fs";
 import { createServer } from "node:http";
+import { hostname } from "node:os";
 import { resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
@@ -32,6 +33,85 @@ import { pruneServerLogs } from "./services/server-log-store.js";
 import { createStorageServiceFromConfig } from "./storage/index.js";
 import { printStartupBanner } from "./startup-banner.js";
 import { getBoardClaimWarningUrl, initializeBoardClaimChallenge } from "./board-claim.js";
+
+/**
+ * Process-independent guard so that, when more than one server instance happens
+ * to be running for the same instance (e.g. two `pnpm dev` stacks left alive, or
+ * a duplicate started on a different port via `detectPort`), only ONE of them
+ * runs the scheduled database backup loop. Without this, each instance writes
+ * its own near-identical hourly dump, producing duplicate backups.
+ *
+ * The lock is a JSON file in the backup directory. We treat a lock owned by a
+ * dead pid (e.g. left behind after SIGKILL) as stale and reclaim it.
+ */
+function acquireBackupSchedulerLock(backupDir: string): { release: () => void } | null {
+  const lockPath = resolve(backupDir, ".backup-scheduler.lock");
+  const payload = () =>
+    JSON.stringify({ pid: process.pid, host: hostname(), startedAt: new Date().toISOString() });
+
+  const writeOwnedLock = () => {
+    const fd = openSync(lockPath, "w");
+    try {
+      writeSync(fd, payload());
+    } finally {
+      closeSync(fd);
+    }
+  };
+
+  const isProcessAlive = (pid: number): boolean => {
+    if (!Number.isInteger(pid) || pid <= 0) return false;
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (err) {
+      // EPERM means the process exists but is owned by someone else: still alive.
+      return (err as NodeJS.ErrnoException).code === "EPERM";
+    }
+  };
+
+  const readLockPid = (): number | null => {
+    try {
+      const parsed = JSON.parse(readFileSync(lockPath, "utf8")) as { pid?: unknown };
+      return typeof parsed.pid === "number" ? parsed.pid : null;
+    } catch {
+      return null;
+    }
+  };
+
+  try {
+    mkdirSync(backupDir, { recursive: true });
+    // Atomic exclusive create: succeeds only if no lock file exists.
+    const fd = openSync(lockPath, "wx");
+    try {
+      writeSync(fd, payload());
+    } finally {
+      closeSync(fd);
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+    const ownerPid = readLockPid();
+    if (ownerPid !== null && ownerPid !== process.pid && isProcessAlive(ownerPid)) {
+      return null; // another live instance owns the backup loop
+    }
+    // Stale or unreadable lock — reclaim it for this process.
+    writeOwnedLock();
+  }
+
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    try {
+      if (existsSync(lockPath) && readLockPid() === process.pid) unlinkSync(lockPath);
+    } catch {
+      // best-effort cleanup
+    }
+  };
+  process.once("exit", release);
+  process.once("SIGINT", release);
+  process.once("SIGTERM", release);
+  return { release };
+}
 
 type BetterAuthSessionUser = {
   id: string;
@@ -600,7 +680,16 @@ export async function startServer(): Promise<StartedServer> {
     }, config.heartbeatSchedulerIntervalMs);
   }
   
-  if (config.databaseBackupEnabled) {
+  const backupSchedulerLock = config.databaseBackupEnabled
+    ? acquireBackupSchedulerLock(config.databaseBackupDir)
+    : null;
+  if (config.databaseBackupEnabled && !backupSchedulerLock) {
+    logger.warn(
+      { backupDir: config.databaseBackupDir },
+      "Scheduled database backups are already owned by another server process for this instance; skipping the backup loop here to avoid duplicate backups",
+    );
+  }
+  if (config.databaseBackupEnabled && backupSchedulerLock) {
     const backupIntervalMs = config.databaseBackupIntervalMinutes * 60 * 1000;
     let backupInFlight = false;
   
@@ -624,6 +713,7 @@ export async function startServer(): Promise<StartedServer> {
             backupFile: result.backupFile,
             sizeBytes: result.sizeBytes,
             prunedCount: result.prunedCount,
+            unchanged: result.unchanged,
             backupDir: config.databaseBackupDir,
             retentionDays: config.databaseBackupRetentionDays,
             retentionCount: config.databaseBackupRetentionCount,
