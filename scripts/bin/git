@@ -29,9 +29,18 @@ _holly_worktree_msg() {
     fi
 }
 
+# -- A live main-checkout write grant waives the add/commit block --
+# Mirrors the PreToolUse hook: a root-issued, non-expired grant for the current
+# session lets direct git through. `holly main-write check` exits 0 when active.
+_holly_main_write_active() {
+    [ -n "$HOLLY_SESSION_ID" ] || return 1
+    command -v holly >/dev/null 2>&1 || return 1
+    holly main-write check --session "$HOLLY_SESSION_ID" >/dev/null 2>&1
+}
+
 # -- Rule 1: git worktree is always banned --
 if [ "$1" = "worktree" ]; then
-    echo "BLOCKED: \`git worktree\` is banned. Use \`holly worktree\` for all worktree operations." >&2
+    echo "BLOCKED: \`git worktree\` is banned — use \`holly worktree\` for all worktree operations." >&2
     msg="$(_holly_worktree_msg)"
     [ -n "$msg" ] && echo "$msg" >&2
     exit 1
@@ -40,7 +49,7 @@ fi
 # -- Rule 2: git add / git commit blocked on main checkout --
 if [ "$1" = "add" ] || [ "$1" = "commit" ]; then
     REPO_ROOT="$("$REAL_GIT" rev-parse --show-toplevel 2>/dev/null)"
-    if [ -n "$REPO_ROOT" ] && [ -d "$REPO_ROOT/.git" ]; then
+    if [ -n "$REPO_ROOT" ] && [ -d "$REPO_ROOT/.git" ] && ! _holly_main_write_active; then
         echo "BLOCKED: \`git $1\` is not allowed on the main checkout." >&2
         msg="$(_holly_worktree_msg)"
         [ -n "$msg" ] && echo "$msg" >&2
