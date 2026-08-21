@@ -1,0 +1,310 @@
+#!/usr/bin/env python3
+"""
+Timezone Reference Script
+
+Outputs current date/time in system timezone, UTC, and across various world timezones.
+Useful for validating timezone-aware features and as a source of truth when testing
+date/time rendering across different locations.
+
+Usage:
+    python3 timezone_reference.py              # Show current time across timezones
+    python3 timezone_reference.py --what-day "2026-05-10"  # Show day name for a date
+    python3 timezone_reference.py --json       # Show output as JSON
+    python3 timezone_reference.py --help       # Show this help message
+"""
+
+import argparse
+import json
+import sys
+from datetime import datetime
+from typing import Any
+from zoneinfo import ZoneInfo
+
+
+# Colors for terminal output
+class Colors:
+    HEADER = "\033[95m"
+    BLUE = "\033[94m"
+    CYAN = "\033[96m"
+    GREEN = "\033[92m"
+    YELLOW = "\033[93m"
+    RED = "\033[91m"
+    ENDC = "\033[0m"
+    BOLD = "\033[1m"
+    UNDERLINE = "\033[4m"
+
+
+def format_time(dt: datetime) -> str:
+    """Format datetime with full details including UTC offset."""
+    return dt.strftime("%a, %d %b %Y %H:%M:%S %Z (UTC%z)")
+
+
+def parse_input_date(date_str: str) -> datetime:
+    """Parse a date string using supported formats and return a datetime."""
+    formats = [
+        "%Y-%m-%d",
+        "%d/%m/%Y",
+        "%Y-%m-%d %H:%M:%S",
+        "%d/%m/%Y %H:%M:%S",
+    ]
+
+    for fmt in formats:
+        try:
+            return datetime.strptime(date_str, fmt)
+        except ValueError:
+            continue
+
+    raise ValueError(
+        f"Could not parse date '{date_str}'. Supported formats: "
+        "YYYY-MM-DD, DD/MM/YYYY, YYYY-MM-DD HH:MM:SS, DD/MM/YYYY HH:MM:SS"
+    )
+
+
+def what_day_is(date_str: str) -> dict[str, str]:
+    """
+    Parse a date string and return the day of the week.
+    
+    Supported formats:
+        - YYYY-MM-DD (e.g., 2026-05-10)
+        - DD/MM/YYYY (e.g., 10/05/2026)
+        - YYYY-MM-DD HH:MM:SS (e.g., 2026-05-10 14:30:00)
+    
+    Args:
+        date_str: Date string to parse
+    
+    Returns:
+        Formatted string with day name and full date details
+    """
+    parsed_date = parse_input_date(date_str)
+
+    day_name = parsed_date.strftime("%A")
+    full_date = parsed_date.strftime("%a, %d %b %Y")
+
+    return {
+        "input": date_str,
+        "day_name": day_name,
+        "full_date": full_date,
+        "iso_date": parsed_date.strftime("%Y-%m-%d"),
+        "iso_datetime": parsed_date.isoformat(sep=" "),
+    }
+
+
+def get_locations() -> list[tuple[str, str]]:
+    """Return a list of world locations and their IANA timezones."""
+    return [
+        ("🏠 Perth, Australia", "Australia/Perth"),
+        ("🏠 Sydney, Australia", "Australia/Sydney"),
+        ("🏠 Melbourne, Australia", "Australia/Melbourne"),
+        ("🇦🇺 Brisbane, Australia", "Australia/Brisbane"),
+        ("🌏 Auckland, New Zealand", "Pacific/Auckland"),
+        ("🌏 Tokyo, Japan", "Asia/Tokyo"),
+        ("🌏 Hong Kong", "Asia/Hong_Kong"),
+        ("🌏 Singapore", "Asia/Singapore"),
+        ("🌏 Bangkok, Thailand", "Asia/Bangkok"),
+        ("🌏 Dubai, UAE", "Asia/Dubai"),
+        ("🌍 London, UK", "Europe/London"),
+        ("🌍 Berlin, Germany", "Europe/Berlin"),
+        ("🌍 Paris, France", "Europe/Paris"),
+        ("🌎 New York, USA", "America/New_York"),
+        ("🌎 Los Angeles, USA", "America/Los_Angeles"),
+        ("🌎 Chicago, USA", "America/Chicago"),
+        ("🌎 Denver, USA", "America/Denver"),
+        ("🌎 Toronto, Canada", "America/Toronto"),
+        ("🌎 São Paulo, Brazil", "America/Sao_Paulo"),
+    ]
+
+
+def build_reference_data() -> dict[str, Any]:
+    """Build timezone reference data as a serializable dictionary."""
+    now_local = datetime.now()
+    now_utc = datetime.now(ZoneInfo("UTC"))
+    locations: list[dict[str, str]] = []
+    australian_quick_reference: list[dict[str, str]] = []
+
+    data = {
+        "mode": "reference",
+        "generated_at_utc": now_utc.isoformat(),
+        "system_local": {
+            "display": now_local.strftime("%a, %d %b %Y %H:%M:%S"),
+            "iso": now_local.isoformat(),
+        },
+        "utc": {
+            "display": format_time(now_utc),
+            "iso": now_utc.isoformat(),
+        },
+        "locations": locations,
+        "australian_quick_reference": australian_quick_reference,
+    }
+
+    for location, tz_name in get_locations():
+        now_tz = datetime.now(ZoneInfo(tz_name))
+        locations.append(
+            {
+                "location": location,
+                "timezone": tz_name,
+                "local_time": now_tz.strftime("%a %d %b %Y %H:%M:%S"),
+                "iso": now_tz.isoformat(),
+                "offset": now_tz.strftime("UTC%z"),
+                "abbreviation": now_tz.strftime("%Z"),
+            }
+        )
+
+    au_zones = [
+        ("Perth (AWST/AWDT)", "Australia/Perth"),
+        ("Sydney (AEDT/AEST)", "Australia/Sydney"),
+        ("Melbourne (AEDT/AEST)", "Australia/Melbourne"),
+    ]
+    for label, tz_name in au_zones:
+        now_tz = datetime.now(ZoneInfo(tz_name))
+        australian_quick_reference.append(
+            {
+                "label": label,
+                "timezone": tz_name,
+                "display": now_tz.strftime("%H:%M:%S %Z (UTC%z)"),
+                "iso": now_tz.isoformat(),
+            }
+        )
+
+    return data
+
+
+def main() -> None:
+    # Get current time
+    now_local = datetime.now()
+    now_utc = datetime.now(ZoneInfo("UTC"))
+
+    print(
+        f"\n{Colors.BOLD}{Colors.BLUE}"
+        f"╔═══════════════════════════════════════════════════════════════╗{Colors.ENDC}"
+    )
+    print(
+        f"{Colors.BOLD}{Colors.BLUE}"
+        f"║           TIMEZONE REFERENCE — Current Date & Time            ║{Colors.ENDC}"
+    )
+    print(
+        f"{Colors.BOLD}{Colors.BLUE}"
+        f"╚═══════════════════════════════════════════════════════════════╝{Colors.ENDC}\n"
+    )
+
+    # System local time
+    print(f"{Colors.BOLD}{Colors.CYAN}System Local Time:{Colors.ENDC}")
+    print(f"  {now_local.strftime('%a, %d %b %Y %H:%M:%S')}\n")
+
+    # UTC time (primary reference)
+    print(f"{Colors.BOLD}{Colors.GREEN}UTC (Primary Reference):{Colors.ENDC}")
+    print(f"  {Colors.GREEN}{format_time(now_utc)}{Colors.ENDC}\n")
+
+    # Define locations and their timezones
+    locations = get_locations()
+
+    # Table header
+    print(f"{Colors.BOLD}{Colors.YELLOW}World Timezones{Colors.ENDC}")
+    print(f"{Colors.BOLD}{'Location':<30} {'Local Time':<45} {'Offset'}{Colors.ENDC}")
+    print("-" * 90)
+
+    # Display each timezone
+    for location, tz_name in locations:
+        try:
+            now_tz = datetime.now(ZoneInfo(tz_name))
+            time_str = now_tz.strftime("%a %d %b %Y %H:%M:%S")
+            offset_str = now_tz.strftime("UTC%z")
+            # Add timezone abbreviation if available
+            tz_abbr = now_tz.strftime("%Z")
+            offset_str = f"{offset_str} {tz_abbr}"
+            print(f"{location:<30} {time_str:<45} {offset_str}")
+        except Exception as e:
+            print(f"{location:<30} {Colors.RED}Error: {e}{Colors.ENDC}")
+
+    # UTC offsets reference table
+    print(f"\n{Colors.BOLD}{Colors.YELLOW}UTC Offset Legend{Colors.ENDC}")
+    print(f"{Colors.BOLD}Positive offsets are east of Greenwich (ahead of UTC){Colors.ENDC}")
+    print(f"{Colors.BOLD}Negative offsets are west of Greenwich (behind UTC){Colors.ENDC}")
+
+    # Quick reference for Australian locations (since this is used in groceries-system)
+    print(f"\n{Colors.BOLD}{Colors.CYAN}📍 Australian Locations Quick Reference:{Colors.ENDC}")
+    au_zones = [
+        ("Perth (AWST/AWDT)", "Australia/Perth"),
+        ("Sydney (AEDT/AEST)", "Australia/Sydney"),
+        ("Melbourne (AEDT/AEST)", "Australia/Melbourne"),
+    ]
+    for label, tz_name in au_zones:
+        now_tz = datetime.now(ZoneInfo(tz_name))
+        print(f"  {label:<35} {now_tz.strftime('%H:%M:%S %Z (UTC%z)')}")
+
+    print(
+        f"\n{Colors.GREEN}✓ Reference generated at "
+        f"{now_utc.strftime('%Y-%m-%d %H:%M:%S UTC')}{Colors.ENDC}\n"
+    )
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="Timezone Reference Tool — validate timezone-aware features",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  Show current time across all timezones:
+    python3 timezone_reference.py
+        python3 timezone_reference.py --json
+
+  Find the day of the week for a specific date:
+    python3 timezone_reference.py --what-day "2026-05-10"
+    python3 timezone_reference.py --what-day "10/05/2026"
+    python3 timezone_reference.py --what-day "2026-05-10 14:30:00"
+        python3 timezone_reference.py --what-day "2026-05-10" --json
+
+  Display this help:
+    python3 timezone_reference.py --help
+        """
+    )
+    
+    parser.add_argument(
+        "--what-day",
+        type=str,
+        metavar="DATE",
+        help="Show the day of the week for a given date (formats: YYYY-MM-DD or DD/MM/YYYY)"
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output data as JSON"
+    )
+    
+    args = parser.parse_args()
+    
+    try:
+        if args.what_day:
+            # Handle what-day command
+            day_data = what_day_is(args.what_day)
+            if args.json:
+                print(json.dumps({"mode": "what-day", **day_data}, indent=2, ensure_ascii=False))
+            else:
+                print(
+                    f"\n{Colors.BOLD}{Colors.BLUE}"
+                    f"╔═══════════════════════════════════════════════════════════════╗{Colors.ENDC}"
+                )
+                print(
+                    f"{Colors.BOLD}{Colors.BLUE}"
+                    "║                    WHAT DAY IS...?                             ║"
+                    f"{Colors.ENDC}"
+                )
+                print(
+                    f"{Colors.BOLD}{Colors.BLUE}"
+                    f"╚═══════════════════════════════════════════════════════════════╝{Colors.ENDC}\n"
+                )
+                print(
+                    f"  {Colors.GREEN}{day_data['day_name']}{Colors.ENDC} "
+                    f"({day_data['full_date']})\n"
+                )
+        else:
+            # Default: show current time reference
+            if args.json:
+                print(json.dumps(build_reference_data(), indent=2, ensure_ascii=False))
+            else:
+                main()
+    except KeyboardInterrupt:
+        print(f"\n{Colors.YELLOW}Interrupted by user{Colors.ENDC}\n")
+        sys.exit(0)
+    except Exception as e:
+        print(f"{Colors.RED}Error: {e}{Colors.ENDC}\n", file=sys.stderr)
+        sys.exit(1)

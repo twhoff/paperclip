@@ -1,0 +1,218 @@
+# yaml-language-server: $schema=../schemas/workflow.schema.json
+
+name: Review Implementation
+description: >-
+  Forensic review of implemented work. Scans wide (callers, consumers, tests,
+  docs), deep (line-by-line logic), and back in time (repository history and
+  Holly-tracked issue context) when risk warrants it, while allowing focused
+  review for small, low-risk changes.
+
+preflight:
+  - prompt: >-
+      Identify the review target. The user may provide a Holly tracker issue ID,
+      a commit hash, a branch name, or a description of the work. Resolve to a
+      concrete set of changed files and their diffs.
+
+      Use `holly tracker show <id> --json` for tracker references and
+      `holly task exec_in_current_task_worktree -- git log --oneline -20` / `holly task exec_in_current_task_worktree -- git diff`
+      for commit references. If the user provides neither, inspect likely
+      candidates with `holly tracker ready --limit 10` and recent repository
+      history through `holly task exec_in_current_task_worktree -- git log --oneline -20` to infer the
+      most likely target. Confirm the review scope with the user before
+      proceeding.
+
+  - prompt: >-
+      Build the review manifest: (1) every file changed, (2) the Holly tracker
+      issue(s) and their descriptions/design notes, (3) the spec or reference
+      doc if one exists, (4) relevant ADRs when the project has them and they
+      apply to the reviewed work, and (5) the relevant tests.
+
+      Use `holly tracker show <id> --json` to collect issue context, including
+      description, design notes, parent epic, and sibling work. Store this
+      manifest mentally for use by all subsequent steps.
+
+      If the review touches architecture, shared contracts, UI testability,
+      design-system governance, data flow, API behaviour, infrastructure, or
+      workflow/process conventions, load the ADR skill and use it to find and
+      read relevant ADRs. Do not assume the project has ADRs; if none exist or
+      none are relevant, record that explicitly.
+
+  - prompt: >-
+      If the reviewed work is tracked by a Holly tracker issue and its current status is
+      `in_progress`, move it to `in_review` before starting the actual review
+      pass:
+
+      `holly tracker update <issue-id> --status in_review`
+
+      Record the prior status. If the issue is already `in_review`, leave it
+      unchanged. If it is in another status, do not override it silently.
+
+steps:
+  - prompt: >-
+      REVIEW RISK TRIAGE - Decide whether this review needs the full forensic
+      path or a focused path before spending tokens on broad history and blast
+      radius analysis.
+
+      Use FULL FORENSIC REVIEW when any of these are true: shared public API or
+      schema changes, auth/security/data integrity changes, broad refactors,
+      deleted or recreated files, UI changes with significant interaction or
+      design-system risk, failing tests, unclear acceptance criteria, or a diff
+      that is large enough that targeted inspection would miss integration risk.
+
+      Use FOCUSED REVIEW for small, low-risk changes such as docs-only edits,
+      narrow config updates, isolated tests, or small implementation changes
+      with clear acceptance criteria and limited callers.
+
+      Record the chosen mode and the reason. In focused mode, skip Temporal
+      Analysis and Wide Scan unless a later step reveals risk that justifies
+      upgrading to full forensic review.
+    category: discovery
+
+  - prompt: >-
+      VISUAL VERIFICATION - If the changed files include UI/frontend code
+      (`<frontend>/src/`, CSS, or component/page files), use the
+      `ui-visual-capture` skill @file:ui-visual-capture to verify the changes.
+      Do not rely on snapshot-baseline comparison as proof. The agent must test
+      the changed feature with live Playwright interaction before capturing
+      evidence.
+
+      1. Determine if UI files were changed. If no UI files changed, skip this
+         step.
+      2. Load and follow the `ui-visual-capture` skill instructions. Start by
+         restating the target as: route + viewport rule + expected behaviour.
+      3. Run the reviewed app from a dedicated server instance on a unique port
+         and lock all evidence to that exact base URL.
+      4. Apply any relevant ADRs that govern UI testability, selectors,
+        visual proof, or interaction evidence. Use ADR-governed selector
+        manifests for Playwright actions, scroll anchors, and capture targets
+        when the project defines one.
+      5. Use live Playwright interaction to test the changed user flow before
+         capture. Leave the page in the reviewed state.
+      6. Capture visual evidence only after the page has settled. Review the
+         screenshots and video, when applicable, for rendering errors, visual
+         correctness, responsive behaviour, CSS regressions, console errors,
+         warnings, and interaction failures.
+      7. Classify visual issues as BLOCKING, WARNING, or ADVISORY.
+      8. Add all visual findings to the review report with severity,
+         description, the interaction step that exposed the issue, and the
+         viewport tier where observed.
+    category: quality
+    condition: The review targets changed files in <frontend>/ or includes UI/CSS changes.
+
+  - prompt: >-
+      DESIGN SYSTEM ALIGNMENT - If the review target includes UI/frontend code,
+      load the design-system skills that define how system rules should appear
+      in code before continuing the review. Look for and load:
+
+      1. The abstract design-system skill that defines the core patterns and
+         architecture, such as `design-system-patterns`.
+      2. The repo-specific design-system or component-registry skill, when one
+         exists.
+      3. The technical bridge skill that translates the design system into the
+         implementation stack used by the target repo, such as Tailwind,
+         DaisyUI, CSS-token utilities, or another framework-specific system
+         skill.
+
+      If a repo-specific or implementation-bridge skill does not exist, say so
+      explicitly and use the repo's documented component registry, design
+      tokens, style utilities, and UI primitives as the substitute source of
+      truth.
+
+      Then perform a design-system alignment analysis: existing primitives,
+      approved tokens, stack-specific implementation rules, justified new
+      patterns, and rendered alignment across required viewports and states.
+      Record misalignment findings with severity, violated rule, evidence, and
+      recommended fix.
+
+      Also verify any relevant ADRs that govern the reviewed UI surface,
+      including ADRs for testability, selector strategy, visual evidence, or
+      design-system governance. Treat missing or contradicted ADR requirements
+      as review findings.
+    category: quality
+    condition: The review targets changed files in <frontend>/ or includes UI/CSS changes.
+
+  - prompt: >-
+      TEMPORAL ANALYSIS - Go back in time. For each changed file, run
+      `holly task exec_in_current_task_worktree -- git log --oneline -20 -- <file>` to understand its evolution. Identify
+      the commits that touched it, read the commit messages, and check whether
+      prior functionality was removed or altered that should have been preserved.
+      Pay special attention to files that were deleted and recreated.
+
+      For Holly-tracked work, read the parent epic and sibling issues to
+      understand intended scope and whether preserved behaviour was expected.
+    category: discovery
+    condition: Full forensic review is required by risk triage, or later review evidence reveals higher risk.
+
+  - prompt: >-
+      WIDE SCAN - Map the blast radius. For each changed file, identify all
+      importers, callers, and consumers using grep, semantic search, and
+      reference lookups. Check import resolution, function signatures, removed
+      exports, config references, schemas, registries, documentation, and
+      package/tooling entries. Produce a list of integration gaps where the
+      change is incomplete or inconsistent with the rest of the codebase.
+    category: discovery
+    condition: Full forensic review is required by risk triage, or later review evidence reveals higher risk.
+
+  - prompt: >-
+      DEEP LOGIC REVIEW - Read every changed file line-by-line. Evaluate
+      correctness, security, robustness, conventions, and completeness. Produce
+      specific findings with file, line, severity (BLOCKING / WARNING /
+      ADVISORY), and a recommended fix for each.
+    category: discovery
+
+  - prompt: >-
+      TEST ADEQUACY - Review test coverage. Check whether tests exist for new
+      public functions and significant paths, whether existing tests pass,
+      whether tests are isolated, whether negative cases are covered, and
+      whether schema validation has been run for schema changes. Run relevant
+      tests when test files are identified.
+    category: quality
+
+  - prompt: >-
+      DOCUMENTATION SYNC - Verify that documentation is consistent with the
+      implementation. Check AGENTS.md subsystem docs, orchestrator/workflow
+      tables, nearby README files, schema registries, skill files, and prompt
+      files when relevant. If relevant ADRs were found, verify the
+      implementation and handoff cite or reflect them accurately. Flag stale,
+      missing, or inaccurate documentation.
+    category: quality
+
+  - prompt: >-
+      SPEC COMPLIANCE - Compare the implementation against its specification.
+      Read the Holly tracker issue description, design field, any referenced spec doc,
+      and any acceptance criteria. For each AC item, verify it is actually met
+      by behaviour, not merely by file presence. Flag unmet ACs and scope creep.
+    category: discovery
+
+  - prompt: >-
+      SYNTHESISE FINDINGS - Compile all findings into a structured review
+      report. Group by severity: BLOCKING, WARNING, and ADVISORY. For each
+      finding, include file path, line number if applicable, description,
+      evidence, and recommended action. Tally counts. If there are BLOCKING
+      findings, state clearly that the implementation needs rework. If there
+      are no BLOCKING findings, state that the implementation is approved with
+      any caveats.
+    category: delivery
+
+postflight:
+  - prompt: >-
+      If BLOCKING findings were identified, create follow-up Holly tracker
+      issues only for distinct blocking work that needs separate tracking. Use
+      `holly tracker create` with appropriate priority and link them to the
+      reviewed issue with a `discovered-from` dependency when the active adapter
+      supports dependency metadata.
+
+      If the reviewed issue was moved to `in_review` by this workflow, treat
+      BLOCKING findings as a rejection and move it back to `in_progress`:
+
+      `holly tracker update <issue-id> --status in_progress`
+      and add a review note with `holly tracker comment <issue-id> --message
+      "Review found blocking issues; returning to in_progress."`
+    condition: BLOCKING findings were identified in the review.
+
+  - prompt: >-
+      Post a summary of review findings to the relevant Holly chat channel using
+      `holly chat`. Include the severity tally and a one-line summary of each
+      BLOCKING finding. If there are no BLOCKING findings, leave the issue in
+      `in_review`.
+    condition: The reviewed work is tracked by a Holly tracker issue or epic.

@@ -1,0 +1,38 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { resolutionToCaptureOpts } from '../scripts/lib/resolution.mjs';
+
+test('low: scale 1, jpeg quality 60', () => {
+  const r = resolutionToCaptureOpts('low');
+  assert.equal(r.deviceScaleFactor, 1);
+  assert.equal(r.type, 'jpeg');
+  assert.equal(r.quality, 60);
+  assert.equal(r.ext, 'jpg');
+});
+
+test('medium: scale 1, jpeg quality 85', () => {
+  const r = resolutionToCaptureOpts('medium');
+  assert.equal(r.deviceScaleFactor, 1);
+  assert.equal(r.type, 'jpeg');
+  assert.equal(r.quality, 85);
+  assert.equal(r.ext, 'jpg');
+});
+
+test('high: scale 2, png, no quality', () => {
+  const r = resolutionToCaptureOpts('high');
+  assert.equal(r.deviceScaleFactor, 2);
+  assert.equal(r.type, 'png');
+  assert.equal(r.quality, undefined);
+  assert.equal(r.ext, 'png');
+});
+
+test('native: scale 2, png', () => {
+  const r = resolutionToCaptureOpts('native');
+  assert.equal(r.deviceScaleFactor, 2);
+  assert.equal(r.type, 'png');
+  assert.equal(r.ext, 'png');
+});
+
+test('unknown value throws', () => {
+  assert.throws(() => resolutionToCaptureOpts('ultra'), /resolution/i);
+});

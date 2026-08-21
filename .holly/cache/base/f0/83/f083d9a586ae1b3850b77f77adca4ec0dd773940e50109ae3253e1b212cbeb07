@@ -1,0 +1,428 @@
+import { test, beforeEach, afterEach } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import {
+  findProjectRoot,
+  findPlaywrightModule,
+  nextDailySuffix,
+  resolveOutputPaths,
+  toBase26Suffix,
+  detectIssueKey,
+} from '../scripts/lib/paths.mjs';
+
+let tmp;
+beforeEach(() => {
+  tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pws-test-'));
+});
+afterEach(() => {
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+// toBase26Suffix
+test('toBase26Suffix: 0 -> a, 25 -> z, 26 -> aa, 27 -> ab', () => {
+  assert.equal(toBase26Suffix(0), 'a');
+  assert.equal(toBase26Suffix(1), 'b');
+  assert.equal(toBase26Suffix(25), 'z');
+  assert.equal(toBase26Suffix(26), 'aa');
+  assert.equal(toBase26Suffix(27), 'ab');
+  assert.equal(toBase26Suffix(51), 'az');
+  assert.equal(toBase26Suffix(52), 'ba');
+  assert.equal(toBase26Suffix(701), 'zz');
+  assert.equal(toBase26Suffix(702), 'aaa');
+});
+
+// findProjectRoot
+test('findProjectRoot finds .git directory by walking up', () => {
+  const repo = path.join(tmp, 'repo');
+  const nested = path.join(repo, 'a', 'b', 'c');
+  fs.mkdirSync(nested, { recursive: true });
+  fs.mkdirSync(path.join(repo, '.git'));
+  assert.equal(findProjectRoot(nested), repo);
+});
+
+test('findProjectRoot also accepts .git as a file (worktree pointer)', () => {
+  const repo = path.join(tmp, 'wt');
+  fs.mkdirSync(repo, { recursive: true });
+  fs.writeFileSync(path.join(repo, '.git'), 'gitdir: /elsewhere/.git/worktrees/foo\n');
+  assert.equal(findProjectRoot(repo), repo);
+});
+
+test('findProjectRoot returns null when no .git ancestor exists', () => {
+  const isolated = path.join(tmp, 'isolated', 'deep');
+  fs.mkdirSync(isolated, { recursive: true });
+  // tmpdir is unlikely to have .git ancestors that resolve quickly, but to be safe
+  // we walk only the bounded subtree by giving an explicit ceiling.
+  assert.equal(findProjectRoot(isolated, { ceiling: tmp }), null);
+});
+
+// findPlaywrightModule
+test('findPlaywrightModule finds index.mjs by walking up', () => {
+  const project = path.join(tmp, 'proj');
+  const target = path.join(project, 'node_modules', 'playwright');
+  fs.mkdirSync(target, { recursive: true });
+  fs.writeFileSync(path.join(target, 'index.mjs'), '// stub\n');
+  const found = findPlaywrightModule(path.join(project, 'src', 'sub'));
+  assert.equal(found, path.join(target, 'index.mjs'));
+});
+
+test('findPlaywrightModule returns null when not found', () => {
+  const project = path.join(tmp, 'proj');
+  fs.mkdirSync(project, { recursive: true });
+  assert.equal(findPlaywrightModule(project, { ceiling: tmp }), null);
+});
+
+test('findPlaywrightModule probes first-level subdirs (monorepo root case)', () => {
+  // Project root has no playwright at its own node_modules but has it in frontend/
+  const root = path.join(tmp, 'mono');
+  const fe = path.join(root, 'frontend', 'node_modules', 'playwright');
+  fs.mkdirSync(fe, { recursive: true });
+  fs.writeFileSync(path.join(fe, 'index.mjs'), '// stub\n');
+  // Mark project root for ceiling-bounded walk semantics
+  fs.mkdirSync(path.join(root, '.git'));
+  // cwd is the project root
+  assert.equal(findPlaywrightModule(root, { ceiling: tmp }), path.join(fe, 'index.mjs'));
+});
+
+test('findPlaywrightModule probes does not pick up arbitrarily deep installs', () => {
+  // Two levels deep should NOT be matched — we only probe first-level subdirs
+  const root = path.join(tmp, 'deep');
+  const deep = path.join(root, 'a', 'b', 'node_modules', 'playwright');
+  fs.mkdirSync(deep, { recursive: true });
+  fs.writeFileSync(path.join(deep, 'index.mjs'), '// stub\n');
+  fs.mkdirSync(path.join(root, '.git'));
+  assert.equal(findPlaywrightModule(root, { ceiling: tmp }), null);
+});
+
+test('findPlaywrightModule resolves the pnpm virtual store (transitive playwright, no top-level symlink)', () => {
+  // pnpm leaves a *transitive* playwright only in the store, with NO
+  // node_modules/playwright symlink — the case the old resolver missed and
+  // callers patched with a hand-made symlink.
+  const project = path.join(tmp, 'proj');
+  const store = path.join(
+    project,
+    'node_modules',
+    '.pnpm',
+    'playwright@1.58.2',
+    'node_modules',
+    'playwright',
+  );
+  fs.mkdirSync(store, { recursive: true });
+  fs.writeFileSync(path.join(store, 'index.mjs'), '// real\n');
+  const found = findPlaywrightModule(path.join(project, 'src', 'sub'), { ceiling: tmp });
+  assert.equal(found, path.join(store, 'index.mjs'));
+});
+
+test('findPlaywrightModule ignores playwright-core@/@playwright+test@ siblings in the store', () => {
+  // The store also holds `playwright-core@…` (which even ships its own index.mjs)
+  // and `@playwright+test@…`. The exact `playwright@` prefix must skip both.
+  const project = path.join(tmp, 'proj');
+  const nm = path.join(project, 'node_modules', '.pnpm');
+  const decoyCore = path.join(nm, 'playwright-core@1.58.2', 'node_modules', 'playwright');
+  fs.mkdirSync(decoyCore, { recursive: true });
+  fs.writeFileSync(path.join(decoyCore, 'index.mjs'), '// decoy core\n');
+  fs.mkdirSync(path.join(nm, '@playwright+test@1.58.2', 'node_modules', '@playwright', 'test'), {
+    recursive: true,
+  });
+  // No real `playwright@…` entry, no flat install → nothing should match.
+  assert.equal(findPlaywrightModule(project, { ceiling: tmp }), null);
+
+  // Add the real one and it resolves past the decoys.
+  const real = path.join(nm, 'playwright@1.58.2', 'node_modules', 'playwright');
+  fs.mkdirSync(real, { recursive: true });
+  fs.writeFileSync(path.join(real, 'index.mjs'), '// real\n');
+  assert.equal(findPlaywrightModule(project, { ceiling: tmp }), path.join(real, 'index.mjs'));
+});
+
+test('findPlaywrightModule resolves the pnpm store inside a monorepo subdir', () => {
+  // The store layout must also resolve one level down (frontend/node_modules/.pnpm).
+  const root = path.join(tmp, 'mono');
+  const store = path.join(
+    root,
+    'frontend',
+    'node_modules',
+    '.pnpm',
+    'playwright@1.58.2',
+    'node_modules',
+    'playwright',
+  );
+  fs.mkdirSync(store, { recursive: true });
+  fs.writeFileSync(path.join(store, 'index.mjs'), '// real\n');
+  fs.mkdirSync(path.join(root, '.git'));
+  assert.equal(findPlaywrightModule(root, { ceiling: tmp }), path.join(store, 'index.mjs'));
+});
+
+test('findPlaywrightModule prefers a flat install over the store at the same level', () => {
+  // A top-level symlink/flat install (direct dep) wins over the store copy.
+  const project = path.join(tmp, 'proj');
+  const flat = path.join(project, 'node_modules', 'playwright');
+  fs.mkdirSync(flat, { recursive: true });
+  fs.writeFileSync(path.join(flat, 'index.mjs'), '// flat\n');
+  const store = path.join(
+    project,
+    'node_modules',
+    '.pnpm',
+    'playwright@1.58.2',
+    'node_modules',
+    'playwright',
+  );
+  fs.mkdirSync(store, { recursive: true });
+  fs.writeFileSync(path.join(store, 'index.mjs'), '// store\n');
+  assert.equal(findPlaywrightModule(project, { ceiling: tmp }), path.join(flat, 'index.mjs'));
+});
+
+// nextDailySuffix
+test('nextDailySuffix: empty parent -> a', () => {
+  fs.mkdirSync(tmp, { recursive: true });
+  assert.equal(nextDailySuffix(tmp, '2026-05-04'), 'a');
+});
+
+test('nextDailySuffix: parent missing -> a', () => {
+  assert.equal(nextDailySuffix(path.join(tmp, 'missing'), '2026-05-04'), 'a');
+});
+
+test('nextDailySuffix: with a -> b, with a+b -> c', () => {
+  fs.mkdirSync(path.join(tmp, '2026-05-04-a'));
+  assert.equal(nextDailySuffix(tmp, '2026-05-04'), 'b');
+  fs.mkdirSync(path.join(tmp, '2026-05-04-b'));
+  assert.equal(nextDailySuffix(tmp, '2026-05-04'), 'c');
+});
+
+test('nextDailySuffix: skips other dates', () => {
+  fs.mkdirSync(path.join(tmp, '2026-05-03-a'));
+  fs.mkdirSync(path.join(tmp, '2026-05-03-b'));
+  assert.equal(nextDailySuffix(tmp, '2026-05-04'), 'a');
+});
+
+test('nextDailySuffix: handles gaps (a, c -> b is reused)', () => {
+  fs.mkdirSync(path.join(tmp, '2026-05-04-a'));
+  fs.mkdirSync(path.join(tmp, '2026-05-04-c'));
+  assert.equal(nextDailySuffix(tmp, '2026-05-04'), 'b');
+});
+
+test('nextDailySuffix: rolls over to aa after z', () => {
+  for (let i = 0; i < 26; i++) {
+    fs.mkdirSync(path.join(tmp, `2026-05-04-${String.fromCharCode(97 + i)}`));
+  }
+  assert.equal(nextDailySuffix(tmp, '2026-05-04'), 'aa');
+});
+
+// detectIssueKey
+test('detectIssueKey: detects gro-829 from path segment', () => {
+  assert.equal(detectIssueKey('/Users/twhoffmann/Projects/groceries-system-worktrees/gro-829'), 'gro-829');
+});
+
+test('detectIssueKey: detects the issue key from a deeper cwd inside the worktree', () => {
+  // The key is the child of the `<project>-worktrees` dir, even when the cwd is
+  // several levels below it.
+  assert.equal(
+    detectIssueKey('/Users/twhoffmann/Projects/tizzi-app-worktrees/tiza-345/frontend/src'),
+    'tiza-345',
+  );
+});
+
+test('detectIssueKey: returns the deepest -worktrees child when nested', () => {
+  // Scanning deepest-first, the innermost `<x>-worktrees/<key>` match wins.
+  assert.equal(detectIssueKey('/a-worktrees/outer/b-worktrees/inner'), 'inner');
+});
+
+test('detectIssueKey: preserves uppercase and lowercase tracker keys', () => {
+  // Casing is preserved so the on-disk key matches the tracker's canonical form.
+  assert.equal(detectIssueKey('/Users/me/Projects/tizzi-app-worktrees/TIZA-345'), 'TIZA-345');
+  assert.equal(detectIssueKey('/Users/me/Projects/holly-worktrees/holly-2bxv'), 'holly-2bxv');
+});
+
+test('detectIssueKey: returns null for normal project paths', () => {
+  assert.equal(detectIssueKey('/Users/twhoffmann/Projects/groceries-system'), null);
+  assert.equal(detectIssueKey('/home/user/code/myapp'), null);
+});
+
+test('detectIssueKey: returns null for empty path', () => {
+  assert.equal(detectIssueKey('/'), null);
+});
+
+// resolveOutputPaths
+const VPS = [
+  { name: 'mobile', width: 390, height: 844 },
+  { name: 'desktop', width: 1280, height: 900 },
+];
+
+test('resolveOutputPaths: default with no issue key uses tmpBase/<date>-<suffix>/<name>.<ext>', () => {
+  const result = resolveOutputPaths({
+    arg: undefined,
+    projectRoot: tmp,
+    viewports: VPS,
+    ext: 'png',
+    today: '2026-05-04',
+    cwd: '/home/user/projects/myapp',
+    tmpBase: tmp,
+  });
+  const dir = path.join(tmp, '2026-05-04-a');
+  assert.equal(result.outputDir, dir);
+  assert.equal(result.paths.get('mobile'), path.join(dir, 'mobile.png'));
+  assert.equal(result.paths.get('desktop'), path.join(dir, 'desktop.png'));
+});
+
+test('resolveOutputPaths: default with issue key in cwd uses tmpBase/<issue-key>/<name>.<ext>', () => {
+  const result = resolveOutputPaths({
+    arg: undefined,
+    projectRoot: tmp,
+    viewports: VPS,
+    ext: 'png',
+    today: '2026-05-04',
+    cwd: '/Users/twhoffmann/Projects/groceries-system-worktrees/gro-829',
+    tmpBase: tmp,
+  });
+  const dir = path.join(tmp, 'gro-829');
+  assert.equal(result.outputDir, dir);
+  assert.equal(result.paths.get('mobile'), path.join(dir, 'mobile.png'));
+  assert.equal(result.paths.get('desktop'), path.join(dir, 'desktop.png'));
+});
+
+test('resolveOutputPaths: default without cwd uses date suffix (backward compat)', () => {
+  // When cwd is not provided, fall back to date-based suffix
+  const result = resolveOutputPaths({
+    arg: undefined,
+    projectRoot: tmp,
+    viewports: VPS,
+    ext: 'png',
+    today: '2026-05-04',
+    tmpBase: tmp,
+  });
+  assert.equal(path.basename(result.outputDir), '2026-05-04-a');
+});
+
+test('resolveOutputPaths: outputArg as existing directory uses it as parent', () => {
+  const dir = path.join(tmp, 'shots');
+  fs.mkdirSync(dir);
+  const result = resolveOutputPaths({
+    arg: dir,
+    projectRoot: tmp,
+    viewports: VPS,
+    ext: 'png',
+    today: '2026-05-04',
+  });
+  assert.equal(result.outputDir, dir);
+  assert.equal(result.paths.get('mobile'), path.join(dir, 'mobile.png'));
+});
+
+test('resolveOutputPaths: outputArg ending with / treated as directory', () => {
+  const result = resolveOutputPaths({
+    arg: path.join(tmp, 'newdir') + '/',
+    projectRoot: tmp,
+    viewports: VPS,
+    ext: 'jpg',
+    today: '2026-05-04',
+  });
+  assert.equal(result.outputDir, path.join(tmp, 'newdir'));
+  assert.equal(result.paths.get('desktop'), path.join(tmp, 'newdir', 'desktop.jpg'));
+});
+
+test('resolveOutputPaths: {viewport} placeholder substitutes per viewport', () => {
+  const result = resolveOutputPaths({
+    arg: path.join(tmp, 'run', '{viewport}.png'),
+    projectRoot: tmp,
+    viewports: VPS,
+    ext: 'png',
+    today: '2026-05-04',
+  });
+  assert.equal(result.paths.get('mobile'), path.join(tmp, 'run', 'mobile.png'));
+  assert.equal(result.paths.get('desktop'), path.join(tmp, 'run', 'desktop.png'));
+});
+
+test('resolveOutputPaths: {viewport} placeholder without extension appends ext', () => {
+  const result = resolveOutputPaths({
+    arg: path.join(tmp, 'run', '{viewport}'),
+    projectRoot: tmp,
+    viewports: VPS,
+    ext: 'jpg',
+    today: '2026-05-04',
+  });
+  assert.equal(result.paths.get('mobile'), path.join(tmp, 'run', 'mobile.jpg'));
+});
+
+test('resolveOutputPaths: file path with single viewport is allowed', () => {
+  const result = resolveOutputPaths({
+    arg: path.join(tmp, 'one.png'),
+    projectRoot: tmp,
+    viewports: [VPS[0]],
+    ext: 'png',
+    today: '2026-05-04',
+  });
+  assert.equal(result.paths.get('mobile'), path.join(tmp, 'one.png'));
+});
+
+test('resolveOutputPaths: file path with multiple viewports throws', () => {
+  assert.throws(
+    () =>
+      resolveOutputPaths({
+        arg: path.join(tmp, 'one.png'),
+        projectRoot: tmp,
+        viewports: VPS,
+        ext: 'png',
+        today: '2026-05-04',
+      }),
+    /must be a directory or contain \{viewport\}/i,
+  );
+});
+
+test('resolveOutputPaths: default suffix increments across same-day runs', () => {
+  // first call
+  const r1 = resolveOutputPaths({
+    arg: undefined,
+    projectRoot: tmp,
+    viewports: VPS,
+    ext: 'png',
+    today: '2026-05-04',
+    cwd: '/home/user/app',
+    tmpBase: tmp,
+  });
+  fs.mkdirSync(r1.outputDir, { recursive: true });
+  // second call should pick the next suffix
+  const r2 = resolveOutputPaths({
+    arg: undefined,
+    projectRoot: tmp,
+    viewports: VPS,
+    ext: 'png',
+    today: '2026-05-04',
+    cwd: '/home/user/app',
+    tmpBase: tmp,
+  });
+  assert.equal(path.basename(r1.outputDir), '2026-05-04-a');
+  assert.equal(path.basename(r2.outputDir), '2026-05-04-b');
+});
+
+test('resolveOutputPaths: issue-scoped agent-fs captures use session scratch', () => {
+  const fakeBin = path.join(tmp, 'agent-fs');
+  const logPath = path.join(tmp, 'agent-fs-args.json');
+  const scratchDir = path.join(tmp, 'agent-scratch', 'scratch', 'ui-visual-capture-gro-829-2026-05-04');
+  fs.writeFileSync(
+    fakeBin,
+    `#!/usr/bin/env node\nconst fs = require('node:fs');\nfs.writeFileSync(${JSON.stringify(logPath)}, JSON.stringify(process.argv.slice(2)));\nconsole.log(${JSON.stringify(scratchDir)});\n`,
+  );
+  fs.chmodSync(fakeBin, 0o755);
+
+  const previous = process.env.AGENT_FS_BIN;
+  process.env.AGENT_FS_BIN = fakeBin;
+  let result;
+  try {
+    result = resolveOutputPaths({
+      arg: undefined,
+      projectRoot: tmp,
+      viewports: VPS,
+      ext: 'png',
+      today: '2026-05-04',
+      cwd: '/Users/twhoffmann/Projects/groceries-system-worktrees/gro-829',
+    });
+  } finally {
+    if (previous === undefined) delete process.env.AGENT_FS_BIN;
+    else process.env.AGENT_FS_BIN = previous;
+  }
+
+  assert.equal(result.outputDir, scratchDir);
+  assert.deepEqual(JSON.parse(fs.readFileSync(logPath, 'utf8')), [
+    'scratch',
+    'ui-visual-capture-gro-829-2026-05-04',
+  ]);
+});

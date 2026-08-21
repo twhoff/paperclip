@@ -1,0 +1,122 @@
+// Append-only event log. One ndjson file per session.
+// Each line is a single event JSON object. Trivially auditable; replayable.
+
+import fs from 'node:fs';
+import path from 'node:path';
+import readline from 'node:readline';
+
+export const VERBS = Object.freeze({
+  SCRATCH: 'scratch',
+  EVIDENCE: 'evidence',
+  SESSION: 'session',
+  PATH: 'path',
+  BLESS: 'bless',
+  MANIFEST: 'manifest',
+  UPLOAD: 'upload',
+  PIN: 'pin',
+  UNPIN: 'unpin',
+  CLEAN: 'clean',
+  ADOPT: 'adopt',
+});
+
+export class Registry {
+  /** @param {string} sessionDir */
+  constructor(sessionDir) {
+    this.dir = sessionDir;
+    this.file = path.join(sessionDir, 'registry.ndjson');
+  }
+
+  /**
+   * Append a single event. POSIX append-write is atomic up to PIPE_BUF (4096 bytes).
+   * Events are small JSON objects, well under that limit.
+   *
+   * @param {{
+   *   verb: string,
+   *   path?: string|null,
+   *   issue?: string|null,
+   *   agent?: string|null,
+   *   runtime?: string|null,
+   *   meta?: object,
+   * }} event
+   */
+  append(event) {
+    fs.mkdirSync(this.dir, { recursive: true });
+    const record = {
+      ts: Date.now(),
+      verb: event.verb,
+      path: event.path ?? null,
+      issue: event.issue ?? null,
+      agent: event.agent ?? null,
+      runtime: event.runtime ?? null,
+      meta: event.meta ?? {},
+    };
+    fs.appendFileSync(this.file, JSON.stringify(record) + '\n');
+    return record;
+  }
+
+  /** Read all events. Synchronous; fine for per-session log sizes. */
+  readAll() {
+    if (!fs.existsSync(this.file)) return [];
+    const raw = fs.readFileSync(this.file, 'utf8');
+    const events = [];
+    for (const line of raw.split('\n')) {
+      if (!line.trim()) continue;
+      try {
+        events.push(JSON.parse(line));
+      } catch (err) {
+        process.stderr.write(`warning: corrupt event line in ${this.file}: ${err.message}\n`);
+      }
+    }
+    return events;
+  }
+
+  /** Async streaming read for large logs (audit verb in week 3). */
+  async *streamEvents() {
+    if (!fs.existsSync(this.file)) return;
+    const rl = readline.createInterface({
+      input: fs.createReadStream(this.file, { encoding: 'utf8' }),
+      crlfDelay: Infinity,
+    });
+    for await (const line of rl) {
+      if (!line.trim()) continue;
+      try {
+        yield JSON.parse(line);
+      } catch {
+        // skip corrupt lines silently in streaming mode
+      }
+    }
+  }
+
+  /** Set of paths ever referenced by a tracked verb. */
+  trackedPaths() {
+    const events = this.readAll();
+    const paths = new Set();
+    for (const e of events) {
+      if (e.path && [VERBS.SCRATCH, VERBS.EVIDENCE, VERBS.SESSION, VERBS.PATH, VERBS.BLESS, VERBS.ADOPT].includes(e.verb)) {
+        paths.add(e.path);
+      }
+    }
+    return paths;
+  }
+}
+
+/**
+ * Aggregate events across every session under the root. Used by orphans/status when
+ * a path predates the current session.
+ */
+export function aggregateTrackedPaths(rootDir) {
+  const tracked = new Set();
+  if (!fs.existsSync(rootDir)) return tracked;
+  let entries;
+  try {
+    entries = fs.readdirSync(rootDir, { withFileTypes: true });
+  } catch {
+    return tracked;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !entry.name.startsWith('sess-')) continue;
+    const r = new Registry(path.join(rootDir, entry.name));
+    for (const p of r.trackedPaths()) tracked.add(p);
+  }
+  return tracked;
+}

@@ -1,0 +1,92 @@
+// Allowlist for /tmp survivors (system paths, MCP state, Claude Code session state, etc.)
+// Loaded from <root>/_meta/allowlist.json; falls back to defaults if missing.
+
+import fs from 'node:fs';
+import path from 'node:path';
+
+const DEFAULT_ALLOWLIST = {
+  exact: [
+    '/tmp/claude-mcp-browser-bridge-twhoffmann',
+  ],
+  prefix: [
+    '/tmp/claude-502/',
+    '/tmp/com.adobe.',
+    '/tmp/com.apple.',
+    '/tmp/context-mode-mcp-ready-',
+    '/tmp/context-mode-hook-',
+    '/tmp/beads-circuit/',
+    '/private/tmp/com.apple.',
+    '/var/folders/',
+  ],
+  glob: [
+    '*.sock',
+    '/tmp/*.sock',
+  ],
+  regex: [
+    // macOS launchd uppercase-UUID directories
+    '^/(?:private/)?tmp/[A-F0-9]{8}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{12}(?:/.*)?$',
+  ],
+};
+
+function globToRegex(g) {
+  // Minimal glob: * → [^/]*, ? → [^/], everything else literal.
+  let re = '';
+  for (const ch of g) {
+    if (ch === '*') re += '[^/]*';
+    else if (ch === '?') re += '[^/]';
+    else if ('.+^$()|[]{}\\'.includes(ch)) re += '\\' + ch;
+    else re += ch;
+  }
+  return new RegExp('^' + re + '$');
+}
+
+export function loadAllowlist(metaDir) {
+  const filePath = path.join(metaDir, 'allowlist.json');
+  try {
+    const raw = fs.readFileSync(filePath, 'utf8');
+    const user = JSON.parse(raw);
+    return {
+      exact: user.exact ?? DEFAULT_ALLOWLIST.exact,
+      prefix: user.prefix ?? DEFAULT_ALLOWLIST.prefix,
+      glob: user.glob ?? DEFAULT_ALLOWLIST.glob,
+      regex: user.regex ?? DEFAULT_ALLOWLIST.regex,
+    };
+  } catch (err) {
+    if (err.code !== 'ENOENT') {
+      process.stderr.write(`warning: allowlist read failed at ${filePath}: ${err.message}\n`);
+    }
+    return DEFAULT_ALLOWLIST;
+  }
+}
+
+export function writeDefaultAllowlistIfMissing(metaDir) {
+  const filePath = path.join(metaDir, 'allowlist.json');
+  if (fs.existsSync(filePath)) return false;
+  fs.mkdirSync(metaDir, { recursive: true });
+  fs.writeFileSync(filePath, JSON.stringify(DEFAULT_ALLOWLIST, null, 2) + '\n');
+  return true;
+}
+
+export function buildMatcher(allowlist) {
+  const exact = new Set(allowlist.exact);
+  const prefixes = allowlist.prefix.slice();
+  const globRes = allowlist.glob.map(globToRegex);
+  const regexRes = allowlist.regex.map((r) => new RegExp(r));
+
+  return function isAllowed(p) {
+    if (exact.has(p)) return true;
+    for (const pre of prefixes) {
+      if (p === pre || p.startsWith(pre)) return true;
+    }
+    const base = path.basename(p);
+    for (const re of globRes) {
+      if (re.test(p) || re.test(base)) return true;
+    }
+    for (const re of regexRes) {
+      if (re.test(p)) return true;
+    }
+    return false;
+  };
+}
+
+export { DEFAULT_ALLOWLIST };

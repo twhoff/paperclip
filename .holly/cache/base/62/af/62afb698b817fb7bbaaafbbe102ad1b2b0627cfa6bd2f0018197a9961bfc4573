@@ -1,0 +1,99 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { DEFAULT_VIEWPORTS, applyViewportsOverride } from '../scripts/lib/viewports.mjs';
+
+test('DEFAULT_VIEWPORTS is the five canonical device classes in order', () => {
+  assert.deepEqual(
+    DEFAULT_VIEWPORTS.map((v) => v.name),
+    ['mobile', 'mobile_safari', 'tablet_p', 'tablet_l', 'desktop'],
+  );
+});
+
+test('DEFAULT_VIEWPORTS uses the locked widths', () => {
+  const widths = Object.fromEntries(DEFAULT_VIEWPORTS.map((v) => [v.name, v.width]));
+  assert.equal(widths.mobile, 390);
+  assert.equal(widths.mobile_safari, 390);
+  assert.equal(widths.tablet_p, 768);
+  assert.equal(widths.tablet_l, 1024);
+  assert.equal(widths.desktop, 1280);
+});
+
+test('DEFAULT_VIEWPORTS uses the locked heights', () => {
+  const heights = Object.fromEntries(DEFAULT_VIEWPORTS.map((v) => [v.name, v.height]));
+  assert.equal(heights.mobile, 844);
+  assert.equal(heights.mobile_safari, 664);
+  assert.equal(heights.tablet_p, 1024);
+  assert.equal(heights.tablet_l, 768);
+  assert.equal(heights.desktop, 900);
+});
+
+test('mobile_safari shares mobile width but uses Safari-constrained height', () => {
+  const mobile = DEFAULT_VIEWPORTS.find((v) => v.name === 'mobile');
+  const safari = DEFAULT_VIEWPORTS.find((v) => v.name === 'mobile_safari');
+  assert.equal(safari.width, mobile.width, 'widths match — same iPhone 14 logical width');
+  assert.ok(safari.height < mobile.height, 'safari height is constrained vs mobile');
+  assert.equal(safari.height, 664, 'locked at 664 (subtracts top + bottom Safari chrome)');
+});
+
+test('applyViewportsOverride(undefined) returns the full default set', () => {
+  const result = applyViewportsOverride(undefined);
+  assert.deepEqual(result, DEFAULT_VIEWPORTS);
+});
+
+test('applyViewportsOverride filters to a subset by name', () => {
+  const result = applyViewportsOverride('mobile,desktop');
+  assert.deepEqual(
+    result.map((v) => v.name),
+    ['mobile', 'desktop'],
+  );
+  assert.equal(result.find((v) => v.name === 'mobile').width, 390);
+  assert.equal(result.find((v) => v.name === 'desktop').width, 1280);
+});
+
+test('applyViewportsOverride preserves order from the spec, not from defaults', () => {
+  const result = applyViewportsOverride('desktop,mobile');
+  assert.deepEqual(
+    result.map((v) => v.name),
+    ['desktop', 'mobile'],
+  );
+});
+
+test('applyViewportsOverride supports per-name width overrides', () => {
+  const result = applyViewportsOverride('mobile=375,desktop=1440');
+  assert.equal(result.find((v) => v.name === 'mobile').width, 375);
+  assert.equal(result.find((v) => v.name === 'mobile').height, 844, 'height kept from default');
+  assert.equal(result.find((v) => v.name === 'desktop').width, 1440);
+});
+
+test('applyViewportsOverride supports per-name width and height overrides', () => {
+  const result = applyViewportsOverride('mobile=96x48');
+  const mobile = result.find((v) => v.name === 'mobile');
+  assert.equal(mobile.width, 96);
+  assert.equal(mobile.height, 48);
+});
+
+test('applyViewportsOverride throws on unknown viewport names', () => {
+  assert.throws(
+    () => applyViewportsOverride('phablet'),
+    /unknown viewport.*phablet/i,
+  );
+});
+
+test('applyViewportsOverride throws on non-integer widths', () => {
+  assert.throws(
+    () => applyViewportsOverride('mobile=abc'),
+    /invalid size/i,
+  );
+});
+
+test('applyViewportsOverride trims whitespace in list', () => {
+  const result = applyViewportsOverride(' mobile , desktop ');
+  assert.deepEqual(
+    result.map((v) => v.name),
+    ['mobile', 'desktop'],
+  );
+});
+
+test('applyViewportsOverride throws on empty string', () => {
+  assert.throws(() => applyViewportsOverride(''), /empty/i);
+});

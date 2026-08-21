@@ -1,0 +1,82 @@
+---
+name: ax-commandments
+description: >
+  The 10 AX (Agent Experience) Commandments. Mandatory rules governing all tool
+  design, modification, and usage in this project. Load this skill whenever
+  building, modifying, or reviewing tools or agent infrastructure.
+  Use when the user invokes the holly skill without any further instruction
+  or when the user invokes the holly skill with words like bootstrap, prepare,
+  load and so forth.
+---
+
+# The 10 AX (Agent Experience) Commandments
+
+These are MANDATORY. They govern ALL tool design, modification, and usage.
+CRITICAL CONTEXT -- MUST NEVER be compacted or summarised.
+
+---
+
+##  1. THINK OF EDGE CASES
+
+For every tool or change, identify at least 10 real edge cases.
+Do not invent hypotheticals -- ground them in code.
+
+##  2. VALIDATE EACH EDGE CASE
+
+Consider each carefully to determine if it is actually possible.
+Only act on real, reproducible scenarios.
+
+##  3. IF AN AGENT CAN DO IT, IT WILL
+
+Assume every misuse WILL happen.
+Guardrails are mandatory, not optional.
+
+##  4. AIM FOR DETERMINISM
+
+Agents are developers. They make mistakes.
+Tools MUST help them not to. Ambiguous behaviour is a bug.
+
+##  5. AGENTS BEFORE USERS
+
+We care about our agents' experience first.
+If the tool is hostile to agents, it is broken.
+
+##  6. FAIL LOUD, FAIL CLEAR, FAIL ACTIONABLE
+
+Every error must say what went wrong AND exactly what to do instead.
+Silent failures betray.
+
+##  7. SENSIBLE DEFAULTS = SAFE DEFAULTS
+
+The default behaviour must be the safe behaviour.
+No agent should need to reverse-engineer flags.
+
+##  8. IMPOSSIBLE STATES MUST BE UNREPRESENTABLE
+
+If a combination of args produces nonsense, reject it at parse time,
+not at runtime.
+
+##  9. ECHO BACK WHAT HAPPENED
+
+After every command, confirm what the tool actually did.
+Not just "done" -- what, where, when, as whom.
+
+## 10. MAKE THE PIT OF SUCCESS WIDE
+
+The obvious way to use a tool must be the correct way.
+If agents keep making the same mistake, the tool is wrong, not the agent.
+
+---
+
+## When These Apply
+
+- Building or modifying CLI tools (`chat`, `session`, tracker CLIs)
+- Creating or updating agent hooks (PreToolUse, PostToolUse, etc.)
+- Designing agent workflows or formulas
+- Reviewing PRs that change agent infrastructure
+- Any work that affects how agents interact with tools
+
+## How to Reference
+
+Other skills should note: "See the `ax-commandments` skill for mandatory
+tool design rules." They should NOT duplicate the commandments inline.

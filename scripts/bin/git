@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Holly defense-in-depth git wrapper — installed by `holly init`.
+# Enforces worktree isolation at the shell level so direct `git` usage
+# (outside the agent harness) cannot bypass PreToolUse hook checks.
+#
+# Blocks:
+#   git worktree  -- ALWAYS (use the adapter's worktree tool)
+#   git add       -- on main checkout only (not in worktrees)
+#   git commit    -- on main checkout only (not in worktrees)
+#
+# Requires <project>/scripts/bin on PATH (set via .vscode/settings.json
+# or .envrc). The block messages are sourced from
+# `holly _worktree-instructions` so they reflect the configured adapter
+# and worktree base directory.
+
+# -- Locate the real git binary (skip this wrapper) --
+SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
+REAL_GIT=""
+IFS=: read -ra DIRS <<< "$PATH"
+for dir in "${DIRS[@]}"; do
+    [ "$dir" = "$SELF_DIR" ] && continue
+    [ -x "$dir/git" ] && { REAL_GIT="$dir/git"; break; }
+done
+[ -z "$REAL_GIT" ] && REAL_GIT=/usr/bin/git
+
+_holly_worktree_msg() {
+    if command -v holly >/dev/null 2>&1; then
+        holly _worktree-instructions 2>/dev/null
+    fi
+}
+
+# -- Rule 1: git worktree is always banned --
+if [ "$1" = "worktree" ]; then
+    echo "BLOCKED: \`git worktree\` is banned. Use \`holly worktree\` for all worktree operations." >&2
+    msg="$(_holly_worktree_msg)"
+    [ -n "$msg" ] && echo "$msg" >&2
+    exit 1
+fi
+
+# -- Rule 2: git add / git commit blocked on main checkout --
+if [ "$1" = "add" ] || [ "$1" = "commit" ]; then
+    REPO_ROOT="$("$REAL_GIT" rev-parse --show-toplevel 2>/dev/null)"
+    if [ -n "$REPO_ROOT" ] && [ -d "$REPO_ROOT/.git" ]; then
+        echo "BLOCKED: \`git $1\` is not allowed on the main checkout." >&2
+        msg="$(_holly_worktree_msg)"
+        [ -n "$msg" ] && echo "$msg" >&2
+        exit 1
+    fi
+fi
+
+# -- Pass through to real git --
+exec "$REAL_GIT" "$@"

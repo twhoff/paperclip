@@ -1,0 +1,64 @@
+// agent-fs check-path <path> — return 0 if the path is sanctioned, 69 otherwise.
+// Sanctioned means: outside /tmp; OR under AGENT_FS_ROOT; OR matches allowlist;
+// OR explicitly tracked by the registry (any session under the root).
+
+import path from 'node:path';
+import { loadAllowlist, buildMatcher } from '../allowlist.mjs';
+import { aggregateTrackedPaths } from '../registry.mjs';
+
+function isUnderRoot(p, root) {
+  const rel = path.relative(root, p);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+function targetsTmp(p) {
+  // /tmp and /private/tmp are both macOS realpaths for /tmp; treat them the same.
+  return p.startsWith('/tmp/') || p === '/tmp' || p.startsWith('/private/tmp/') || p === '/private/tmp';
+}
+
+export function checkPathVerb(args, ctx) {
+  const raw = args._[0];
+  if (!raw) {
+    process.stderr.write('error: check-path requires a path argument\n');
+    process.exit(65);
+  }
+  const target = path.resolve(raw);
+
+  let blessed = false;
+  let reason = '';
+
+  if (!targetsTmp(target)) {
+    blessed = true;
+    reason = 'not under /tmp; outside agent-fs scope';
+  } else if (isUnderRoot(target, ctx.config.root)) {
+    blessed = true;
+    reason = 'under AGENT_FS_ROOT';
+  } else {
+    const allowlist = loadAllowlist(ctx.layout.meta);
+    const isAllowed = buildMatcher(allowlist);
+    if (isAllowed(target)) {
+      blessed = true;
+      reason = 'matches allowlist';
+    } else {
+      const tracked = aggregateTrackedPaths(ctx.config.root);
+      // A tracked path AND any descendant of one is considered blessed.
+      for (const t of tracked) {
+        if (target === t || target.startsWith(t + path.sep)) {
+          blessed = true;
+          reason = `descendant of tracked path ${t}`;
+          break;
+        }
+      }
+    }
+  }
+
+  if (args.json) {
+    process.stdout.write(JSON.stringify({ path: target, blessed, reason }) + '\n');
+  } else if (blessed) {
+    if (!args.quiet) process.stdout.write(`ok: ${target} (${reason})\n`);
+  } else {
+    process.stderr.write(`not sanctioned: ${target}\n`);
+  }
+
+  process.exit(blessed ? 0 : 69);
+}

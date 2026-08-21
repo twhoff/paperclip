@@ -1,0 +1,92 @@
+---
+name: beads-holly
+description: >
+  Holly-managed Beads issue tracker reference. Use when Holly reports the
+  Beads adapter and the task needs issue tracking, dependency recovery, or
+  multi-task state memory.
+---
+
+# Beads Through Holly
+
+Beads is the tracker backend. Holly is the agent-facing surface.
+
+Agents in Holly-managed projects do not call backend tracker commands directly.
+Use `holly tracker ...` for issue operations and `holly task ...` for lifecycle
+operations.
+
+## Agent Commands
+
+Find work:
+
+```bash
+holly tracker ready --limit 10
+holly tracker show <issue-id>
+```
+
+Create or update work:
+
+```bash
+holly tracker create "<title>" --type task --priority 2 --description "<context>"
+holly tracker update <issue-id> --status in_progress
+holly tracker comment <issue-id> --message "<note>"
+```
+
+Start a task:
+
+```bash
+eval "$(holly task start --id <issue-id> --intent '<agent-intent>')"
+# read-only/non-implementation:
+eval "$(holly task start --intent '<agent-intent>')"
+```
+
+That command uses the inherited Holly session context, records the issue ID or
+intent, and posts/verifies intent. With `--id`, it claims the issue, creates or
+reuses the adapter worktree, and `cd`s there when eval'd. Without `--id`, it
+records read-only intent and stays on the project root. `HOLLY_SESSION_ID` is
+shell/runtime-owned and read-only; do not export, generate, or overwrite it.
+
+Finish a task:
+
+```bash
+eval "$(holly task finish)"
+```
+
+That command lands the committed work on the integration branch, pushes it,
+closes the issue through the adapter, syncs tracker state, removes the worktree,
+and clears task state.
+
+## Compaction Recovery
+
+Use Holly surfaces only:
+
+```bash
+holly task status
+holly task resume
+holly worktree list
+holly tracker show <issue-id>
+```
+
+Add durable discoveries with:
+
+```bash
+holly tracker comment <issue-id> --message "<important context>"
+holly tracker create "<found bug>" --type bug --priority 1 --description "<details>"
+```
+
+## Human / Adapter Notes
+
+The Beads CLI and Dolt store remain implementation details that the adapter
+uses internally. Humans maintaining the adapter can inspect those tools when
+debugging backend behavior, but agent workflows stay on the Holly CLI.
+
+## Validation
+
+Run:
+
+```bash
+holly status
+holly validate
+```
+
+If Holly reports the Beads adapter is missing or unhealthy, fix the adapter
+installation before assigning agent work.

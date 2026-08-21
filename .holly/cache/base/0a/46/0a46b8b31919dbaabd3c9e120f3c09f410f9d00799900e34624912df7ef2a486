@@ -1,0 +1,33 @@
+// agent-fs scratch <name> — return a sanctioned scratch dir.
+
+import fs from 'node:fs';
+import path from 'node:path';
+import { isSafeName, normalizeIssueId } from '../paths.mjs';
+import { VERBS } from '../registry.mjs';
+
+export function scratchVerb(args, ctx) {
+  const name = args._[0];
+  if (!name) {
+    process.stderr.write('error: scratch requires a name (usage: agent-fs scratch <name>)\n');
+    process.exit(65);
+  }
+  if (!isSafeName(name)) {
+    process.stderr.write(`error: name "${name}" is not safe (alphanumeric, ._- only, max 128 chars)\n`);
+    process.exit(65);
+  }
+  const issue = args.issue ? normalizeIssueId(args.issue) : null;
+  const dir = path.join(ctx.layout.scratch, name);
+  fs.mkdirSync(dir, { recursive: true });
+  ctx.registry.append({
+    verb: VERBS.SCRATCH,
+    path: dir,
+    issue,
+    agent: ctx.agent,
+    runtime: ctx.runtime,
+  });
+  if (args.json) {
+    process.stdout.write(JSON.stringify({ path: dir, verb: 'scratch', issue }) + '\n');
+  } else {
+    process.stdout.write(dir + '\n');
+  }
+}

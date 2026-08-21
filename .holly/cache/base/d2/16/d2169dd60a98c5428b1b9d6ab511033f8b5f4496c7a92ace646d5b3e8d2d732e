@@ -1,0 +1,62 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const CLI = path.join(__dirname, '..', 'scripts', 'playwright-screenshot.mjs');
+
+function run(args, opts = {}) {
+  return spawnSync('node', [CLI, ...args], {
+    encoding: 'utf8',
+    timeout: 10_000,
+    ...opts,
+  });
+}
+
+test('--help prints help and exits 0', () => {
+  const r = run(['--help']);
+  assert.equal(r.status, 0);
+  assert.match(r.stdout, /USAGE/);
+  assert.match(r.stdout, /OPTIONS/);
+});
+
+test('-h is alias for --help', () => {
+  const r = run(['-h']);
+  assert.equal(r.status, 0);
+  assert.match(r.stdout, /USAGE/);
+});
+
+test('no args -> exit 2 with usage error on stderr', () => {
+  const r = run([]);
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /url is required/i);
+});
+
+test('unknown flag -> exit 2 with helpful stderr', () => {
+  const r = run(['http://x', '--frobnicate']);
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /unknown.*frobnicate/i);
+});
+
+test('invalid theme -> exit 2', () => {
+  const r = run(['http://x', '--theme=fancy']);
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /theme/i);
+});
+
+test('mutually exclusive scroll flags -> exit 2', () => {
+  const r = run(['http://x', '--scroll-y=10', '--scroll-to=.x']);
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /mutually exclusive/i);
+});
+
+test('exit 3 when no playwright found in any ancestor', () => {
+  // Run from a directory with no playwright in any ancestor — temp dir under /tmp.
+  // Spawn from /tmp so the walk-up doesn't reach groceries-system frontend's node_modules.
+  // Use --skip-pw-resolution-test-cwd to set a clean cwd via spawn option `cwd`.
+  const r = run(['http://example.invalid'], { cwd: '/' });
+  assert.equal(r.status, 3, `expected exit 3, got ${r.status}; stderr: ${r.stderr}`);
+  assert.match(r.stderr, /playwright/i);
+});

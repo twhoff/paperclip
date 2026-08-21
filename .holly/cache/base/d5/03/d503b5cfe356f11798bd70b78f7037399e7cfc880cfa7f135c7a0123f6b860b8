@@ -1,0 +1,391 @@
+---
+name: glprojectkeywords-maintainer
+description: >-
+  Maintain Git review helper tooling for visually scanning Git history with low
+  cognitive load. Owns .glprojectkeywords (project-local keyword file) and the
+  glreview, gltickets, and glticket scripts in ~/.shell_common. Use when the
+  user asks to improve, tune, debug, initialise, or maintain any of: glreview,
+  gltickets, glticket, .glprojectkeywords, Git log colouring, Git log
+  readability, Git history scanning, Git review helpers, or project visual
+  vocabulary.
+---
+
+# glprojectkeywords and Git Review Helper Maintainer Skill
+
+## Purpose
+
+Maintain the user's Git review tooling for visually scanning Git history with low cognitive load.
+
+This skill owns two things:
+
+- `.glprojectkeywords` — a project-local keyword file at the Git repository root.
+- The Git review helper scripts in `~/.shell_common`, especially `glreview`, `gltickets`, and `glticket`.
+
+The purpose of this tooling is not to make Git output decorative. The purpose is to turn hostile raw Git history into a stable, readable, colour-coded project timeline for an AuDHD user who benefits from clear columns, semantic colour, and low-noise visual grouping.
+
+The core intent is:
+
+- Columns must stay stable.
+- Colour must carry meaning.
+- Red must not lie.
+- Project-specific vocabulary belongs in `.glprojectkeywords`.
+- Generic, high-confidence behaviour belongs in `~/.shell_common`.
+
+The output should help the user quickly understand what changed, what area it belongs to, and whether the commit appears to be an improvement, unresolved risk, project concept, verification surface, or formal reference.
+
+## When to use this skill
+
+Use this skill when the user asks to improve, tune, debug, initialise, or maintain any of these:
+
+- `glreview`
+- `gltickets`
+- `glticket`
+- `.glprojectkeywords`
+- Git log colouring
+- Git log readability
+- Git history scanning
+- Git review helpers in `~/.shell_common`
+
+The skill also applies when the user asks an agent to maintain project visual vocabulary, review recent commit patterns, or improve how Git history is presented for cognitive accessibility.
+
+## Design principles
+
+- The tool exists to reduce cognitive battery drain.
+- Do not optimise for cleverness. Optimise for quick comprehension.
+- Do not turn the log into a rainbow. Colour should make categories easier to see, not harder.
+- Keep one commit per row in `glreview`. Do not switch to multi-line block output unless the user explicitly asks for it. The user has said that losing columns makes the output harder to read.
+
+The preferred layout is:
+
+```
+date | hash | type | ticket | title
+```
+
+- The date and hash should be visually quiet.
+- The ticket should be a strong category anchor.
+- The commit type should be useful but not visually dominant, especially for `merge`.
+- The title should mostly remain the terminal's normal text colour, with meaningful phrases highlighted.
+- Project-specific phrases should be highlighted as whole concepts where possible. For example, prefer highlighting `profile-facet source-of-truth mapping spec` as one concept rather than separately highlighting `profile-facet`, `source-of-truth`, `mapping`, and `spec`.
+
+## Colour meanings
+
+- Use `yellow` for formal references and strong category anchors, such as issue keys and ADR references.
+- Use `red` only for unresolved risk, introduced risk, failures, broken states, deferred debt, or phrases that still represent a problem.
+- Use `green` for improvements, resolved problems, completed restoration, product areas, domain concepts, and stable user-facing capabilities.
+- Use `cyan` for architecture, contracts, boundaries, schemas, invariants, adapters, source-of-truth concepts, resolvers, and named specs.
+- Use `magenta` for UI surfaces, tests, workflow controls, roles, permissions, toggles, rollout states, and delivery process phrases.
+- Use `blue` for tooling, platforms, infrastructure systems, libraries, and external integrations.
+- When unsure, use no colour rather than the wrong colour.
+
+## Red must be intent-aware
+
+Do not highlight a word red just because it looks risky.
+
+Words like `debt`, `bug`, `typecheck`, `lint`, `crash`, and `failure` can appear in positive commit titles.
+
+For example, these should NOT be treated as unresolved danger — they are improvement or closeout signals:
+
+```
+clear strict-tsconfig debt
+fix shared-task un-complete status bug
+typecheck restoration epic complete
+```
+
+By contrast, these SHOULD be treated as unresolved or introduced risk:
+
+```
+lint-debt files deferred to TIZA-865
+introduce typecheck debt
+known flaky test remains
+```
+
+The `glreview` script should use intent-aware heuristics before applying project phrase highlighting.
+
+The safe rule is:
+
+- If a risk word appears near an improvement verb, colour the risk word or phrase **green**.
+- If a risk word appears near a flag verb, colour the risk word or phrase **red**.
+- If intent is unclear, leave it alone.
+
+Good **improvement verbs** include:
+`clear`, `fix`, `resolve`, `remove`, `reduce`, `restore`, `dedupe`, `stabilise`, `stabilize`, `green`, `complete`, `closeout`
+
+Good **flag verbs** include:
+`introduce`, `regress`, `break`, `defer`, `remain`, `unresolved`, `known`, `still`, `failing`, `blocked`
+
+## First-use project dive
+
+When this skill is used for the first time in a project, do not only scan for repeated words.
+
+Do a broader project-understanding pass so the keyword file reflects the intent of changes over time.
+
+Treat **first use** as any of these situations:
+
+- `.glprojectkeywords` does not exist.
+- `~/.shell_common` does not contain the Git Review Helpers section.
+- The user asks to initialise the tool.
+- The user asks for a fresh setup or first pass.
+
+The first-use process should inspect the Git history as a narrative.
+
+Start with the current review range if relevant:
+
+```bash
+git --no-pager log --first-parent --reverse --date=short --pretty=format:'%ad %h %s' origin/main..main
+```
+
+Then inspect a broader recent history so the agent understands recurring project language beyond the current branch:
+
+```bash
+git --no-pager log --first-parent --reverse --date=short --pretty=format:'%ad %h %s' --max-count=300
+```
+
+If branches may have diverged, inspect both sides:
+
+```bash
+git --no-pager log --oneline --left-right origin/main...main
+```
+
+The agent should look for recurring concepts, not just repeated tokens.
+
+It should identify:
+
+- Which phrases name product areas.
+- Which phrases name architecture or contract concepts.
+- Which phrases name UI, test, permission, workflow, or rollout surfaces.
+- Which phrases describe risk being introduced or deferred.
+- Which phrases describe risk being cleared, restored, or completed.
+- Which words are generic noise and should not be highlighted.
+
+The agent should also inspect stable naming sources where useful:
+
+- `docs/specs`
+- `docs/adr`
+- `docs/agent-stories`
+- `docs/wireframes`
+- `README.md`
+- `AGENTS.md`
+- schemas
+- Project skills or internal docs if they clearly define project vocabulary.
+
+Prefer names that appear in both Git history and stable project documentation.
+
+Do not blindly import every filename. The first-use pass should understand which phrases are likely to help the user visually scan Git history.
+
+The output of the first-use dive should be a small proposed visual vocabulary, usually around 20 to 80 phrases.
+
+The agent should explain the proposed groups before applying them unless the user explicitly asked it to directly edit the file.
+
+## .glprojectkeywords file location
+
+The keyword file must live at the Git project root:
+
+```
+.glprojectkeywords
+```
+
+The script should discover the project root with:
+
+```bash
+git rev-parse --show-toplevel
+```
+
+If the file exists, preserve it and improve it conservatively.
+
+If it does not exist, create it only when the user asks for keyword maintenance, first-use setup, or project-specific highlighting.
+
+## .glprojectkeywords file format
+
+Each non-empty non-comment line must use this format:
+
+```
+colour: phrase
+```
+
+Supported colours are: `red`, `green`, `yellow`, `cyan`, `magenta`, `blue`
+
+Comments start with `#`.
+
+Do not use regex.
+Do not use ANSI escape codes.
+Do not use shell syntax.
+Do not add secrets, private data, branch names, temporary local paths, or commit hashes.
+
+Issue keys and ADR references are usually handled by `glreview`, so they should not normally be added unless they are part of a longer meaningful phrase.
+
+## Phrase selection rules
+
+- Prefer multi-word phrases.
+- Prefer stable project concepts.
+- Prefer phrases that appear in commit titles, document filenames, document headings, ADR titles, spec titles, or repeated implementation language.
+- Prefer phrases that help the user understand the row quickly.
+
+Good examples:
+
+```
+profile-facet source-of-truth mapping spec
+extension boundary spec
+household coordination consent
+active-household resolver
+strict-tsconfig debt
+```
+
+Avoid generic single words unless they are stable named tools, products, or platforms.
+
+Bad examples:
+
+```
+fix
+update
+add
+clear
+make
+screen
+thing
+logic
+data
+work
+```
+
+Do not duplicate generic fallback keywords already built into `glreview`, such as `bug`, `crash`, `typecheck`, `lint`, `test`, `mock`, `spec`, `API`, `UI`, or `UX`, unless they are part of a longer project-specific phrase.
+
+Sort longer, more specific phrases before shorter overlapping phrases where possible.
+
+## Managing ~/.shell_common
+
+This skill is also responsible for maintaining the Git review helper scripts in `~/.shell_common`.
+
+The relevant section should be clearly marked:
+
+```bash
+# Git Review Helpers
+```
+
+The agent may create or update functions such as `glreview`, `gltickets`, and `glticket`.
+
+The agent must not casually rewrite unrelated shell configuration.
+
+Before editing `~/.shell_common`, inspect the existing file.
+
+Preserve unrelated aliases, environment setup, project shortcuts, and other functions.
+
+Prefer replacing only the `# Git Review Helpers` section.
+
+If no Git Review Helpers section exists, insert one near the existing Git shortcuts.
+
+Before making substantial changes, create a backup unless the user says not to:
+
+```bash
+cp ~/.shell_common ~/.shell_common.backup-YYYYMMDD-HHMMSS
+```
+
+The scripts should remain compatible with both bash and zsh where practical.
+
+The scripts may assume normal macOS developer tooling, including Git, Perl, grep, sort, awk, and a POSIX-like shell.
+
+Do not move large logic into `~/.shell_common` if it becomes too complex. If the helper grows too large, propose moving it into a dedicated script under `~/bin` and keeping `~/.shell_common` as a thin wrapper.
+
+## glreview responsibilities
+
+`glreview` should show commits in stable columns.
+
+Default range: `origin/main..main`
+
+The default should answer: show commits on local main that are not on `origin/main`.
+
+- Use `--no-pager` so output prints directly instead of opening a scrollable pager.
+- Use `--first-parent` by default to keep the branch spine readable.
+- Use `--reverse` so history reads from oldest to newest.
+- The title should be mostly normal terminal text.
+- The script should load `.glprojectkeywords` from the current Git root if it exists.
+- Project phrases should be applied before generic fallback keyword highlighting or protected from later splitting.
+- Intent-aware risk highlighting must be preserved.
+- Formal issue keys should be highlighted generically, not hard-coded to one project prefix.
+- Avoid false positives for short uppercase terms. `UI`, `UX`, `API`, `CLI`, and `SDK` should be matched as whole tokens and case-sensitively.
+
+## gltickets responsibilities
+
+`gltickets` should show which issue keys appear most often in the selected range.
+
+Default range: `origin/main..main`
+
+It should extract generic issue keys, not only project-specific ones.
+
+A reasonable pattern is: `[A-Z]+-[0-9]+`
+
+The output should help the user choose which ticket or theme to drill into.
+
+## glticket responsibilities
+
+`glticket` should show commits for a single issue key.
+
+Default range: `origin/main..main`
+
+The user should be able to run:
+
+```bash
+glticket TIZA-869
+```
+
+The output should stay simple and readable.
+
+## Testing after changes
+
+After editing `~/.shell_common`, run syntax or smoke checks where practical:
+
+```bash
+bash -n ~/.shell_common
+zsh -n ~/.shell_common
+```
+
+Then reload and smoke test:
+
+```bash
+reload
+type glreview
+glreview
+gltickets
+```
+
+If a test fails, fix the script before reporting success.
+
+After editing `.glprojectkeywords`, run `glreview` and inspect the output.
+
+The change is successful only if the log becomes easier to visually scan.
+
+If the output becomes noisy, misleading, or overly colourful, remove or narrow phrases.
+
+## Tuning process
+
+- When tuning, prefer small changes.
+- Use screenshots or pasted output from the user as evidence.
+- Look for false positives, colour overload, broken columns, noisy words, and misleading intent.
+- Ask whether the user wants bolder, dimmer, or different colours only when the answer cannot be inferred from the output.
+- Do not make the output more visually complex unless it clearly improves comprehension.
+
+The goal is not maximum highlighting. The goal is minimum useful highlighting.
+
+## Reporting expectations
+
+When finished, report plainly what changed. Include:
+
+- Which script functions changed.
+- Which `.glprojectkeywords` phrases were added, removed, or recoloured.
+- Why the colour choices were made.
+- Any phrases deliberately rejected as too generic or noisy.
+- Any tests run.
+- Any known limitations.
+
+Keep the report short unless the user asks for detail.
+
+## Known anti-patterns
+
+- Do not colour every occurrence of a risky word red.
+- Do not let `UI` match inside `build` or UUID.
+- Do not replace columns with multi-line cards unless explicitly asked.
+- Do not auto-scan docs on every `glreview` run.
+- Do not bury project-specific concepts inside `~/.shell_common`.
+- Do not make `.glprojectkeywords` a dumping ground.
+- Do not add one-off commit wording unless it represents a stable concept.
+- Do not treat the keyword file as permanent truth. It is a visual vocabulary and should evolve.
+- Do not optimise for agents. Optimise for the user's comprehension.

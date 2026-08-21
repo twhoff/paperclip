@@ -1,0 +1,4 @@
+interface:
+  display_name: "Holly Session Summary"
+  short_description: "Summarize a Holly session for screenreader-friendly handoff."
+  default_prompt: "Summarize the current Holly session."

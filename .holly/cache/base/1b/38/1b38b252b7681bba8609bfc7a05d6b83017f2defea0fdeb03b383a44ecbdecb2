@@ -1,0 +1,134 @@
+const VALID_THEMES = new Set(['light', 'dark', 'system']);
+const VALID_RESOLUTIONS = new Set(['low', 'medium', 'high', 'native']);
+const VALID_WAIT_UNTIL = new Set(['load', 'domcontentloaded', 'networkidle']);
+
+const FLAG_SPECS = {
+  '--theme': { kind: 'value', dest: 'theme' },
+  '--viewport-only': { kind: 'boolean', dest: 'viewportOnly' },
+  '--scroll-y': { kind: 'value', dest: 'scrollY', parse: parseIntStrict('scroll-y') },
+  '--scroll-to': { kind: 'value', dest: 'scrollTo' },
+  '--clip-to': { kind: 'value', dest: 'clipTo' },
+  '--script': { kind: 'value', dest: 'scriptPath' },
+  '--auth-token': { kind: 'value', dest: 'authToken' },
+  '--storage-state': { kind: 'value', dest: 'storageState' },
+  '--header': { kind: 'value', dest: 'headers', repeatable: true, parse: parseHeader },
+  '--stable-timeout': { kind: 'value', dest: 'stableTimeout', parse: parseIntStrict('stable-timeout') },
+  '--wait-until': { kind: 'value', dest: 'waitUntil' },
+  '--resolution': { kind: 'value', dest: 'resolution' },
+  '--no-video': { kind: 'boolean', dest: 'noVideo' },
+  '--video-fps': { kind: 'value', dest: 'videoFps', parse: parsePositiveNumber('video-fps') },
+  '--contact-sheet-columns': { kind: 'value', dest: 'contactSheetColumns', parse: parseIntStrict('contact-sheet-columns') },
+  '--contact-sheet-thumb-width': { kind: 'value', dest: 'contactSheetThumbWidth', parse: parseIntStrict('contact-sheet-thumb-width') },
+  '--viewports': { kind: 'value', dest: 'viewports' },
+  '--attach-existing': { kind: 'boolean', dest: 'attachExisting' },
+  '--help': { kind: 'boolean', dest: 'help' },
+  '-h': { kind: 'boolean', dest: 'help' },
+};
+
+function parseIntStrict(name) {
+  return (raw) => {
+    if (!/^-?\d+$/.test(raw)) throw new Error(`--${name} requires an integer (got "${raw}")`);
+    return parseInt(raw, 10);
+  };
+}
+
+function parsePositiveNumber(name) {
+  return (raw) => {
+    if (!/^\d+(?:\.\d+)?$/.test(raw)) {
+      throw new Error(`--${name} requires a positive number (got "${raw}")`);
+    }
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      throw new Error(`--${name} requires a positive number (got "${raw}")`);
+    }
+    return parsed;
+  };
+}
+
+function parseHeader(raw) {
+  const eq = raw.indexOf('=');
+  if (eq === -1) throw new Error(`--header requires KEY=VALUE (got "${raw}")`);
+  return { key: raw.slice(0, eq), value: raw.slice(eq + 1) };
+}
+
+export function parseArgs(argv) {
+  const opts = {
+    url: undefined,
+    outputPath: undefined,
+    theme: 'system',
+    viewportOnly: false,
+    scrollY: undefined,
+    scrollTo: undefined,
+    clipTo: undefined,
+    scriptPath: undefined,
+    authToken: undefined,
+    storageState: undefined,
+    headers: [],
+    stableTimeout: 10000,
+    waitUntil: 'networkidle',
+    resolution: 'native',
+    noVideo: false,
+    videoFps: 2,
+    contactSheetColumns: 4,
+    contactSheetThumbWidth: 0,
+    viewports: undefined,
+    attachExisting: false,
+    help: false,
+  };
+  const positionals = [];
+
+  for (let i = 0; i < argv.length; i++) {
+    const tok = argv[i];
+    if (!tok.startsWith('--') && tok !== '-h') {
+      positionals.push(tok);
+      continue;
+    }
+    const eq = tok.indexOf('=');
+    const flag = eq === -1 ? tok : tok.slice(0, eq);
+    const inlineValue = eq === -1 ? null : tok.slice(eq + 1);
+    const spec = FLAG_SPECS[flag];
+    if (!spec) throw new Error(`unknown flag: ${flag}`);
+    if (spec.kind === 'boolean') {
+      if (inlineValue !== null) throw new Error(`${flag} does not take a value`);
+      opts[spec.dest] = true;
+      continue;
+    }
+    let raw;
+    if (inlineValue !== null) {
+      raw = inlineValue;
+    } else {
+      raw = argv[++i];
+      if (raw === undefined) throw new Error(`${flag} requires a value`);
+    }
+    const parsed = spec.parse ? spec.parse(raw) : raw;
+    if (spec.repeatable) opts[spec.dest].push(parsed);
+    else opts[spec.dest] = parsed;
+  }
+
+  if (opts.help) return opts;
+
+  if (positionals.length === 0) throw new Error('URL is required');
+  opts.url = positionals[0];
+  opts.outputPath = positionals[1];
+
+  if (!VALID_THEMES.has(opts.theme)) {
+    throw new Error(`invalid theme: ${opts.theme} (must be light|dark|system)`);
+  }
+  if (!VALID_RESOLUTIONS.has(opts.resolution)) {
+    throw new Error(`invalid resolution: ${opts.resolution} (must be low|medium|high|native)`);
+  }
+  if (!VALID_WAIT_UNTIL.has(opts.waitUntil)) {
+    throw new Error(`invalid wait-until: ${opts.waitUntil} (must be load|domcontentloaded|networkidle)`);
+  }
+  if (opts.scrollY !== undefined && opts.scrollTo !== undefined) {
+    throw new Error('--scroll-y and --scroll-to are mutually exclusive');
+  }
+  if (opts.contactSheetColumns <= 0) {
+    throw new Error('--contact-sheet-columns must be positive');
+  }
+  if (opts.contactSheetThumbWidth < 0) {
+    throw new Error('--contact-sheet-thumb-width must be zero or positive');
+  }
+
+  return opts;
+}

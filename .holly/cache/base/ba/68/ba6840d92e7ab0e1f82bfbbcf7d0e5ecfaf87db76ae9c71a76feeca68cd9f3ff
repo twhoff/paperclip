@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Nightly orphan report wrapper. Invoked by the launchd plist installed
+# via `agent-fs init --schedule-orphan-report`. Writes a dated JSON report
+# under <AGENT_FS_ROOT>/_meta/orphan-reports/<YYYY-MM-DD>.json so an operator
+# can spot accumulating leaks without needing to run any command.
+
+set -uo pipefail
+
+# Resolve binary.
+BIN="${AGENT_FS_BIN:-}"
+if [ -z "${BIN}" ] || [ ! -x "${BIN}" ]; then
+  GUESS_GLOBAL="${HOME}/.agents/skills/agent-fs/bin/agent-fs"
+  if [ -x "${GUESS_GLOBAL}" ]; then
+    BIN="${GUESS_GLOBAL}"
+  else
+    echo "agent-fs binary not found" >&2
+    exit 1
+  fi
+fi
+
+ROOT="${AGENT_FS_ROOT:-$HOME/.agent-scratch}"
+OUT_DIR="$ROOT/_meta/orphan-reports"
+mkdir -p "$OUT_DIR"
+
+DATE="$(date +%Y-%m-%d)"
+"$BIN" orphans --in /tmp --json > "$OUT_DIR/$DATE.json"
+
+# Prune reports older than 30 days. -mtime +30 = older than 30 days.
+find "$OUT_DIR" -maxdepth 1 -type f -name "*.json" -mtime +30 -delete 2>/dev/null
+
+echo "wrote $OUT_DIR/$DATE.json"

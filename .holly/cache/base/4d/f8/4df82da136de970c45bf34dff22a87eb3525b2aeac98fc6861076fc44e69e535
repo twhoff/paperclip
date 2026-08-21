@@ -1,0 +1,327 @@
+# yaml-language-server: $schema=../schemas/workflow.schema.json
+
+name: Track
+description: >-
+  Capture requirements as Beads epics and break them into deliverable child
+  issues. Accepts a task description, user story, raw requirements, or an
+  existing epic ID that needs decomposition.
+
+   Discovery phase analyses the requirements against the codebase only as much
+   as needed to identify scope, affected components, risks, and open questions.
+
+  Decomposition phase: breaks the work into discrete, independently
+  deliverable child issues under an epic. Each child has a clear title,
+  description, acceptance criteria, priority, and type. Dependencies between
+  children are established so `holly tracker ready` surfaces work in the right order.
+
+  Orchestration phase: analyses the dependency DAG to assign wave labels
+  (topological layers for phased delivery) and agent-path labels (independent
+  chains for parallel multi-agent delivery). Wave labels (wave-1, wave-2, ...)
+  show execution order. Agent-path labels (agent-1, agent-2, ...) partition
+  work so multiple agents can each take a full dependency chain without
+  blocking each other.
+
+  Approval gate: the full epic structure is presented for user review before
+  any issues are created. The user may request changes, re-ordering, or
+  scope adjustments.
+
+  Composable with the workflow wrapper for universal pre/postflight.
+
+preflight:
+  # Step 1: Capture and clarify requirements
+  - prompt: >-
+      Capture the user's requirements and ensure they are well-understood:
+
+      1. Parse the user's message for: task description, user story,
+         acceptance criteria, constraints, referenced files/systems, and
+         any mentioned Beads issue IDs.
+
+      2. If a Beads epic ID was provided, run `holly tracker show <id>` to load it.
+         Check whether it already has children:
+         `holly tracker exec -- list --parent <id> --json`
+         If children exist, present them and ask whether the user wants to
+         ADD more children, REORGANISE existing ones, or start fresh.
+
+      3. If the requirements are AMBIGUOUS or INCOMPLETE, ask targeted
+         clarifying questions. Focus on:
+         - What problem is being solved (the "why")
+         - Who benefits and how (the "who" and "what")
+         - What "done" looks like (acceptance criteria)
+         - Known constraints (deadlines, dependencies, tech limitations)
+         Do NOT proceed until the requirements are clear enough to
+         decompose into concrete tasks.
+
+      4. If the requirements are clear, summarise them back to the user
+         in a single paragraph for confirmation before continuing.
+    category: discovery
+
+  # Step 2: Analyse scope against the codebase
+  - prompt: >-
+      Research the codebase to understand the scope of the requirements:
+
+      1. CODEBASE ANALYSIS: Search for files, modules, and systems that
+         the requirements touch. Start with the narrowest useful search, then
+         broaden only if the scope is unclear. Identify:
+         - Files and modules that will need modification
+         - Related components and their dependencies
+         - Existing tests covering the affected areas
+         - Configuration, schemas, and documentation that may change
+
+      2. PATTERN RECOGNITION: If the request is ambiguous, high-risk, or likely
+         to repeat prior work, check closed epics and issues for precedent.
+         Start with one focused query and stop as soon as enough precedent is
+         found:
+
+         a. Focused query:
+            `holly tracker exec -- search "<feature or bug keyword>"`
+
+         b. Optional mixed-term query if the first query is insufficient:
+            `holly tracker exec -- search "<domain term> <component term>"`
+
+         c. Optional closed/done query when historical implementation detail is
+            needed:
+            `holly tracker exec -- search "<relevant terms>" --closed`
+
+         Avoid long query chains by default.
+
+      3. RISK ASSESSMENT: Flag areas where the requirements are likely
+         to cause complications — high dependency areas, files touched
+         by multiple systems, or functionality without test coverage.
+
+      4. OPEN QUESTIONS: List any technical questions that surfaced
+         during research. These become decision points in the epic
+         description.
+
+      Output a structured scope analysis: affected areas, blast radius,
+      precedent from prior work, risks, and open questions.
+    category: discovery
+
+steps:
+  # Step 1: Design the epic and child structure
+  - prompt: >-
+      Design the epic and its child issue structure:
+
+      FORMULA CHECK (before manual decomposition):
+
+      0. Run `holly tracker exec -- formula list` to check for matching templates.
+         If a formula matches the discovered requirements:
+         a. Present the formula to the user:
+            `holly tracker exec -- formula show <formula-name>`
+         b. If user approves, fill formula variables from discovery
+            output and pour:
+            `holly tracker exec -- pour <formula-name> --var feature_name="<name>"
+             --var feature_description="<description>"
+             --var priority=<N>`
+         c. Run `holly tracker exec -- swarm validate <molecule-epic-id>` to confirm
+            wave structure.
+         d. SET formula_was_used=true. SKIP Steps 3 and 4.
+         e. Proceed directly to Step 5 (present final summary).
+         If no formula matches or user declines, proceed with
+         manual decomposition below (formula_was_used=false).
+
+      1. EPIC DEFINITION: Draft the epic with:
+         - Title: concise, action-oriented (e.g. "Add PDF export to reports")
+         - Description: problem statement, goals, scope boundaries
+         - Acceptance criteria: high-level conditions for the epic to be
+           considered complete
+         - Priority: based on user input or inferred from urgency
+
+      2. CHILD DECOMPOSITION: Break the epic into child issues. Each child
+         MUST be:
+         - Independently deliverable — produces a working increment
+         - Small enough to complete in a single coding session
+         - Testable — has clear, verifiable acceptance criteria
+         - Typed appropriately: task, feature, bug, chore, or docs
+
+         For each child, define:
+         - Title (concise, imperative: "Add X", "Fix Y", "Refactor Z")
+         - Type (task | feature | bug | chore)
+         - Priority (0-4, inheriting from epic unless overridden)
+         - Description (what to do, why, and how to verify)
+         - Acceptance criteria (checkboxes)
+         - Estimated complexity (S / M / L)
+
+      3. DEPENDENCY ORDERING: Determine which children block others.
+         Structure so that:
+         - Foundation work (schemas, models, config) comes first
+         - Feature work depends on its foundations
+         - Tests and documentation can run in parallel where possible
+         - Integration/wiring tasks come last
+
+      4. Present the plan in TWO formats:
+
+         FORMAT 1 — Structured (for agent use):
+         The full epic with numbered children, types, priorities,
+         dependencies, and acceptance criteria.
+
+         FORMAT 2 — Screen-reader summary:
+         A natural spoken Australian English summary. MUST follow rules:
+         - Natural spoken language only, as if explaining to a colleague
+         - No tables, lists, bullet points, code blocks, or markdown
+         - No special characters, unicode, or emoji
+         - Only straight single quotes (') and double quotes (")
+         - Plain paragraphs only
+         - Address the user as "you" and "your"
+         - Use Australian English spelling
+
+      5. Wait for user approval. The user may:
+         - Approve as-is → proceed to issue creation
+         - Request changes → revise and re-present
+         - Add or remove children → adjust the plan
+         - Change priorities or dependencies → update accordingly
+         Do NOT create any Beads issues until the user approves.
+    category: discovery
+
+  # Step 2: Create the epic in Beads
+  - prompt: >-
+      Create the approved epic in Beads:
+
+      1. If an existing epic ID was provided and the user chose to ADD
+         children, skip epic creation — use the existing epic.
+
+      2. Otherwise, create the epic:
+         `holly tracker create "<epic title>" --type epic --priority <N>
+         --description "<epic description with acceptance criteria>"`
+
+      3. Record the epic ID for use when creating children.
+
+      4. Post to the all-agents channel:
+         `holly chat post --channel all-agents
+         --message "Created epic <epic-id>: <title>. Decomposing into
+         <N> children."`
+    category: delivery
+
+  # Step 3: Create child issues with dependencies
+  # SKIP this step if a formula was poured in Step 1 (formula_was_used=true)
+  - prompt: >-
+      SKIP if formula_was_used=true -- the pour already created children
+      with dependencies. Proceed to Step 5.
+
+      Create all approved child issues under the epic:
+
+      1. Create children in DEPENDENCY ORDER (foundations first):
+         `holly tracker exec -- create "<child title>" --type <type> --priority <N>
+         --parent <epic-id>
+         --description "<description with acceptance criteria>"`
+
+      2. DESCRIPTION SPECIFICITY (mandatory for swarm delivery):
+         Every child issue description MUST include:
+         - Specific file paths that will be modified (e.g. `src/hooks/useAnnotationController.ts`)
+         - Tool or API names involved (e.g. `saveAnnotationCompat`, `deleteAnnotationCompat`)
+         - Component or module names (e.g. `AnnotationPanel`, `ParagraphRenderer`)
+         Vague descriptions like "update the hook" or "fix the component"
+         are not acceptable — they waste worker triage time and break
+         the orchestrator's overlap-detection check.
+
+      3. After each child is created, record its ID.
+
+      4. Set up dependencies between children using `holly tracker exec -- dep`:
+         - For each dependency pair:
+           `holly tracker exec -- dep <blocker-id> --blocks <blocked-id>`
+         - Verify the dependency graph has no cycles:
+           `holly tracker exec -- dep cycles`
+
+      5. Add labels to children for categorisation:
+         `holly tracker exec -- label add <child-id> <label>`
+         Use labels like: foundation, feature, test, docs, integration
+
+      6. After all children are created, verify the structure:
+         `holly tracker exec -- list --parent <epic-id> --json`
+         `holly tracker exec -- epic status <epic-id>`
+         Confirm all children exist with correct parent, dependencies,
+         and priorities.
+    category: delivery
+
+  # Step 4: Assign phase and parallel-agent labels
+  # SKIP this step if a formula was poured in Step 1 (formula_was_used=true)
+  # holly tracker exec -- swarm validate already computes wave structure from the molecule's DAG
+  - prompt: >-
+      SKIP if formula_was_used=true -- `holly tracker exec -- swarm validate` already computed
+      wave structure from the poured molecule. Proceed to Step 5.
+
+      Analyse the dependency graph and assign orchestration labels
+      using `holly tracker exec -- swarm validate`:
+
+      1. Run `holly tracker exec -- swarm validate <epic-id>` to analyse the DAG.
+         This computes wave structure (topological layering),
+         maximum parallelism per wave, swarmability assessment,
+         and agent path partitioning automatically.
+
+      2. Apply labels based on swarm validate output:
+         - `holly tracker exec -- label add <child-id> wave-N` for each child
+         - `holly tracker exec -- label add <child-id> agent-N` for path assignment
+         - `holly tracker exec -- label add <child-id> agent-shared` for merge points
+
+      3. Verify: every child MUST have exactly one wave-N label
+         and one agent-N (or agent-shared) label. Re-run
+         `holly tracker exec -- swarm validate <epic-id>` to confirm clean output.
+
+      4. Output a visual summary of the assignment:
+         - List each agent path with its chain of children
+         - Show wave numbers alongside each child
+         - Highlight any agent-shared nodes
+
+      SKIP CONDITIONS:
+      - If the epic has 3 or fewer children, skip agent path labels
+        (not enough work to parallelise). Still assign wave labels.
+      - If the DAG is a single linear chain (no branching), assign
+        all to agent-1 and note that parallel delivery is not
+        applicable.
+    category: delivery
+
+  # Step 5: Present final summary
+  - prompt: >-
+      Present the completed epic structure to the user:
+
+      1. Run `holly tracker exec -- epic status <epic-id>` to get the completion overview.
+
+      2. Run `holly tracker ready` to show which children are immediately unblocked
+         and ready for implementation.
+
+      3. Present a summary:
+         - Epic ID and title
+         - Total children created
+         - Dependency chain (visual or textual)
+         - Wave breakdown: how many children per wave
+         - Agent paths: which chains each agent would work
+         - Which children are ready to work on NOW
+         - Suggested first action (e.g. "Run /implement <first-child-id>")
+
+      4. Ask the user how they want to proceed:
+         - Start implementing immediately (hand off to implement workflow)
+         - Assign to agents for parallel work (reference agent-N labels)
+         - Park for later
+    category: discovery
+
+postflight:
+  # Commit and sync
+  - prompt: >-
+      Ensure all Beads changes are synced:
+
+      1. Run `holly tracker sync` to sync issue data to the tracker backend.
+      2. If the epic has been taken forward from backlog planning to ready work,
+         update it to the correct lifecycle status using
+         `holly tracker update <epic-id> --status open`.
+      3. Post a summary to the epic channel:
+         `holly chat post --channel <epic-id>
+         --message "Epic tracked and decomposed. <N> children created.
+         Ready items: <ready-list>."`
+    requires:
+      - Holly tracker CLI
+
+hooks:
+  beforeEach:
+    prompt: >-
+      Before each main step:
+      1. Check for messages on the all-agents channel.
+      2. If the user provided feedback in the previous step, incorporate
+         it before proceeding.
+    category: quality
+
+  afterEach:
+    prompt: >-
+      After each main step:
+         1. Post a status comment only after user-visible milestones, such as
+             approval, epic creation, child creation, or final handoff. Skip routine
+             internal progress comments.
+    category: quality

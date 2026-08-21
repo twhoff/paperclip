@@ -9,6 +9,15 @@
           }
         ],
         "matcher": ""
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "holly hooks post-tool-use"
+          }
+        ]
       }
     ],
     "PreCompact": [
@@ -29,6 +38,14 @@
           }
         ],
         "matcher": ""
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "holly hooks pre-compact"
+          }
+        ]
       }
     ],
     "PreToolUse": [
@@ -103,6 +120,15 @@
           }
         ],
         "matcher": "mcp__context-mode__ctx_batch_execute"
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "holly hooks pre-tool-use"
+          }
+        ]
       }
     ],
     "SessionStart": [
@@ -123,6 +149,55 @@
           }
         ],
         "matcher": ""
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "holly hooks session-start"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "holly hooks user-prompt-submit"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "holly hooks session-end"
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "holly hooks subagent-start"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "holly hooks subagent-stop"
+          }
+        ]
       }
     ]
   }

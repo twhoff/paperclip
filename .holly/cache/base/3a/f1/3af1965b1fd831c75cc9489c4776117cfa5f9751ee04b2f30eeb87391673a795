@@ -1,0 +1,253 @@
+---
+name: orchestration
+description: >-
+  Reference for the Orchestrator's routing tables, formula system, recovery
+  playbooks, and learning mechanism. Use when the Orchestrator needs to select
+  a worker agent, manage a formula, recover from delivery failure, or record
+  a lesson. Complements the orchestrator-v2 agent definition.
+---
+
+# Orchestration
+
+Reference guide for the Holly Orchestrator's delivery machinery. The
+`orchestrator-v2.agent.md` file is the cockpit checklist. This skill is the
+operations manual.
+
+---
+
+## 1. Agent Routing Table
+
+The roster is the swarm shape: the Orchestrator plans and routes, the tiered
+implementation agents build, and the tiered review agents gate. All delivery is
+bounded subagent dispatch — `runSubagent` on VS Code, `Agent` on Claude Code,
+or `multi_agent_v1.spawn_agent` on Codex — agents perform one assignment,
+return a structured report, and exit (no `holly chat wait`, no persistent chat
+windows). Select the cheapest agent whose capability envelope covers the task.
+
+Codex-specific dispatch translation:
+
+- Codex takes model + reasoning effort as `spawn_agent` parameters (its agent
+  frontmatter is a symlink of the Holly-native base, never a translated model).
+  Resolve BOTH from `model-capability-tiers.yaml` -> `runtimes.codex.projection`
+  keyed on the agent's `capability_tier`. Projection is TIER-KEYED, so a reviewer
+  routes to a different model than same-strength implementation — do not collapse
+  them by strength.
+- Implementation defaults: `swarm-tiny-implementation` -> `gpt-5.4-mini`,
+  `swarm-standard-implementation`/`swarm-ui-browser-implementation` -> `gpt-5.4`,
+  `swarm-senior-implementation` -> `gpt-5.5`. `gpt-5.3-codex-spark` stays an
+  explicit cheaper override for the very lightest tiny work.
+- Reviewer defaults (cross-model diversity): `swarm-reviewer` (standard_review)
+  -> `gpt-5.5` at `high`; `swarm-senior-reviewer` (senior_review) -> `gpt-5.5` at
+  `xhigh`. Do NOT downgrade the standard reviewer to `gpt-5.4`.
+- Principal tier (`swarm-principal-implementation` / `swarm-principal-reviewer`,
+  strength `principal`): satisfied ONLY by Claude Fable 5, which is a claude-code
+  model. Codex has no principal-strength model, so a `principal_*` dispatch on
+  Codex is best-effort `gpt-5.5` at `xhigh` — allowed only where the manifest
+  permits fallback (implementation with `fallback_used: true`) and NOT for review
+  (`swarm-principal-reviewer` has no fallback → escalate). Prefer routing genuine
+  principal work to a claude-code runtime.
+- Codex does not expose an independently verified `actual_model` to the
+  worker or Orchestrator. Log requested model + accepted spawn call; do not
+  claim stronger proof than the tool contract provides.
+
+### Implementation agents
+
+| Agent | Tier | Use for |
+|-------|------|---------|
+| **swarm-tiny-implementation** | tiny_implementation | Mechanical, low-risk edits in 1-2 files (~120 lines); one clear behaviour, one verification command |
+| **swarm-standard-implementation** | standard_implementation | Focused implementation or bug-fix slice in 1-4 files (~250 lines) with clear acceptance criteria |
+| **swarm-senior-implementation** | senior_implementation | Architecture-bearing, cross-cutting, migration, concurrency, or security-sensitive implementation with explicit scope (~8 files / 600 lines); requires a senior model or escalates |
+| **swarm-ui-browser-implementation** | ui_browser_implementation | Scoped frontend / browser-verifiable UI work with a known route and expected states |
+| **swarm-principal-implementation** | principal_implementation | The hardest, largest-context implementation beyond the senior envelope (~12 files / 900 lines): deep convention-based refactors, multi-subsystem changes needing sustained reasoning; requires a principal model (Claude Fable 5) or escalates |
+
+### Review agents
+
+| Agent | Tier | Use for |
+|-------|------|---------|
+| **swarm-reviewer** | standard_review | Normal read-only review of a returned implementation branch |
+| **swarm-senior-reviewer** | senior_review | Architecture, security, data/migration, or disputed-review gates |
+| **swarm-principal-reviewer** | principal_review | Highest-stakes / largest / deeply-reasoned review and senior-reviewer escalations; requires a principal model (Claude Fable 5) or escalates |
+
+### Built-in subagent types (non-delivery)
+
+For read-only research, discovery, and one-off analysis that is not epic-child
+implementation, use the runtime's built-in subagent types (e.g. **Explore** for
+read-only codebase search, **general-purpose** for scoped multi-step research).
+These are not part of the swarm delivery contract.
+
+Full detail on capability-tier model routing, granularity limits, reviewer
+gates, integration ownership, and the model-fallback protocol lives in the
+`swarm-delivery` skill.
+
+**Selection heuristic:**
+
+1. Is the task read-only and search-based? → built-in **Explore**
+2. Is the edit mechanical, 1-2 files, one behaviour? → **swarm-tiny-implementation**
+3. Is it a focused implementation/bug-fix slice with clear criteria? → **swarm-standard-implementation**
+4. Is it architecture-bearing, cross-cutting, or high-risk (with explicit scope)? → **swarm-senior-implementation**
+5. Is it scoped frontend / browser-verifiable UI work? → **swarm-ui-browser-implementation**
+6. Is it beyond even the senior envelope — the hardest large-context reasoning (deep convention-based refactor, multi-subsystem change)? → **swarm-principal-implementation** (needs Claude Fable 5)
+7. Reviewing a returned branch? → **swarm-reviewer**, or **swarm-senior-reviewer** for architecture/security/disputes, or **swarm-principal-reviewer** for the highest-stakes / senior-reviewer escalations
+
+**Escalate to the Orchestrator (direct handling) when:**
+- Root cause is unknown and the search space is large (discover first)
+- A wrong early decision creates downstream rework across multiple branches
+- The task involves modifying agent infrastructure, workflows, or hooks
+- A required tier (e.g. senior/principal implementation or senior/principal
+  review) has no capable model available in the current runtime — do not
+  silently downgrade. Principal tiers need Claude Fable 5; on a GPT-native
+  runtime principal review must escalate, not run on gpt-5.5.
+
+---
+
+## 2. Formula System
+
+### What a formula is
+
+A delivery pattern is a parameterised DAG of tracker issues with typed
+variables, dependency edges, wave labels, and agent path hints. Patterns
+let the Orchestrator instantiate repeatable delivery work without manual
+decomposition on each invocation.
+
+### Delivery pattern lifecycle
+
+```
+recognise pattern
+  → check existing adapter-supported patterns
+  → if match: inspect → set variables → preview → approve
+  → if no match but repeatable: design → validate → instantiate → distill after delivery
+  → if novel: manual decomp → wire deps → label waves → validate manually
+```
+Concrete commands for listing, previewing, instantiating, and distilling
+patterns are adapter-specific. Read the active tracker addendum before
+using this workflow.
+
+### Formula JSON shape (for authoring)
+
+```json
+{
+  "id": "formula-id",
+  "title": "Human-readable name",
+  "description": "When to use this formula",
+  "variables": [
+    { "name": "VAR_NAME", "type": "string", "description": "What it controls" }
+  ],
+  "issues": [
+    {
+      "id": "step-1",
+      "title": "{{VAR_NAME}}: first step",
+      "type": "feature",
+      "priority": 2,
+      "wave": 1,
+      "agent": "swarm-standard-implementation",
+      "depends_on": []
+    },
+    {
+      "id": "step-2",
+      "title": "Verify {{VAR_NAME}}",
+      "type": "chore",
+      "priority": 1,
+      "wave": 2,
+      "agent": "swarm-tiny-implementation",
+      "depends_on": ["step-1"]
+    }
+  ]
+}
+```
+
+### Design principles
+
+- Every issue in a formula must have a clear verification step.
+- Waves are not optional — they define the order of execution.
+- Agent hints are suggestions; the Orchestrator may override when context
+  changes.
+- Formulas should be distilled after 2+ successful uses of the same manual
+  decomposition pattern.
+
+---
+
+## 3. Multi-Agent Delivery Playbook
+
+**Mode gate.** Multi-agent delivery requires `multi-agent` mode (`holly mode`,
+shown in `holly status`). In `single-agent` mode sub-agent dispatch is
+hard-blocked by the PreToolUse hook — do not spawn workers; deliver directly or
+ask the user to `holly mode multi`. The rest of this playbook assumes
+`multi-agent` mode.
+
+Multi-agent delivery runs through the **swarm** model: the Orchestrator stays in
+one window and dispatches swarm agents as bounded `runSubagent` calls via the
+`orchestrate-swarm` workflow. There is no chat-channel onboarding, no BEGIN/
+SIGN-OFF, and no `holly chat wait` loop. The full procedure (preflight gates,
+granularity gate, dispatch-preflight model routing, reviewer gates, integration,
+wave advance, postflight) lives in the `swarm-delivery` skill and the
+`orchestrate-swarm` workflow. This section is the high-level loop only.
+
+### Delivery loop
+
+```
+preflight: load epic + children; validate DAG; assess swarmability; granularity gate
+per wave:
+    dispatch-preflight gate (per child): tier vs available model strength,
+        required tools, fallback decision, escalation decision
+    dispatch implementation agents (parallel where files do not overlap)
+    on return: dispatch reviewer (standard or senior); apply verdict
+    integrate approved branches in dependency order (Orchestrator only)
+    close children only after merge + verification + approve verdict
+advance waves until the epic is complete; file follow-ups; close the epic
+```
+
+### Failure-recovery playbook
+
+| Failure | First response | Escalation |
+|---------|---------------|------------|
+| Subagent returns `blocked`/`failed` | Triage: retry once with clearer scope if it was prompt/scope ambiguity | Route to a higher implementation tier or handle directly |
+| Reviewer returns `changes-requested` | Send one bounded fix prompt back to the original agent when safe | Escalate to senior review or the user if the fix changes architecture/scope |
+| Required tier has no capable model (senior impl/review, or ui-browser without a browser tool) | Do not dispatch; do not downgrade silently | Escalate to the user, or handle directly with full context |
+| Completion mismatch (report says done; tracker/git disagree) | Verify against git and tracker before closing | Re-dispatch or handle directly; close only on evidence |
+| Truth-source conflict (report says X; tracker says Y; git says Z) | Git and tests are authoritative for code state; tracker is authoritative for work state; subagent reports require verification |
+| Your `current_task`/`worktree_path` was rewritten or points at a removed worktree after dispatching workers | A worker leaked your `HOLLY_SESSION_ID` and ran its own task lifecycle under it. Run `holly task status` — it now reports a stale worktree explicitly with the exact recovery command. Recover with `holly task abort --force`, then re-affirm your intent. | The session isolation guard (`holly task start` refusing a session that parents active subagents) and the worker child-id contract prevent recurrence; ensure dispatched workers use their SubagentStart child id, not your id |
+
+---
+
+## 4. Learning System
+
+After each delivery, record lessons that would change routing, formula design,
+or recovery behaviour. Store them in the project memory (if the project-knowledge
+skill is installed) or in a session note.
+
+**What to record:**
+
+- Routing decisions that turned out wrong (expected Haiku, needed Sonnet)
+- Pattern gaps (needed a reusable delivery pattern that didn't exist)
+- Recovery actions that worked
+- Repeated failure modes
+
+**Format (project memory node: `context/orchestration-lessons.md`):**
+
+```yaml
+---
+tags: [orchestration, lessons]
+last-verified: YYYY-MM-DD
+status: active
+---
+```
+
+Entry per lesson:
+```
+## YYYY-MM-DD — <brief title>
+
+**Context:** <what task was being orchestrated>
+**Decision:** <what routing/formula choice was made>
+**Outcome:** <what happened>
+**Lesson:** <what to do differently>
+```
+
+---
+
+## 5. Cross-references
+
+- `orchestrator-v2.agent.md` — agent definition, fast routing test, planning model
+- `issue-tracker` skill — issue lifecycle, worktree commands
+- `agent-chat` skill — channel choice, wait semantics, file-based posting
+- `agent-lifecycle` skill — session boot, task intent, shutdown
+- `project-knowledge` skill — project memory system

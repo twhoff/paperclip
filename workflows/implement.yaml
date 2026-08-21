@@ -1,0 +1,450 @@
+# yaml-language-server: $schema=../schemas/workflow.schema.json
+
+name: Implement
+description: >-
+  Execution-protocol workflow for delivering coding tasks via TDD.
+  Accepts a Beads issue or epic ID — does NOT accept plain task
+  descriptions (route those through the Track workflow or pour a
+  formula first).
+
+  This workflow owns HOW work gets done (TDD cycle, quality gates,
+  commits). Work decomposition (WHAT to build) is owned by Beads
+  formulas and the Track workflow.
+
+  Follows TDD: writes tests first, implements to pass, then refactors.
+  Auto-iterates up to 3 fix cycles on quality gate failures.
+
+  Epic support: when given an epic ID, iterates through ALL unblocked
+  children automatically (research, TDD, commit, close per child) until
+  the epic is complete. User approval is sought once for the overall
+  plan, not per child.
+
+   Commits once at handoff unless the task or user explicitly needs smaller
+   checkpoints. For UI work, requires an explicit implementation loop using the
+   ui-visual-capture skill: do work -> capture -> assess -> adjust,
+   repeated until the rendered UI is correct at target breakpoints.
+   The workflow builds review expectations into normal delivery so the
+   first formal review is primarily confirmation, not discovery. The
+   final guardrail is only an omissions check, not a second forensic review.
+  Composable with the workflow wrapper for universal pre/postflight.
+
+preflight:
+  # Step 1: Resolve the task input
+  - prompt: >-
+      Determine what work to do from the user's input:
+
+      1. If a Beads issue ID was provided (e.g. the project-abc), run `holly tracker show <id>`
+         to load issue details, description, dependencies, and parent epic.
+
+      2. If an epic ID was provided, run `holly tracker exec -- children <id>` to list ALL
+         child issues. Record the full list with IDs, titles, statuses,
+         and priorities. Select the FIRST UNBLOCKED child (all dependencies
+         met, status not closed) as the starting point. Run `holly tracker show
+         <child-id>` to load its details. Store the epic ID and complete
+         child list — the workflow will iterate through ALL children.
+
+      3. If a plain task description was provided (no issue ID):
+         STOP. This workflow requires a pre-existing Beads issue or epic.
+         Work decomposition is owned by formulas and the Track workflow.
+         Instruct the user to either:
+         a. Run the Track workflow first to decompose the task into an
+            epic with children, OR
+         b. Pour a matching formula: `holly tracker exec -- formula list` then
+            `holly tracker exec -- mol pour <formula> --var key=val`, OR
+         c. Create a simple issue manually: `holly tracker create "<title>" --type task`
+         Then re-run this workflow with the resulting issue ID.
+
+      4. Record the resolved issue ID, epic ID, and full description for
+         use in subsequent steps. Set this as the CURRENT_ISSUE.
+
+      5. STATUS TRANSITION: If the resolved issue is currently `todo`, move it
+         to `in_progress` as soon as implementation work begins:
+         `holly tracker update <CURRENT_ISSUE> --status in_progress`
+
+         If the issue is already `in_progress`, leave it there. Do not close it
+         or move it to `in_review` in this workflow.
+    category: discovery
+
+  # Step 2: Research the codebase
+  - prompt: >-
+      Build implementation context for the current task:
+
+      1. SPEC + ACCEPTANCE MANIFEST: Extract the exact acceptance criteria,
+         linked docs, constraints, and user-visible behaviours from the
+         issue. If the task touches UI, identify the exact routes,
+         components, breakpoint rules, and interaction states that must work.
+
+      2. CODEBASE ANALYSIS: Search the codebase for files related to the
+         task using semantic_search, grep_search, and file_search. Find:
+         - Files that will need modification
+         - Related modules, classes, and functions
+         - Existing tests for the affected code
+         - Configuration files that may need updates
+
+      3. DEPENDENCY MAPPING: Identify what the changed code depends on and
+         what depends on it. Trace imports, function calls, and data flow
+         to understand the blast radius of the change.
+
+      4. EXISTING PATTERNS: Note coding patterns, naming conventions, and
+         architectural styles in the affected area. The implementation
+         MUST follow these existing patterns.
+
+      5. DESIGN SYSTEM SOURCES: If the task includes UI/frontend work,
+         identify and load:
+         - The abstract design-system skill or equivalent guidance
+         - The repo-specific design-system or component-registry skill/docs
+         - The implementation-bridge skill or rules for the stack in use
+           (for example Tailwind, DaisyUI, CSS-token utilities, or another
+           framework-specific system)
+         If an implementation-bridge skill does not exist, record the code or
+         doc source that acts as the system's technical contract.
+
+      6. ADR CONSULTATION: If the task touches architecture, shared contracts,
+         UI testability, design-system governance, data flow, API behaviour,
+         infrastructure, workflow/process conventions, or any area where an
+         ADR may exist, load the ADR skill and use it to find and read relevant
+         ADRs. Do not assume the project has ADRs; if none exist or none are
+         relevant, record that explicitly in the research brief.
+
+      7. TEST INFRASTRUCTURE: Determine the testing framework, test runner,
+         and test file conventions. Check for:
+         - A TDD.md file in the project root (read it if present)
+         - Existing test files and their structure
+         - Test commands in package.json, Makefile, pyproject.toml, etc.
+         - CI configuration for test commands
+
+      8. SCHEMA AND DOCS: If the task involves files covered by the schema
+         registry (schemas/registry.json), note which schemas apply. Check
+         whether AGENTS.md documents capabilities the task may change. Also
+         identify component registries, skill files, README files, and other
+         documentation surfaces that may require updates.
+
+      Output a structured research brief: acceptance criteria, files to
+      modify, dependencies, patterns to follow, design-system sources,
+      relevant ADRs or "none found", testing approach, docs/schema updates,
+      and any risks or open questions.
+    category: discovery
+
+  # Step 3: Design the solution
+  - prompt: >-
+      Design the implementation approach based on the research brief:
+
+      1. APPROACH: Define the high-level strategy. If multiple viable
+         options exist, list pros and cons and recommend one.
+
+      2. FILE PLAN: List every file to be created, modified, or deleted.
+         For each file, describe the specific changes.
+
+      3. TEST PLAN (TDD): Define what tests will be written FIRST. For
+         each test, specify:
+         - Test file path
+         - Test description (one behaviour per test)
+         - What it verifies
+         - Expected inputs and outputs
+
+      4. SPEC TRACEABILITY: Map each acceptance criterion to the code,
+         tests, visual verification, and documentation evidence that will
+         prove it is satisfied. For UI work, include the exact route,
+         viewport rule, and live interaction that will be used as proof.
+
+      5. DESIGN SYSTEM PLAN: For UI work, identify which existing
+         primitives, tokens, patterns, and stack-specific implementation
+         rules must be used. If a new component or pattern seems necessary,
+         justify it up front and note what documentation or registry update
+         will be required.
+
+      6. ADR TRACEABILITY: If relevant ADRs were found, map their constraints
+         to the approach, file plan, tests, visual verification, documentation,
+         and handoff evidence. For UI work, include any ADR-governed
+         testability or selector manifest that testers will need.
+
+      7. RISK ASSESSMENT: Identify what could go wrong and mitigation
+         strategies. Flag changes that could break existing functionality.
+
+      Present the design to the user for review.
+
+      EPIC MODE: If the input was an epic, present the overall plan for
+      ALL children — detailed design for the first child, brief outlines
+      for the rest. User approval covers the entire epic; subsequent
+      children do not require individual approval.
+
+      Wait for user approval before proceeding to the main steps.
+    category: discovery
+
+steps:
+  # TDD Red phase: write failing tests
+  - prompt: >-
+      Write tests FIRST following TDD Red phase principles:
+
+      1. Read the TDD.md file if it exists in the project root for any
+         project-specific TDD conventions.
+
+      2. Create or update test files per the test plan from the design
+         step. Start with placeholder tests (e.g. `it.todo()`,
+         `@pytest.mark.skip`, `def test_*(): pass  # TODO`, or the
+         equivalent for the project's language/framework).
+
+      3. Replace placeholders with full test implementations one at a
+         time. Each test should:
+         - Have a clear, descriptive name
+         - Test ONE behaviour or outcome
+         - Follow Arrange-Act-Assert
+         - Use existing test fixtures and helpers where available
+
+      4. Run the tests to confirm they FAIL (Red phase). All new tests
+         should fail because the implementation does not exist yet.
+         Record the exact test command and failure output.
+
+      5. If any test passes unexpectedly, investigate — the feature may
+         already exist or the test may be incorrect.
+    category: delivery
+
+  # TDD Green phase: implement to pass
+  - prompt: >-
+      Implement the minimum code to make all failing tests pass:
+
+      1. Work through each failing test in order. For each:
+         a. Read the test to understand exactly what it expects
+         b. Write the simplest code that makes it pass
+         c. Run the specific test to verify it passes
+         d. Run the narrowest relevant regression check for that change
+
+      2. Follow existing codebase patterns identified in the research
+         brief. Match naming conventions, error handling, code style, and
+         any design-system implementation rules identified for the task.
+         For UI work, prefer existing primitives, approved tokens, and the
+         stack's documented system conventions over ad hoc styling. Follow
+         any relevant ADR constraints identified during research.
+
+      3. If the implementation reveals a test was wrong (testing the
+         wrong behaviour), fix the test first, verify it fails, then
+         implement.
+
+      4. Update any configuration, schemas, or documentation that the
+         implementation requires.
+
+      5. After all targeted tests pass, defer full quality gates to the
+         handoff readiness / commit stage unless the change touches shared
+         contracts, schemas, infrastructure, or other high-blast-radius code.
+    category: delivery
+
+  # UI iteration loop: implement -> capture -> iterate
+  - prompt: >-
+      UI IMPLEMENTATION LOOP — for UI/frontend tasks, iterate until the
+      rendered output is correct:
+
+      1. Load `ui-visual-capture` and the relevant design-system skills or
+         source docs identified in research.
+      2. Make the smallest UI change needed for the current acceptance check.
+      3. Apply any relevant ADRs that govern UI testability, selectors,
+         visual proof, or interaction evidence. Use ADR-governed selector
+         manifests for Playwright actions, scroll anchors, and capture targets
+         when the project defines one.
+      4. Use the ui-visual-capture skill to capture the changed route.
+         Use a dedicated local server instance for this ticket and include
+         the exact route, viewport expectation, and interaction goal in your notes.
+         Do not treat a static screenshot as sufficient proof when the feature
+         depends on interaction.
+      5. VALIDATE ANY VISIBLE DATES/TIMES: Before moving to the next step,
+         if the screenshot shows any date or time labels:
+         a. Run: python3 scripts/timezone_reference.py --what-day "<date>"
+         b. Verify the displayed day-of-week, timezone offset, and time
+            match the tool output for the system's current timezone.
+         c. Note in your task comment: "✓ Date/time validated: <visible-date>
+            matches <tool-output>".
+         If any date/time does not match, investigate why (timezone bug,
+         display format issue) and fix before proceeding.
+      6. Review captures across required viewports and compare against the
+         acceptance criteria, breakpoint rule, interaction outcome, and
+         design-system rules for primitives, tokens, and layout behaviour.
+      7. If the UI is not correct, adjust implementation and repeat from step 2.
+      8. Stop only when the UI behavior is correct across target viewports,
+         the implementation aligns with the design system, and all visible
+         dates/times are validated.
+
+      This is mandatory for UI work and must occur before final quality handoff.
+    category: delivery
+    condition: The task involves UI, frontend components, or user-facing changes.
+
+  # TDD Refactor phase: clean up while green
+  - prompt: >-
+      Refactor the implementation while keeping all tests green:
+
+      1. Review the new code for:
+         - Duplication that can be extracted
+         - Functions or methods that are too long
+         - Names that could be clearer
+         - Missing error handling
+         - Performance concerns
+
+      2. Apply each refactoring as a discrete change. After each meaningful
+         refactor, run the narrowest relevant tests. Run the full suite only
+         when the refactor changes shared behavior or public contracts.
+
+      3. Update documentation:
+         - Docstrings for new or changed public APIs
+         - README or other docs if the feature is user-facing
+         - AGENTS.md if the change affects chat, workflows,
+           schemas, templates, or other documented capabilities
+         - .agents/agents/orchestrator.agent.md if workflows or
+           orchestration capabilities changed
+
+      4. If refactoring changed shared behavior, public contracts, schemas, or
+         infrastructure, run the relevant quality gates now. Otherwise defer the
+         full gate set to the handoff readiness / commit stage.
+
+      5. Report the final state: all tests passing, all quality gates
+         clean, or list remaining issues for the next step.
+    category: delivery
+    condition: Refactoring opportunities were identified or quality gates have failures to resolve.
+
+  # Auto-iterate on quality failures
+  - prompt: >-
+      If quality gates reported failures, fix them and re-validate.
+      Repeat up to 3 times automatically.
+
+      ITERATION PROTOCOL:
+      1. Read the quality gate output from the previous step.
+      2. If all gates PASS: mark this step complete and proceed.
+      3. If any gate FAILS:
+         a. Categorise each failure:
+            - Simple (missing import, type annotation, lint) — fix directly
+            - Complex (logic error, test failure, schema mismatch) —
+              investigate root cause
+         b. Apply all fixes.
+         c. Re-run the failed gate plus any directly related checks.
+         d. If still failing after iteration 3: STOP and escalate to the
+            user. Present remaining failures clearly and ask for direction.
+
+      After all gates pass, confirm the clean state.
+    category: delivery
+    condition: Quality gates from the previous step reported failures.
+
+  - prompt: >-
+      HANDOFF READINESS CHECK — Before handoff, do a short omissions check to
+      confirm the work was implemented in a review-ready way. This is not a
+      second full review pass and must not reopen broad analysis.
+
+      1. ACCEPTANCE EVIDENCE: Confirm every acceptance criterion already has
+         supporting evidence from the work you completed: code, tests, visual
+         proof, or documentation. If evidence is missing, add the missing
+         implementation artifact now.
+
+      2. DESIGN SYSTEM DELIVERY: For UI work, confirm the implementation used
+         the design-system sources identified earlier, including repo-specific
+         primitives, tokens, and stack-specific implementation rules. If there
+         was an intentional exception, document it explicitly.
+
+      3. ADR DELIVERY: Confirm relevant ADRs found during research were followed
+         and cited in the handoff evidence. For UI work, include any selector,
+         testability, or visual-proof manifest required by project ADRs. If no
+         relevant ADRs existed, state that explicitly.
+
+      4. REQUIRED UPDATES PRESENT: Confirm imports, exports, registries,
+         config, schemas, and docs were updated anywhere this change required
+         them. This is a completeness check for touched surfaces, not a new
+         blast-radius search.
+
+      5. TEST AND PROOF ARTIFACTS PRESENT: Confirm the intended tests were
+         written and run. Run the full quality gate set once now when code
+         changed enough to require it. For UI work, confirm the final route,
+         viewport rule, interaction proof, and any date/time validation were
+         captured by the UI implementation loop.
+
+      6. KNOWN GAPS EXPLICIT: If any limitation, follow-up, or unresolved edge
+         case remains, write it down clearly in the handoff instead of letting
+         review discover it implicitly.
+
+      Fix any missing artifact or omitted update before proceeding. Do not
+      repeat the full review workflow here.
+    category: quality
+
+  # Epic iteration: advance to next child
+  - prompt: >-
+      After completing the TDD cycle for the current child issue:
+
+      1. Commit all work for this child (if not already committed by the
+         afterEach hook).
+      2. Leave the current child in `in_progress`. Review will move it to
+         `in_review`, and end-session will close it after approval.
+      3. Post a completion summary to the task epic channel.
+      4. Run `holly tracker exec -- children <epic-id>` to find the next unblocked child.
+      5. If a next unblocked child exists:
+         a. Run `holly tracker show <next-child-id>` to load its details.
+         b. If the next child is currently `todo`, move it to `in_progress`:
+            `holly tracker update <next-child-id> --status in_progress`
+         c. Research the next child: search the codebase for relevant
+            files, dependencies, and test infrastructure. Reuse context
+            from the initial research where it still applies.
+         d. Produce a brief design for the next child. For straightforward
+            issues, a one-paragraph approach is sufficient — do NOT
+            re-seek user approval for each child.
+         e. Re-execute main steps 1–4 (Red, Green, Refactor, Fix) for
+            the next child.
+         f. Return to this step to check for more children.
+      6. If no more unblocked children remain, proceed to postflight.
+
+      PROGRESS REPORTING: After each child, post to the epic channel:
+      "Completed <child-id>: <title>. Progress: N/M children done."
+    category: delivery
+    condition: The input was an epic ID with child issues.
+
+postflight:
+  # Commit the work
+  - prompt: >-
+      Commit the completed work:
+
+      1. Stage changes logically — group related files into coherent
+         commits. Prefer fewer meaningful commits over many tiny ones.
+
+      2. Use commitizen-format messages (generated, NOT using the cz tool):
+         `<type>(<scope>): <subject> (<issue-id>)`
+         Types: feat, fix, test, docs, refactor, chore.
+         The issue ID MUST be included (commit-msg hook requires <issue-id>).
+
+      3. If the handoff readiness check already ran the full required gates
+         successfully and no files changed since then, do not repeat them.
+         Otherwise run the missing required gates once now.
+
+      4. If any gate fails post-commit, fix with an additional commit.
+    requires:
+      - Holly tracker CLI
+
+  # Close issues and finalise
+  - prompt: >-
+      Wrap up the completed work:
+
+      1. SINGLE ISSUE MODE: If working on a standalone issue (not part
+         of an epic), leave it in `in_progress`. The review workflow will
+         move it to `in_review`, and end-session will close it after approval.
+
+      2. EPIC MODE: Verify all children have been processed by running
+         `holly tracker exec -- children <epic-id>`. Report:
+         - Children completed in this session
+         - Children still open or still awaiting review
+         Do not close the epic in this workflow. Review and end-session own
+         the final status progression.
+         If some children remain open, explain why each was skipped
+         (e.g. blocked by external dependency, deferred priority).
+
+      3. Update AGENTS.md and .agents/agents/orchestrator.agent.md if
+         the implementation changed any documented capabilities.
+    condition: A Beads issue was tracked for this work.
+
+hooks:
+  beforeEach:
+    prompt: >-
+      Before each main step:
+      1. Check for messages on the task epic and all-agents channels.
+      2. Continue unless new guidance changes the current step.
+    category: quality
+
+  afterEach:
+    prompt: >-
+      After each main step:
+      1. If the step produced important user-visible progress, post one brief
+         status comment on the task epic or issue. Skip routine comments for
+         small internal steps.
+      2. If the step involved UI proof, include the tested route, viewport
+         rule, interaction outcome, and date/time validation status.
+    category: quality

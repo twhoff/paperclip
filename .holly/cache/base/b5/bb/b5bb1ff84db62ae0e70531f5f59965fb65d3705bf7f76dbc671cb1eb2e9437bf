@@ -1,0 +1,64 @@
+import { pathToFileURL } from 'node:url';
+
+export function buildContextOptions(viewport, opts, captureRes, videoDir) {
+  const ctxOpts = {
+    viewport: { width: viewport.width, height: viewport.height },
+    deviceScaleFactor: captureRes.deviceScaleFactor,
+  };
+
+  if (opts.theme === 'light' || opts.theme === 'dark') {
+    ctxOpts.colorScheme = opts.theme;
+  }
+
+  if (opts.storageState) ctxOpts.storageState = opts.storageState;
+
+  const headers = {};
+  if (opts.authToken) headers['Authorization'] = `Bearer ${opts.authToken}`;
+  if (opts.headers) {
+    for (const h of opts.headers) headers[h.key] = h.value;
+  }
+  if (Object.keys(headers).length > 0) ctxOpts.extraHTTPHeaders = headers;
+
+  if (opts.scriptPath && !opts.noVideo && videoDir) {
+    ctxOpts.recordVideo = {
+      dir: videoDir,
+      size: { width: viewport.width, height: viewport.height },
+    };
+  }
+
+  return ctxOpts;
+}
+
+export async function waitForStableDom(page, { timeoutMs = 10000, stableMs = 500, intervalMs = 100 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  let lastHash = null;
+  let stableSince = null;
+  while (Date.now() < deadline) {
+    const hash = await page.evaluate(() => {
+      const html = document.body?.outerHTML ?? '';
+      return html.length + ':' + html.slice(0, 256) + ':' + html.slice(-256);
+    });
+    if (hash === lastHash) {
+      if (stableSince === null) stableSince = Date.now();
+      if (Date.now() - stableSince >= stableMs) return { timedOut: false };
+    } else {
+      lastHash = hash;
+      stableSince = null;
+    }
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  return { timedOut: true };
+}
+
+export async function loadInteractionScript(scriptPath) {
+  let mod;
+  try {
+    mod = await import(pathToFileURL(scriptPath).href);
+  } catch (err) {
+    throw new Error(`failed to load interaction script "${scriptPath}": ${err.message}`);
+  }
+  if (typeof mod.default !== 'function') {
+    throw new Error(`interaction script "${scriptPath}": default export must be a function`);
+  }
+  return mod.default;
+}

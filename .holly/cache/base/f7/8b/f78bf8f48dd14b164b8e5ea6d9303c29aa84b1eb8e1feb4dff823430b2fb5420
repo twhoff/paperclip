@@ -1,0 +1,207 @@
+---
+name: use-workflow
+description: >
+  How to execute, author, and update Holly workflows on any platform.
+  Workflows are declarative YAML files under `workflows/`; this skill is
+  the executor contract. Use whenever the user asks to "run", "begin",
+  "implement", "commit", "track", "orchestrate", "orchestrate-swarm",
+  "review", "zero-problems", or otherwise invoke a named workflow, or asks
+  to create/update a workflow file.
+  Use when the user invokes the holly skill without any further instruction
+  or when the user invokes the holly skill with words like bootstrap, prepare,
+  load and so forth.
+---
+
+# Use Workflow
+
+Holly workflows are declarative YAML in `workflows/`. The agent is the
+executor — there is no engine that walks the YAML for you. This skill
+defines the contract every agent must follow when running, authoring,
+or modifying a workflow.
+
+---
+
+## When to invoke this skill
+
+When the user says any of:
+
+- "run the X workflow", "execute X", "begin a session", "implement ISSUE",
+  "commit and push", "track TASK", "orchestrate-swarm EPIC", "review ISSUE",
+  "fix zero-problems"
+- "create a new workflow for X", "update the X workflow"
+- The user types a slash-command-style invocation that matches a workflow
+  file in `workflows/`
+
+Trigger phrases are intentionally broad — when in doubt, list the
+workflows in `workflows/*.yaml` and pick the best match by `name` and
+`description`. If nothing matches, use `workflows/default.yaml`.
+
+---
+
+## Part 1 — Running a workflow
+
+### Resolve the input
+
+The user's invocation may be one of:
+
+```text
+<workflow-name> <issue-id>
+<workflow-name> <task description>
+<task description>            # no name → match against descriptions, fall back to default.yaml
+```
+
+Examples:
+
+- `implement holly-abc` — run `implement.yaml` scoped to `holly-abc`
+- `track holly-epic` — run `track.yaml` to decompose an epic into child issues
+- `orchestrate-swarm holly-epic` — run [orchestrate-swarm.yaml](../../workflows/orchestrate-swarm.yaml) on an epic
+- `review-implementation` — run `review-implementation.yaml`; preflight figures out scope
+- `fix the linting errors` — match → [default.yaml](../../workflows/default.yaml) with the description as context
+
+### The wrapper sandwich (required execution order)
+
+Every workflow runs **inside** `workflow-wrapper.yaml` unless the workflow declares `skip_wrapper: true` (only `end-session.yaml` does this — it IS the teardown path, so wrapping it would be counterproductive).
+
+**Execution order:**
+
+```text
+1. Wrapper preflight              workflow-wrapper.yaml → preflight
+2. Wrapper hooks.beforeAll        workflow-wrapper.yaml → beforeAll
+3. Workflow preflight             target → preflight                  # pass the issue ID / task as context
+4. Workflow hooks.beforeAll       target → beforeAll
+5. for each step in target.steps:
+     Wrapper hooks.beforeEach     workflow-wrapper.yaml → beforeEach
+     Workflow hooks.beforeEach    target → beforeEach
+     execute step
+     Workflow hooks.afterEach     target → afterEach
+     Wrapper hooks.afterEach      workflow-wrapper.yaml → afterEach
+6. Workflow hooks.afterAll        target → afterAll
+7. Workflow postflight            target → postflight
+8. Wrapper hooks.afterAll         workflow-wrapper.yaml → afterAll
+9. Wrapper postflight             workflow-wrapper.yaml → postflight
+```
+
+**Hook scoping:**
+
+- **Wrapper hooks** — run for _all_ workflows; use for minimal universal setup and lightweight guardrails. Workflow-specific status transitions, quality gates, commits, push, teardown, visual proof, and memory work belong in the target workflow. Define wrapper hooks under `hooks:` in `workflow-wrapper.yaml`.
+- **Workflow hooks** — run for _this workflow only_; use for workflow-specific setup (data prep, context initialization) and cleanup (state validation, ephemeral resource removal). Define under `hooks:` in the target workflow YAML.
+- **Nesting order** — wrapper hooks **always** wrap outside workflow hooks. The `beforeEach` → `step` → `afterEach` sandwich is: wrapper.before → workflow.before → step → workflow.after → wrapper.after.
+
+This order is non-negotiable. Track every step (preflight, main, postflight, wrapper steps, and all hooks) using `manage_todo_list`. Mark `in-progress` before starting, `completed` immediately after — never batch completions.
+
+### Step execution rules
+
+For each step object:
+
+| Field       | Meaning                                                                                                             |
+| ----------- | ------------------------------------------------------------------------------------------------------------------- |
+| `prompt`    | (required) The instruction. Execute it faithfully.                                                                  |
+| `delegate`  | If set, delegate to the named sub-agent. If omitted, decide whether to execute directly or delegate.                |
+| `category`  | `discovery`, `delivery`, or `quality`; a routing hint, not an automatic delegation mandate.                         |
+| `condition` | Natural-language predicate. Skip the step if the condition is not met.                                              |
+| `requires`  | Prerequisites that MUST be available. If any is missing, STOP and ask the user.                                     |
+
+### Workflow-specific guardrails
+
+These distil what each per-workflow prompt used to enforce. The full procedure lives in the YAML; these are the cross-cutting rules:
+
+- **begin-session** — Validate session context and tracker readiness, then plan only the context needed for the task. Print a Session Context Snapshot before the plan. Present plan in three formats (snapshot, structured, screen-reader Australian English). Do NOT execute until the user approves. End with a Next Steps panel of 2–5 pasteable suggestions.
+
+- **implement** — TDD discipline (Red → Green → Refactor), with one handoff/commit pass unless the task explicitly needs smaller checkpoints. Accepts an issue/epic ID or task description; auto-creates tracking if needed. Epic mode iterates ALL unblocked children automatically, asking for approval ONCE on the overall plan, not per child. Up to 3 fix cycles on quality-gate failures before escalating.
+
+- **commit** — the `cz` tool is BANNED; generate commitizen-format messages directly. Every commit message must contain a tracker issue ID (the commit-msg hook enforces this). Group changes by issue / epic / project concern — never one-mega-commit. Run schema validation and zero-error policy before pushing. Success = clean tree + up-to-date with origin.
+
+- **end-session** — `skip_wrapper: true`. Archive task, commit any leftovers, file follow-ups, close completed issues, push to remote, transition session to idle. Provide a handoff summary for the next session.
+
+- **track / orchestrate-swarm / review-implementation / zero-problems** — refer to each YAML's `description`. Same wrapper sandwich applies.
+
+### Delegation Guidance
+
+Prefer direct execution on the baseline model for ordinary workflow steps. Delegate only when the workflow or user explicitly asks for it, when the task has real parallelism, or when a specialist skill/model is needed for risk, architecture, or domain expertise.
+
+---
+
+## Part 2 — Authoring a new workflow
+
+### Required structure
+
+```yaml
+# yaml-language-server: $schema=../schemas/workflow.schema.json
+
+name: <Workflow Name> # Title Case
+description: <what this workflow accomplishes>
+
+preflight:
+  - prompt: <step description>
+
+steps:
+  - prompt: <step description> # at least 1 step required (minItems: 1)
+
+postflight:
+  - prompt: <step description>
+```
+
+`additionalProperties: false` — no extra fields allowed at any level. The schema is the source of truth: `schemas/workflow.schema.json`.
+
+### Step properties
+
+- `prompt` (required, string) — clear, actionable instruction
+- `category` (optional) — `discovery` | `delivery` | `quality`
+- `delegate` (optional) — a swarm agent: `swarm-tiny-implementation` | `swarm-standard-implementation` | `swarm-senior-implementation` | `swarm-ui-browser-implementation` | `swarm-principal-implementation` | `swarm-reviewer` | `swarm-senior-reviewer` | `swarm-principal-reviewer`
+- `condition` (optional, string) — natural-language predicate; step is skipped if not met
+- `requires` (optional, array of strings) — prerequisites that must be available
+
+### Optional Jest-style hooks
+
+Under `hooks:` — each value is a step object with the same properties as above:
+
+- `beforeAll` — runs once before the first main step
+- `beforeEach` — runs before each main step
+- `afterEach` — runs after each main step
+- `afterAll` — runs once after the last main step
+
+### Naming convention
+
+- File: `workflows/<kebab-case-name>.yaml`
+- `name` field: Title Case
+
+### Wrapper integration
+
+The wrapper provides minimal universal preflight (session init, tracker readiness, AGENTS.md, intent registration, worktree check) and a lightweight postflight reminder. Your workflow's preflight/postflight should contain workflow-specific status transitions, quality gates, commits, push, teardown, visual proof, and memory work.
+
+If a workflow IS itself the teardown path (like `end-session`), set `skip_wrapper: true` at the top level. Otherwise leave the wrapper engaged.
+
+### Validation
+
+After creating the file:
+
+```bash
+holly validate
+pytest
+```
+
+Fix any validation or test errors before considering the work complete.
+
+### Update the orchestrator routing table
+
+When adding a new workflow, also update the workflow table in the project's orchestrator agent definition (typically `.agents/agents/orchestrator-v2.agent.md` or `.agents/agents/orchestrator.agent.md`) with the new workflow's file path and selection criteria.
+
+---
+
+## Part 3 — Updating an existing workflow
+
+Before modifying:
+
+1. **Read the target workflow** — understand its current structure and intent.
+2. **Read comparable bundled workflows** (under the active adapter package's `workflows/` or the holly core `workflows/` for generic ones) to keep structure consistent.
+3. **Re-read `workflow-wrapper.yaml`** — never duplicate wrapper functionality in the workflow.
+
+Apply the same step-property rules and validation steps as authoring a new workflow.
+
+---
+
+## Adapter awareness
+
+This skill is adapter-agnostic. Tracker-specific CLI verbs (find-ready-work, claim, close, sync, etc.) live in [issue-tracker/SKILL.md](../issue-tracker/SKILL.md) and the adapter addendum installed alongside it. When a workflow step says "find the next ready issue" or "close the issue", consult the active adapter's addendum for the concrete command.
+
+The wrapper-sandwich and the workflow YAMLs themselves are also adapter-flavoured: each adapter package ships its own `workflows/begin-session.yaml`, `end-session.yaml`, `implement.yaml`, `commit.yaml`, `track.yaml`, `orchestrate-swarm.yaml`, `review-implementation.yaml`, and `workflow-wrapper.yaml`. `holly sync skills` and `holly sync workflows` install the active adapter's flavour into `<project>/workflows/` (`--mode apply` to write; default is `--mode plan` for safe preview). Treat the local YAMLs as the source of truth at runtime.

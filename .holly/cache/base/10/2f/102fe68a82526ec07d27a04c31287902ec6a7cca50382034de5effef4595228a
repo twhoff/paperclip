@@ -1,0 +1,188 @@
+export function renderHelp() {
+  return `
+playwright-screenshot — Responsive visual proof for dev-server UIs
+
+USAGE
+  playwright-screenshot <url> [output-path] [options]
+
+DESCRIPTION
+  Captures parallel screenshots of <url> at five canonical device viewports
+  (mobile / mobile_safari / tablet_p / tablet_l / desktop), waits for the page to settle,
+  writes PNGs (or JPGs) to disk, and prints a JSON summary on stdout.
+
+  Use this for your own dev server, Storybook, or any URL you control.
+  For authenticated third-party sites that require reusing a real logged-in
+  Chrome session, use the live-session-capture skill instead.
+
+  Engineering and QA agents MUST run this against any UI change before
+  moving the ticket to in_review.
+
+AUTO-SERVER BEHAVIOR (localhost URLs only)
+  When the URL is a localhost URL with an explicit port (e.g. http://localhost:3101)
+  the script manages the frontend dev server automatically:
+
+  From a linked git WORKTREE:
+    • Port free   → locate the frontend package (frontend/, ui/, app/, web/, or
+                    root package.json), start its dev server, wait for it to respond,
+                    capture, and leave it running for up to 5 minutes of inactivity.
+    • Port in use by the same worktree   → attach and capture.
+    • Port in use by a different worktree → error; use --attach-existing or a new port.
+    • Port in use, no metadata            → error; use --attach-existing or a new port.
+
+  From the MAIN checkout (non-worktree):
+    • Port in use → capture immediately (server was started externally).
+    • Port free   → error; start the server manually first.
+
+  The temp server auto-stops after 5 minutes of inactivity (configurable via
+  the UI_VISUAL_CAPTURE_IDLE_MS env var for testing).
+
+ARGUMENTS
+  <url>           Required. Full URL including scheme.
+  [output-path]   Optional. One of:
+                    - omitted: defaults via agent-fs when $AGENT_FS_BIN is set (preferred) —
+                        · issue-scoped (cwd under <project>-worktrees/<key>/):
+                            <agent-fs scratch>/ui-visual-capture-<issue-key>-<YYYY-MM-DD>/
+                        · anonymous (main checkout / no issue):
+                            <agent-fs scratch>/<YYYY-MM-DD>-<a|b|c…>/
+                        Falls back to /tmp/ui-visual-capture/<...> ONLY when agent-fs
+                        is unavailable. (The agent-fs PreToolUse guard blocks raw /tmp
+                        writes, so the agent-fs default is what keeps captures sanctioned.)
+                    - directory (existing or trailing /):  parent dir, named <viewport>.<ext> inside
+                    - path with {viewport}:   substituted per viewport
+                    - bare file path:         allowed only when capturing 1 viewport
+
+  Issue keys are detected from the current working directory path segments
+  (e.g. a worktree at .../gro-829/ → issue key "gro-829"; casing is preserved).
+  Captures remain in session scratch. Local-only trackers require no upload or attachment;
+  publication for an attachment-capable workflow is a separate explicit step.
+
+OPTIONS
+
+  Theme & resolution
+    --theme=light|dark|system   Color scheme (default: system)
+    --resolution=low|medium|high|native
+                                low/medium = JPEG (token-light); high/native = PNG @2x (default: native)
+
+  Capture mode
+    --viewport-only             Capture visible region only (default: full page)
+    --scroll-y=N                Scroll Y px before capture (mutually exclusive with --scroll-to)
+    --scroll-to=SELECTOR        Scroll element into view before capture
+    --clip-to=SELECTOR          Crop the capture to a single component: shoot only the
+                                matched element's bounding box. Overrides full-page /
+                                --viewport-only. Runs after --script, so you can open a
+                                component into the state you want, then clip to it.
+
+  Interaction
+    --script PATH               Run an interaction script after navigation. The default export
+                                is called with { page, viewport, context }. Enables video by default.
+    --no-video                  Disable WebM recording when --script is set
+    --video-fps=N               Frame extraction FPS for WebM contact sheets (default: 2).
+                                Use 60 for frame-by-frame animation review.
+    --contact-sheet-columns=N   Columns in generated WebM contact sheets (default: 4).
+    --contact-sheet-thumb-width=N
+                                Thumbnail width in generated WebM contact sheets (0 = source width).
+
+  Auth
+    --auth-token TOKEN          Sets Authorization: Bearer TOKEN on all requests
+    --storage-state PATH        Playwright storageState JSON (cookies + localStorage).
+                                The URL's origin must match the captured origin.
+    --header KEY=VALUE          Extra HTTP header (repeatable; split on first =)
+
+  Stability
+    --wait-until=load|domcontentloaded|networkidle
+                                Navigation readiness signal (default: networkidle).
+                                Use domcontentloaded for Storybook dev-server iframes.
+    --stable-timeout=MS         Max DOM-stable wait after navigation (default: 10000)
+
+  Selection / output
+    --viewports=LIST            Subset or per-name overrides, e.g. mobile,desktop, mobile=375,
+                                desktop=1440, or mobile=80x48 for exact width+height.
+                                Canonical names: mobile, mobile_safari, tablet_p, tablet_l, desktop.
+                                mobile_safari is 390x664 (iPhone Safari with top+bottom browser chrome) and is
+                                mandatory for any fixed/sticky overlay (modal, sheet, drawer, nav, toast).
+
+  Server
+    --attach-existing           Capture from the server already running on the requested port,
+                                even if it was started from a different worktree.
+
+  Misc
+    --help, -h                  Show this help and exit
+
+OUTPUT FORMAT
+  stdout is a single JSON object:
+    {
+      "status": "ok" | "partial" | "error",
+      "outputDir": "/abs/path",
+      "server": {
+        "mode": "started" | "attached" | "attached-explicit" | "external" | null,
+        "port": 3101,
+        "worktreeRoot": "/abs/path/to/worktree",
+        "packageDir": "/abs/path/to/frontend",
+        "pid": 12345,
+        "logPath": "/tmp/ui-visual-capture/servers/3101.log"
+      },
+      "captures": [
+        { "viewport": "mobile",   "status": "ok",    "path": "/abs/.../mobile.png",   "videoPath": "/abs/.../mobile.webm" },
+        { "viewport": "tablet_p", "status": "error", "error": "..." },
+        ...
+      ]
+    }
+
+  \`server\` is null when the URL is not a localhost URL or is an implicit port.
+
+EXIT CODES
+  0  All viewports captured successfully
+  1  At least one viewport failed
+  2  Bad arguments
+  3  Playwright module not found in any ancestor node_modules
+  4  Server error: conflict, startup failure, or server not running when required
+
+EXAMPLES
+  Basic capture from a worktree (server auto-starts on port 3101):
+    playwright-screenshot http://localhost:3101
+
+  Same-day second run reattaches to the running server automatically:
+    playwright-screenshot http://localhost:3101/dashboard
+
+  Capture from a server started by a different worktree (explicit opt-in):
+    playwright-screenshot http://localhost:3101 --attach-existing
+
+  Capture from an already-running server on main checkout:
+    playwright-screenshot http://localhost:3000/dashboard --theme=dark
+
+  Footer in viewport-only mode:
+    playwright-screenshot http://localhost:3000 --scroll-to='[data-testid="footer"]' --viewport-only
+
+  Crop to a single component (precise element bounding box):
+    playwright-screenshot 'http://localhost:6006/iframe.html?id=atoms-button--primary' \\
+      --clip-to='[data-testid="button"]' --wait-until=domcontentloaded
+
+  Scripted interaction with video, only mobile + desktop:
+    playwright-screenshot http://localhost:3000/meals \\
+      --script ./interactions/open-meal-edit.mjs \\
+      --viewports=mobile,desktop
+
+  Authenticated route via stored session:
+    playwright-screenshot http://localhost:3000/account --storage-state ./.auth/state.json
+
+  Custom output paths with placeholder:
+    playwright-screenshot http://localhost:3000 '/tmp/run/{viewport}.png'
+
+  Token-light captures for agents that read the file back into context:
+    playwright-screenshot http://localhost:3000 --resolution=low
+
+INTERACTION SCRIPT CONTRACT
+  Default export is an async function called once per viewport:
+
+    // interactions/open-meal-edit.mjs
+    export default async function ({ page, viewport, context }) {
+      await page.locator('[data-testid="meal-card"]').first().click();
+      await page.locator('[data-testid="edit-meal"]').click();
+      await page.waitForSelector('[data-testid="meal-edit-sheet"]');
+      // The screenshot is taken AFTER this returns, against the resulting page state.
+    }
+
+  An exception aborts that one viewport (status: "error") but does not abort siblings.
+  When --script is set, video recording is on by default; pass --no-video to disable.
+`.trimStart();
+}

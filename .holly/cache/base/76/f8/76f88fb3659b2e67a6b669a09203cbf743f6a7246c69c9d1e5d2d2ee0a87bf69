@@ -1,0 +1,26 @@
+// agent-fs session — return the long-lived session-state dir for this session.
+
+import fs from 'node:fs';
+import { VERBS } from '../registry.mjs';
+
+export function sessionVerb(args, ctx) {
+  fs.mkdirSync(ctx.layout.sessionState, { recursive: true });
+  ctx.registry.append({
+    verb: VERBS.SESSION,
+    path: ctx.layout.sessionState,
+    agent: ctx.agent,
+    runtime: ctx.runtime,
+  });
+  if (args.json) {
+    process.stdout.write(
+      JSON.stringify({
+        path: ctx.layout.sessionState,
+        sessionId: ctx.sessionId,
+        sessionSource: ctx.sessionSource,
+        runtime: ctx.runtime,
+      }) + '\n',
+    );
+  } else {
+    process.stdout.write(ctx.layout.sessionState + '\n');
+  }
+}

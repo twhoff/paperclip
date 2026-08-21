@@ -1,0 +1,72 @@
+// Resolved path layout for a session. Single source of truth for directory names.
+
+import path from 'node:path';
+
+export function sessionLayout(root, sessionId) {
+  const session = path.join(root, `sess-${sessionId}`);
+  return {
+    root,
+    session,
+    tmp: path.join(session, 'tmp'),
+    scratch: path.join(session, 'scratch'),
+    evidence: path.join(session, 'evidence'),
+    sessionState: path.join(session, 'session'),
+    logs: path.join(session, 'logs'),
+    registry: path.join(session, 'registry.ndjson'),
+    meta: path.join(root, '_meta'),
+  };
+}
+
+export const CATEGORIES = Object.freeze(['scratch', 'evidence', 'session', 'tmp', 'logs']);
+
+export function categoryPath(layout, category) {
+  switch (category) {
+    case 'scratch':
+      return layout.scratch;
+    case 'evidence':
+      return layout.evidence;
+    case 'session':
+      return layout.sessionState;
+    case 'tmp':
+      return layout.tmp;
+    case 'logs':
+      return layout.logs;
+    default:
+      return null;
+  }
+}
+
+// Issue IDs are agent-supplied strings used as directory names under
+// the evidence root. agent-fs is tracker-agnostic: uppercase, lowercase,
+// numeric, and custom issue-key schemes all round-trip exactly as written.
+//
+// Validation is minimal but filesystem-safe:
+//   - non-empty after trimming surrounding whitespace
+//   - no internal whitespace (must be a single token)
+//   - no path separators (/ or \) — these would let an ID escape its dir
+//   - not "." or ".." — no parent-traversal
+//   - no NUL byte
+//   - ≤ 128 chars (matches the SAFE_NAME_RE ceiling below)
+//
+// Casing is preserved. Downstream comparators that need case-insensitive
+// matching should fold both sides explicitly.
+
+export const ISSUE_ID_RULE =
+  'must be a non-empty single token with no whitespace, no path separators (/ \\), and ≤ 128 chars';
+
+export function normalizeIssueId(raw) {
+  if (raw == null) return null;
+  const trimmed = String(raw).trim();
+  if (trimmed.length === 0 || trimmed.length > 128) return null;
+  if (/\s/.test(trimmed)) return null;
+  if (trimmed.includes('/') || trimmed.includes('\\')) return null;
+  if (trimmed.includes('\0')) return null;
+  if (trimmed === '.' || trimmed === '..') return null;
+  return trimmed;
+}
+
+const SAFE_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+export function isSafeName(name) {
+  return typeof name === 'string' && SAFE_NAME_RE.test(name) && name.length <= 128;
+}

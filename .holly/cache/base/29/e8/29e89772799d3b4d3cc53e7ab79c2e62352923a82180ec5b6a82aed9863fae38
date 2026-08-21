@@ -1,0 +1,61 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { renderHelp } from '../scripts/lib/help.mjs';
+
+test('help has all major sections', () => {
+  const txt = renderHelp();
+  for (const heading of [
+    'USAGE',
+    'DESCRIPTION',
+    'ARGUMENTS',
+    'OPTIONS',
+    'OUTPUT FORMAT',
+    'EXIT CODES',
+    'EXAMPLES',
+    'INTERACTION SCRIPT',
+  ]) {
+    assert.match(txt, new RegExp(`\\b${heading}\\b`));
+  }
+});
+
+test('help mentions every flag in the CLI surface', () => {
+  const txt = renderHelp();
+  for (const flag of [
+    '--theme',
+    '--viewport-only',
+    '--scroll-y',
+    '--scroll-to',
+    '--script',
+    '--auth-token',
+    '--storage-state',
+    '--header',
+    '--stable-timeout',
+    '--resolution',
+    '--no-video',
+    '--viewports',
+    '--attach-existing',
+  ]) {
+    assert.match(txt, new RegExp(flag.replace(/-/g, '\\-')));
+  }
+});
+
+test('help points at live-session-capture for third-party authenticated sessions', () => {
+  assert.match(renderHelp(), /live-session-capture/i);
+});
+
+test('help documents exit code 4 for server errors', () => {
+  assert.match(renderHelp(), /exit code.*4|4.*server/i);
+});
+
+test('help documents auto-server behavior', () => {
+  const txt = renderHelp();
+  assert.match(txt, /worktree/i);
+  assert.match(txt, /--attach-existing/i);
+});
+
+test('help shows the five default viewports', () => {
+  const txt = renderHelp();
+  for (const name of ['mobile', 'mobile_safari', 'tablet_p', 'tablet_l', 'desktop']) {
+    assert.match(txt, new RegExp(`\\b${name}\\b`));
+  }
+});

@@ -1,0 +1,43 @@
+// agent-fs bless <path> — explicitly mark a path as sanctioned.
+// Used by hooks when adopting paths produced by trusted skills before they migrate
+// to native agent-fs calls.
+
+import path from 'node:path';
+import { normalizeIssueId } from '../paths.mjs';
+import { VERBS } from '../registry.mjs';
+
+const BLESS_TYPES = new Set(['scratch', 'evidence', 'session']);
+
+export function blessVerb(args, ctx) {
+  const raw = args._[0];
+  if (!raw) {
+    process.stderr.write('error: bless requires a path argument\n');
+    process.exit(65);
+  }
+  const target = path.resolve(raw);
+  const type = args.type ?? 'scratch';
+  if (!BLESS_TYPES.has(type)) {
+    process.stderr.write(`error: --type must be one of ${[...BLESS_TYPES].join(', ')}\n`);
+    process.exit(65);
+  }
+  const issue = args.issue ? normalizeIssueId(args.issue) : null;
+  if (type === 'evidence' && !issue) {
+    process.stderr.write('error: --type evidence requires --issue <ID>\n');
+    process.exit(65);
+  }
+
+  const record = ctx.registry.append({
+    verb: VERBS.BLESS,
+    path: target,
+    issue,
+    agent: ctx.agent,
+    runtime: ctx.runtime,
+    meta: { blessType: type },
+  });
+
+  if (args.json) {
+    process.stdout.write(JSON.stringify({ path: target, type, issue, ts: record.ts }) + '\n');
+  } else {
+    process.stdout.write(`blessed (${type}${issue ? `, ${issue}` : ''}): ${target}\n`);
+  }
+}

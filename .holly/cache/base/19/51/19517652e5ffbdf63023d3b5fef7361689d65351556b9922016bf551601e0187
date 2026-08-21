@@ -1,0 +1,205 @@
+// agent-fs orphans — scan a directory (default /tmp) for entries not in allowlist
+// and not tracked by any session registry under the configured root.
+
+import fs from 'node:fs';
+import path from 'node:path';
+import { loadAllowlist, buildMatcher } from '../allowlist.mjs';
+import { aggregateTrackedPaths, VERBS } from '../registry.mjs';
+import { normalizeIssueId } from '../paths.mjs';
+
+const ADOPT_TYPES = new Set(['evidence', 'scratch', 'session']);
+
+function entrySize(p) {
+  try {
+    const stat = fs.statSync(p);
+    if (stat.isFile()) return stat.size;
+    if (!stat.isDirectory()) return 0;
+    // Cheap directory size: count immediate children only to keep this fast.
+    let total = 0;
+    for (const child of fs.readdirSync(p, { withFileTypes: true })) {
+      try {
+        total += fs.statSync(path.join(p, child.name)).size;
+      } catch {
+        // ignore
+      }
+    }
+    return total;
+  } catch {
+    return 0;
+  }
+}
+
+function ageMs(p) {
+  try {
+    return Date.now() - fs.statSync(p).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
+
+function fmtAge(ms) {
+  const days = ms / 86_400_000;
+  if (days >= 1) return `${days.toFixed(1)}d`;
+  const hours = ms / 3_600_000;
+  if (hours >= 1) return `${hours.toFixed(1)}h`;
+  return `${Math.floor(ms / 60_000)}m`;
+}
+
+function fmtBytes(n) {
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let v = n;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  return `${v.toFixed(v < 10 && i > 0 ? 1 : 0)} ${units[i]}`;
+}
+
+function isAlreadyTracked(target, ctx) {
+  const tracked = aggregateTrackedPaths(ctx.config.root);
+  for (const t of tracked) {
+    if (target === t || target.startsWith(t + path.sep) || t.startsWith(target + path.sep)) {
+      return t;
+    }
+  }
+  return null;
+}
+
+function adoptOrphan(args, ctx) {
+  // Scope guards (per design discussion): one path per invocation, explicit type,
+  // explicit issue when type is evidence. No bulk adoption.
+  const targetArg = args._[0];
+  if (!targetArg) {
+    process.stderr.write(
+      'error: --adopt requires a positional <path> argument\n' +
+        'usage: agent-fs orphans --adopt --type <evidence|scratch|session> [--issue <ID>] [--name <slug>] <path>\n',
+    );
+    process.exit(65);
+  }
+  if (!args.type) {
+    process.stderr.write('error: --adopt requires --type <evidence|scratch|session>\n');
+    process.exit(65);
+  }
+  if (!ADOPT_TYPES.has(args.type)) {
+    process.stderr.write(`error: --type must be one of ${[...ADOPT_TYPES].join(', ')}\n`);
+    process.exit(65);
+  }
+  const issue = args.issue ? normalizeIssueId(args.issue) : null;
+  if (args.type === 'evidence' && !issue) {
+    process.stderr.write('error: --adopt --type evidence requires --issue <ID>\n');
+    process.exit(65);
+  }
+
+  const target = path.resolve(targetArg);
+  if (!fs.existsSync(target)) {
+    process.stderr.write(`error: path does not exist: ${target}\n`);
+    process.exit(69);
+  }
+
+  const allowlist = loadAllowlist(ctx.layout.meta);
+  if (buildMatcher(allowlist)(target)) {
+    process.stderr.write(
+      `error: ${target} is already in the allowlist; no adoption needed.\n` +
+        'remove it from ~/.agent-scratch/_meta/allowlist.json if you want it tracked instead.\n',
+    );
+    process.exit(64);
+  }
+
+  const conflict = isAlreadyTracked(target, ctx);
+  if (conflict) {
+    process.stderr.write(
+      `error: ${target} is already tracked (overlaps ${conflict}); refusing to re-adopt.\n` +
+        'use `agent-fs check-path` to confirm current status.\n',
+    );
+    process.exit(64);
+  }
+
+  const meta = {
+    adoptedVia: 'orphans',
+    adoptType: args.type,
+  };
+  if (args.name) meta.name = args.name;
+
+  const record = ctx.registry.append({
+    verb: VERBS.ADOPT,
+    path: target,
+    issue,
+    agent: ctx.agent,
+    runtime: ctx.runtime,
+    meta,
+  });
+
+  if (args.json) {
+    process.stdout.write(
+      JSON.stringify({ path: target, type: args.type, issue, name: args.name ?? null, ts: record.ts }) + '\n',
+    );
+    return;
+  }
+  process.stdout.write(`adopted (${args.type}${issue ? `, ${issue}` : ''}): ${target}\n`);
+}
+
+export function orphansVerb(args, ctx) {
+  if (args.adopt) {
+    return adoptOrphan(args, ctx);
+  }
+  const scanDir = args.in ?? '/tmp';
+  if (!fs.existsSync(scanDir)) {
+    process.stderr.write(`error: scan directory not found: ${scanDir}\n`);
+    process.exit(69);
+  }
+  const allowlist = loadAllowlist(ctx.layout.meta);
+  const isAllowed = buildMatcher(allowlist);
+  const tracked = aggregateTrackedPaths(ctx.config.root);
+
+  let entries;
+  try {
+    entries = fs.readdirSync(scanDir, { withFileTypes: true });
+  } catch (err) {
+    process.stderr.write(`error: cannot read ${scanDir}: ${err.message}\n`);
+    process.exit(69);
+  }
+
+  const orphans = [];
+  for (const entry of entries) {
+    const full = path.join(scanDir, entry.name);
+    if (isAllowed(full)) continue;
+    let isTracked = false;
+    for (const t of tracked) {
+      if (full === t || t.startsWith(full + path.sep) || full.startsWith(t + path.sep)) {
+        isTracked = true;
+        break;
+      }
+    }
+    if (isTracked) continue;
+    orphans.push({
+      path: full,
+      kind: entry.isDirectory() ? 'dir' : entry.isFile() ? 'file' : 'other',
+      size: entrySize(full),
+      ageMs: ageMs(full),
+    });
+  }
+
+  orphans.sort((a, b) => b.size - a.size);
+
+  if (args.json) {
+    process.stdout.write(JSON.stringify({ scanDir, count: orphans.length, orphans }, null, 2) + '\n');
+    return;
+  }
+
+  if (orphans.length === 0) {
+    process.stdout.write(`no orphans in ${scanDir}\n`);
+    return;
+  }
+  process.stdout.write(`${orphans.length} orphan(s) in ${scanDir} (largest first):\n\n`);
+  for (const o of orphans) {
+    const kind = o.kind.padEnd(4);
+    const size = fmtBytes(o.size).padStart(8);
+    const age = fmtAge(o.ageMs).padStart(6);
+    process.stdout.write(`  ${kind} ${size} ${age}  ${o.path}\n`);
+  }
+  process.stdout.write(
+    `\nuse \`agent-fs orphans --adopt --type evidence --issue <ID> <path>\` to claim a single orphan,\n` +
+      `or \`agent-fs bless <path>\` (alias), or add to allowlist at ${path.join(ctx.layout.meta, 'allowlist.json')}.\n`,
+  );
+}

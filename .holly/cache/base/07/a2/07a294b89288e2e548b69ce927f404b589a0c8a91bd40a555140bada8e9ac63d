@@ -1,0 +1,466 @@
+// agent-fs init — bootstrap session tree, config, allowlist, env script.
+// Optional flags:
+//   --runtime claude-code   install PreToolUse hook into ~/.claude/settings.json
+//   --append-rc             append a source line to ~/.zshrc (idempotent)
+
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import { configPath, writeDefaultConfigIfMissing } from '../config.mjs';
+import { writeDefaultAllowlistIfMissing } from '../allowlist.mjs';
+
+const HERE = fileURLToPath(import.meta.url);
+const SKILL_ROOT = path.resolve(HERE, '..', '..', '..');
+const BIN_PATH = path.join(SKILL_ROOT, 'bin', 'agent-fs');
+const HOOK_SCRIPT = path.join(SKILL_ROOT, 'hooks', 'agent-fs-guard.sh');
+// Stable substring present in BOTH the legacy hardcoded command
+// (`bash <abs>/agent-fs/hooks/agent-fs-guard.sh`) and the resilient form below.
+// Used to detect — and upgrade — an existing registration regardless of where
+// the skill happens to be installed.
+const HOOK_MARKER = 'agent-fs/hooks/agent-fs-guard.sh';
+// Resilient PreToolUse command. Preferred path: dispatch through holly, which
+// resolves the guard bundled inside the holly package via importlib — no
+// hardcoded path, survives uv/wheel/editable installs and python-version bumps.
+// Fallbacks (for environments without holly on PATH): the global install, the
+// project dir, then $PWD; run the first guard script that exists. Exits cleanly
+// if none resolve, so a missing skill never surfaces as a hook error.
+const RESILIENT_HOOK_CMD =
+  'command -v holly >/dev/null 2>&1 && exec holly hooks agent-fs-guard; ' +
+  'for s in "$HOME/.agents/skills/agent-fs/hooks/agent-fs-guard.sh" ' +
+  '"$CLAUDE_PROJECT_DIR/.agents/skills/agent-fs/hooks/agent-fs-guard.sh" ' +
+  '"$PWD/.agents/skills/agent-fs/hooks/agent-fs-guard.sh"; ' +
+  'do [ -f "$s" ] && exec bash "$s"; done; exit 0';
+const ORPHAN_REPORT_SCRIPT = path.join(SKILL_ROOT, 'hooks', 'orphan-report.sh');
+const LAUNCH_AGENTS_DIR = path.join(os.homedir(), 'Library', 'LaunchAgents');
+const ORPHAN_REPORT_LABEL = 'com.agent-fs.orphan-report';
+const ORPHAN_REPORT_PLIST = path.join(LAUNCH_AGENTS_DIR, `${ORPHAN_REPORT_LABEL}.plist`);
+
+const ENV_SH_PATH = path.join(os.homedir(), '.config', 'agent-fs', 'env.sh');
+const ZSHRC_PATH = path.join(os.homedir(), '.zshrc');
+const CLAUDE_SETTINGS = path.join(os.homedir(), '.claude', 'settings.json');
+const CODEX_AGENTS_MD = path.join(os.homedir(), '.codex', 'AGENTS.md');
+
+const CODEX_MARKER_BEGIN = '<!-- agent-fs:begin -->';
+const CODEX_MARKER_END = '<!-- agent-fs:end -->';
+
+const CODEX_BLOCK = `${CODEX_MARKER_BEGIN}
+## Filesystem hygiene — use \`agent-fs\` instead of \`/tmp/\`
+
+When you need to write a file outside the project source tree, use the \`agent-fs\`
+CLI to get a sanctioned, session-scoped, registry-tracked path. **Never write to
+\`/tmp/<anything>\` directly.**
+
+- Disposable computation, temp data: \`$AGENT_FS_BIN scratch <name>\`
+- Screenshots and visual captures: \`$AGENT_FS_BIN scratch <name>\`
+- Explicitly publishable issue artifacts: \`$AGENT_FS_BIN evidence --issue <ID> <name>\`
+- Long-lived per-session state: \`$AGENT_FS_BIN session\`
+
+For local-only tracker workflows, screenshots remain in session scratch and do
+not need to be uploaded or attached. A missing screenshot attachment is not a
+close blocker. Only an explicitly attachment-capable workflow may promote
+selected artifacts into evidence for publication.
+
+Every path-getter prints an absolute path to stdout; wrap in \`$(...)\` and use
+the returned directory as the base for your files:
+
+\`\`\`bash
+SCRATCH="$("$AGENT_FS_BIN" scratch some-task)"
+echo "result" > "$SCRATCH/output.log"
+
+CAPTURES="$("$AGENT_FS_BIN" scratch ui-visual-capture-GRO-881-dashboard-640)"
+playwright screenshot --output "$CAPTURES/mobile.png" ...
+\`\`\`
+
+If \`$AGENT_FS_BIN\` is unset in your shell, run \`source ~/.config/agent-fs/env.sh\`
+or open a new terminal. Run \`agent-fs doctor\` to verify your setup.
+
+Full reference: \`$HOME/.agents/skills/agent-fs/SKILL.md\`.
+${CODEX_MARKER_END}`;
+
+const RC_SOURCE_LINE = `[ -f "$HOME/.config/agent-fs/env.sh" ] && . "$HOME/.config/agent-fs/env.sh"`;
+const RC_MARKER = '# agent-fs env';
+
+const ENV_SH_CONTENT = `#!/bin/sh
+# agent-fs environment — sourced from your shell rc.
+# Establishes AGENT_FS_BIN, prepends the bin dir to PATH, and — only when an
+# agent runtime env var is in scope — exports the session-tied AGENT_*_DIR /
+# TMPDIR redirects. Skipping the eval in plain shells prevents stale session
+# IDs from bleeding into agent processes launched later from the same shell.
+export AGENT_FS_BIN=${shQuote(BIN_PATH)}
+# Self-heal: the baked path above points at the agent-fs bundled in the holly
+# package. If holly was upgraded/moved and that path no longer resolves,
+# re-resolve it through holly (no hardcoded path) instead of dangling.
+if [ ! -x "\$AGENT_FS_BIN" ] && command -v holly >/dev/null 2>&1; then
+  _afs_dir="\$(holly skills path agent-fs 2>/dev/null)"
+  if [ -n "\$_afs_dir" ] && [ -x "\$_afs_dir/bin/agent-fs" ]; then
+    export AGENT_FS_BIN="\$_afs_dir/bin/agent-fs"
+  fi
+  unset _afs_dir
+fi
+case ":\$PATH:" in
+  *":$(dirname "\$AGENT_FS_BIN"):"*) ;;
+  *) export PATH="$(dirname "\$AGENT_FS_BIN"):\$PATH" ;;
+esac
+if [ -x "\$AGENT_FS_BIN" ] && [ -n "\${AGENT_FS_SESSION_ID-}\${CLAUDE_CODE_SESSION_ID-}\${PAPERCLIP_RUN_ID-}\${CODEX_SESSION_ID-}\${COPILOT_CLI_SESSION_ID-}\${WARP_SESSION_ID-}" ]; then
+  eval "\$("\$AGENT_FS_BIN" env 2>/dev/null)" || true
+fi
+`;
+
+function shQuote(s) {
+  return `'${String(s).replace(/'/g, `'\\''`)}'`;
+}
+
+function ensureDirs(layout) {
+  for (const dir of [
+    layout.root,
+    layout.session,
+    layout.tmp,
+    layout.scratch,
+    layout.evidence,
+    layout.sessionState,
+    layout.logs,
+    layout.meta,
+  ]) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+}
+
+function touchRegistry(registryPath) {
+  if (!fs.existsSync(registryPath)) {
+    fs.writeFileSync(registryPath, '');
+  }
+}
+
+function writeEnvSh() {
+  fs.mkdirSync(path.dirname(ENV_SH_PATH), { recursive: true });
+  fs.writeFileSync(ENV_SH_PATH, ENV_SH_CONTENT, { mode: 0o644 });
+}
+
+function appendRcSourceLine() {
+  let body = '';
+  if (fs.existsSync(ZSHRC_PATH)) {
+    body = fs.readFileSync(ZSHRC_PATH, 'utf8');
+  }
+  if (body.includes(RC_MARKER) || body.includes(RC_SOURCE_LINE)) {
+    return { changed: false, path: ZSHRC_PATH };
+  }
+  const suffix = (body.endsWith('\n') || body === '' ? '' : '\n') + `\n${RC_MARKER}\n${RC_SOURCE_LINE}\n`;
+  fs.appendFileSync(ZSHRC_PATH, suffix);
+  return { changed: true, path: ZSHRC_PATH };
+}
+
+function loadClaudeSettings() {
+  if (!fs.existsSync(CLAUDE_SETTINGS)) {
+    return { exists: false, settings: {} };
+  }
+  try {
+    return { exists: true, settings: JSON.parse(fs.readFileSync(CLAUDE_SETTINGS, 'utf8')) };
+  } catch (err) {
+    process.stderr.write(`error: failed to parse ${CLAUDE_SETTINGS}: ${err.message}\n`);
+    process.exit(69);
+  }
+}
+
+function installCodexAddendum() {
+  if (!fs.existsSync(path.dirname(CODEX_AGENTS_MD))) {
+    process.stderr.write(
+      `error: ${path.dirname(CODEX_AGENTS_MD)} does not exist; is Codex installed?\n`,
+    );
+    process.exit(69);
+  }
+  let body = '';
+  if (fs.existsSync(CODEX_AGENTS_MD)) {
+    body = fs.readFileSync(CODEX_AGENTS_MD, 'utf8');
+  }
+  // Idempotent update: if the marker block already exists, replace it in-place
+  // so re-running init refreshes the block content. Otherwise append.
+  if (body.includes(CODEX_MARKER_BEGIN)) {
+    const startIdx = body.indexOf(CODEX_MARKER_BEGIN);
+    const endIdx = body.indexOf(CODEX_MARKER_END, startIdx);
+    if (endIdx === -1) {
+      // Corrupt block (begin without end). Replace from begin to end-of-file.
+      body = body.slice(0, startIdx) + CODEX_BLOCK + '\n';
+    } else {
+      const beforeBlock = body.slice(0, startIdx);
+      const afterBlock = body.slice(endIdx + CODEX_MARKER_END.length);
+      body = beforeBlock + CODEX_BLOCK + afterBlock;
+    }
+    fs.writeFileSync(CODEX_AGENTS_MD, body);
+    return { changed: 'refreshed', path: CODEX_AGENTS_MD };
+  }
+  const suffix = (body.endsWith('\n') || body === '' ? '' : '\n') + '\n' + CODEX_BLOCK + '\n';
+  fs.appendFileSync(CODEX_AGENTS_MD, suffix);
+  return { changed: 'appended', path: CODEX_AGENTS_MD };
+}
+
+function buildOrphanReportPlist(hour, minute) {
+  // Minimal launchd plist. StartCalendarInterval omits Weekday/Day so the
+  // job fires daily at the configured time. StandardOutPath/ErrorPath log to
+  // the sanctioned _meta/orphan-reports/ dir; the wrapper script handles
+  // mkdir + pruning.
+  const logDir = path.join(os.homedir(), '.agent-scratch', '_meta', 'orphan-reports');
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${ORPHAN_REPORT_LABEL}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>${ORPHAN_REPORT_SCRIPT}</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>AGENT_FS_BIN</key>
+    <string>${BIN_PATH}</string>
+    <key>HOME</key>
+    <string>${os.homedir()}</string>
+  </dict>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>${hour}</integer>
+    <key>Minute</key>
+    <integer>${minute}</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>${path.join(logDir, 'launchd.stdout.log')}</string>
+  <key>StandardErrorPath</key>
+  <string>${path.join(logDir, 'launchd.stderr.log')}</string>
+  <key>RunAtLoad</key>
+  <false/>
+</dict>
+</plist>
+`;
+}
+
+function scheduleOrphanReport({ hour = 3, minute = 30 } = {}) {
+  if (!fs.existsSync(ORPHAN_REPORT_SCRIPT)) {
+    process.stderr.write(`error: orphan-report wrapper missing at ${ORPHAN_REPORT_SCRIPT}\n`);
+    process.exit(69);
+  }
+  fs.mkdirSync(LAUNCH_AGENTS_DIR, { recursive: true });
+  const plist = buildOrphanReportPlist(hour, minute);
+  const alreadyMatches =
+    fs.existsSync(ORPHAN_REPORT_PLIST) && fs.readFileSync(ORPHAN_REPORT_PLIST, 'utf8') === plist;
+  if (!alreadyMatches) {
+    fs.writeFileSync(ORPHAN_REPORT_PLIST, plist);
+  }
+  // Reload via launchctl: unload (may fail if not loaded — that's fine) then
+  // load to apply changes safely.
+  spawnSync('launchctl', ['unload', ORPHAN_REPORT_PLIST], { encoding: 'utf8' });
+  const load = spawnSync('launchctl', ['load', ORPHAN_REPORT_PLIST], { encoding: 'utf8' });
+  if (load.status !== 0) {
+    return {
+      changed: 'plist-written-but-load-failed',
+      path: ORPHAN_REPORT_PLIST,
+      error: (load.stderr || load.stdout || '').trim(),
+    };
+  }
+  return { changed: alreadyMatches ? 'reloaded' : 'installed', path: ORPHAN_REPORT_PLIST };
+}
+
+function unscheduleOrphanReport() {
+  if (!fs.existsSync(ORPHAN_REPORT_PLIST)) {
+    return { changed: 'not-present' };
+  }
+  spawnSync('launchctl', ['unload', ORPHAN_REPORT_PLIST], { encoding: 'utf8' });
+  fs.unlinkSync(ORPHAN_REPORT_PLIST);
+  return { changed: 'removed', path: ORPHAN_REPORT_PLIST };
+}
+
+const VSCODE_USER_SETTINGS = path.join(
+  os.homedir(),
+  'Library',
+  'Application Support',
+  'Code',
+  'User',
+  'settings.json',
+);
+const CURSOR_USER_SETTINGS = path.join(
+  os.homedir(),
+  'Library',
+  'Application Support',
+  'Cursor',
+  'User',
+  'settings.json',
+);
+
+function installVscodeEnv(settingsPath) {
+  if (!fs.existsSync(settingsPath)) {
+    return { changed: 'skipped-missing', path: settingsPath };
+  }
+  let body;
+  try {
+    body = fs.readFileSync(settingsPath, 'utf8');
+  } catch (err) {
+    return { changed: 'read-failed', path: settingsPath, error: err.message };
+  }
+  // VS Code settings.json supports JSON-with-comments. Use a tolerant parse:
+  // strip line comments, /* */ block comments, and trailing commas. (Best-effort.)
+  const sansLineComments = body.replace(/(^|[^:])\/\/.*$/gm, '$1');
+  const sansBlockComments = sansLineComments.replace(/\/\*[\s\S]*?\*\//g, '');
+  const sansTrailingCommas = sansBlockComments.replace(/,(\s*[}\]])/g, '$1');
+  let settings;
+  try {
+    settings = JSON.parse(sansTrailingCommas);
+  } catch (err) {
+    return { changed: 'parse-failed', path: settingsPath, error: err.message };
+  }
+  settings['terminal.integrated.env.osx'] = settings['terminal.integrated.env.osx'] ?? {};
+  const existing = settings['terminal.integrated.env.osx']['AGENT_FS_BIN'];
+  if (existing === BIN_PATH) {
+    return { changed: 'already-set', path: settingsPath };
+  }
+  settings['terminal.integrated.env.osx']['AGENT_FS_BIN'] = BIN_PATH;
+  // Preserve comments? Not feasible without a proper jsonc parser. We
+  // overwrite with pretty JSON; the user can re-add comments if needed.
+  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
+  return { changed: existing ? 'updated' : 'added', path: settingsPath };
+}
+
+function installClaudeHook() {
+  if (!fs.existsSync(HOOK_SCRIPT)) {
+    process.stderr.write(`error: hook script missing at ${HOOK_SCRIPT}; was the skill installed correctly?\n`);
+    process.exit(69);
+  }
+  const { settings } = loadClaudeSettings();
+  settings.hooks ??= {};
+  settings.hooks.PreToolUse ??= [];
+  const hookCmd = RESILIENT_HOOK_CMD;
+  // Idempotency + self-heal: an entry referencing the guard (matched on the
+  // stable HOOK_MARKER, which both the legacy `bash <abs>` form and the
+  // resilient form contain) is upgraded in place to the resilient command.
+  // Older installs hardcoded the absolute global path, which errors the hook
+  // when the skill is only installed project-local (holly-s95).
+  for (const entry of settings.hooks.PreToolUse) {
+    if (!entry?.hooks) continue;
+    for (const h of entry.hooks) {
+      if (h?.command && h.command.includes(HOOK_MARKER)) {
+        if (h.command === hookCmd) {
+          return { changed: false, path: CLAUDE_SETTINGS };
+        }
+        h.command = hookCmd;
+        fs.mkdirSync(path.dirname(CLAUDE_SETTINGS), { recursive: true });
+        fs.writeFileSync(CLAUDE_SETTINGS, JSON.stringify(settings, null, 2) + '\n');
+        return { changed: true, path: CLAUDE_SETTINGS, upgraded: true };
+      }
+    }
+  }
+  settings.hooks.PreToolUse.push({
+    matcher: '',
+    hooks: [{ type: 'command', command: hookCmd }],
+  });
+  fs.mkdirSync(path.dirname(CLAUDE_SETTINGS), { recursive: true });
+  fs.writeFileSync(CLAUDE_SETTINGS, JSON.stringify(settings, null, 2) + '\n');
+  return { changed: true, path: CLAUDE_SETTINGS };
+}
+
+export function initVerb(args, ctx) {
+  const report = {
+    config: configPath(),
+    sessionId: ctx.sessionId,
+    sessionSource: ctx.sessionSource,
+    runtime: ctx.runtime,
+    actions: [],
+    paths: {
+      root: ctx.layout.root,
+      session: ctx.layout.session,
+      scratch: ctx.layout.scratch,
+      evidence: ctx.layout.evidence,
+      sessionState: ctx.layout.sessionState,
+      tmp: ctx.layout.tmp,
+      logs: ctx.layout.logs,
+      meta: ctx.layout.meta,
+      registry: ctx.layout.registry,
+      envSh: ENV_SH_PATH,
+      bin: BIN_PATH,
+    },
+  };
+
+  ensureDirs(ctx.layout);
+  report.actions.push('directories ensured');
+
+  if (writeDefaultConfigIfMissing()) report.actions.push('wrote default config');
+  if (writeDefaultAllowlistIfMissing(ctx.layout.meta)) report.actions.push('wrote default allowlist');
+  touchRegistry(ctx.layout.registry);
+  report.actions.push('registry initialized');
+
+  writeEnvSh();
+  report.actions.push(`wrote env.sh (${ENV_SH_PATH})`);
+
+  if (args['append-rc']) {
+    const r = appendRcSourceLine();
+    report.actions.push(r.changed ? `appended source line to ${r.path}` : `rc source line already present in ${r.path}`);
+  }
+
+  if (args.runtime === 'claude-code') {
+    const r = installClaudeHook();
+    report.actions.push(
+      r.upgraded
+        ? `upgraded Claude Code PreToolUse hook to resilient form in ${r.path}`
+        : r.changed
+          ? `registered Claude Code PreToolUse hook in ${r.path}`
+          : `Claude Code hook already registered in ${r.path}`,
+    );
+  } else if (args.runtime === 'codex') {
+    const r = installCodexAddendum();
+    report.actions.push(`Codex AGENTS.md addendum ${r.changed} at ${r.path}`);
+  } else if (args.runtime === 'vscode') {
+    const r1 = installVscodeEnv(VSCODE_USER_SETTINGS);
+    report.actions.push(`VS Code settings.json: ${r1.changed} at ${r1.path}${r1.error ? ` (${r1.error})` : ''}`);
+    const r2 = installVscodeEnv(CURSOR_USER_SETTINGS);
+    if (r2.changed !== 'skipped-missing') {
+      report.actions.push(`Cursor settings.json: ${r2.changed} at ${r2.path}${r2.error ? ` (${r2.error})` : ''}`);
+    }
+  } else if (args.runtime === 'warp') {
+    // Warp inherits AGENT_FS_BIN/PATH from the parent shell (~/.zshrc → env.sh).
+    // There is no Warp-specific config to write; confirm the user did the rc step.
+    const rc = path.join(os.homedir(), '.zshrc');
+    const sourced = fs.existsSync(rc) && fs.readFileSync(rc, 'utf8').includes('agent-fs/env.sh');
+    report.actions.push(
+      sourced
+        ? 'Warp: no extra config needed — env.sh is sourced from ~/.zshrc'
+        : 'Warp: rerun init with --append-rc to wire ~/.zshrc (or add the source line manually)',
+    );
+  } else if (args.runtime) {
+    process.stderr.write(`warning: --runtime ${args.runtime} not implemented yet; skipping runtime-specific install.\n`);
+  }
+
+  // The parser converts `--no-schedule-orphan-report` into `schedule-orphan-report: false`.
+  // Treat explicit false as uninstall; true as install; undefined as no-op.
+  if (args['schedule-orphan-report'] === true) {
+    const r = scheduleOrphanReport({ hour: 3, minute: 30 });
+    report.actions.push(`orphan-report launchd ${r.changed} at ${r.path}${r.error ? ` (${r.error})` : ''}`);
+  } else if (args['schedule-orphan-report'] === false) {
+    const r = unscheduleOrphanReport();
+    report.actions.push(`orphan-report launchd ${r.changed}${r.path ? ` at ${r.path}` : ''}`);
+  }
+
+  if (args.json) {
+    process.stdout.write(JSON.stringify(report, null, 2) + '\n');
+    return;
+  }
+
+  process.stdout.write(`agent-fs initialised\n`);
+  process.stdout.write(`  session       : ${ctx.sessionId} (${ctx.sessionSource})\n`);
+  process.stdout.write(`  runtime       : ${ctx.runtime}\n`);
+  process.stdout.write(`  scratch root  : ${ctx.layout.root}\n`);
+  process.stdout.write(`  session dir   : ${ctx.layout.session}\n`);
+  process.stdout.write(`  env script    : ${ENV_SH_PATH}\n`);
+  process.stdout.write(`  bin           : ${BIN_PATH}\n\n`);
+  for (const action of report.actions) {
+    process.stdout.write(`  • ${action}\n`);
+  }
+  if (!args['append-rc']) {
+    process.stdout.write(`\nnext step: add the following line to your shell rc (or rerun with --append-rc):\n`);
+    process.stdout.write(`  ${RC_SOURCE_LINE}\n`);
+  }
+  if (!args.runtime) {
+    process.stdout.write(`\nfor Claude Code enforcement, rerun: agent-fs init --runtime claude-code\n`);
+  }
+}

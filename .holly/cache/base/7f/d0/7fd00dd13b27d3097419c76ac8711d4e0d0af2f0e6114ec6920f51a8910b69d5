@@ -1,0 +1,124 @@
+# yaml-language-server: $schema=../schemas/workflow.schema.json
+
+name: Zero Problems
+description: >-
+  Zero out all errors in the VS Code Problems panel (get_errors). Triages
+  every error by file location, fixes workspace files, and asks the user
+  what to do with external files (delete, ignore, or move into project).
+
+  Auto-iterates up to 3 fix-check cycles per file. If errors persist after
+  3 cycles, escalates to the user with a detailed report.
+
+  Worker delegation is tiered by complexity (bounded runSubagent swarm agents):
+  - swarm-tiny-implementation: simple type annotations, missing imports, trivial fixes
+  - swarm-standard-implementation: multi-line logic changes, refactors, complex type issues
+  - swarm-senior-implementation: architectural problems, cross-file dependencies, design flaws
+
+  Commits per-file after each successful fix.
+
+  Composable: can be invoked standalone via `/run-workflow zero-problems`
+  or referenced as a quality gate step in other workflows' postflight.
+
+preflight:
+  - prompt: >-
+      Call get_errors (with no file filter) to capture the COMPLETE list of
+      errors from the VS Code Problems panel. Parse the output into a
+      structured inventory:
+
+      For each file with errors, record:
+        (a) absolute file path
+        (b) whether it is INSIDE the workspace or EXTERNAL (outside workspace root)
+        (c) number of errors
+        (d) the full text of each error (line number, code snippet, error message)
+
+      If the problems panel is already empty (zero errors), report
+      "Zero problems -- nothing to fix" and STOP. Skip all remaining steps.
+
+  - prompt: >-
+      Triage the error inventory into two buckets:
+
+      1. WORKSPACE FILES -- files inside the project workspace. These will be
+         fixed in the main steps.
+
+      2. EXTERNAL FILES -- files outside the workspace (system temp, other
+         projects, or generated artifacts). For EACH external file, ask the user:
+         "File <path> is outside the workspace and has N error(s). Action?"
+           - Delete: remove the file
+           - Ignore: skip it, leave as-is
+           - Move: move it into the workspace (ask user where)
+
+      Execute the user's chosen action for each external file immediately.
+      After resolving all external files, the remaining work list should
+      contain only workspace files.
+
+steps:
+  - prompt: >-
+      For each workspace file in the triage list, assess the complexity of
+      its errors and assign a worker:
+
+      - SIMPLE errors (missing type annotations, unused imports, trivial
+        syntax issues, single-line fixes) -- delegate to
+        swarm-tiny-implementation
+
+      - COMPLEX errors (multi-line logic changes, type system refactors,
+        function signature changes, parameter type mismatches) -- delegate
+        to swarm-standard-implementation
+
+      - ARCHITECTURAL errors (cross-file dependency issues, design pattern
+        violations, module-level restructuring needed) -- delegate to
+        swarm-senior-implementation
+
+      Build a fix plan: for each file, list the assigned swarm agent, the
+      errors to fix, and the approach. Present the plan before executing.
+      Before dispatch, run the swarm dispatch-preflight gate (resolve the
+      capability tier vs available model strength; escalate if a required
+      senior tier is unavailable rather than fixing architecture on an
+      under-powered model).
+
+  - prompt: >-
+      Execute the fix plan. For each file, in order:
+
+      1. Delegate the fix to the assigned worker via runSubagent. Include in
+         the handoff: the file path, the exact error text(s), the surrounding
+         code context, and clear acceptance criteria ("the error must not
+         appear in get_errors after the fix").
+
+      2. After the worker returns, call get_errors on that specific file to
+         verify the fix resolved the error(s).
+
+      3. If errors remain on that file, re-delegate to the SAME worker with
+         the updated error text (iteration 2 of 3). Repeat up to 3 total
+         attempts per file.
+
+      4. If errors STILL remain after 3 iterations, escalate to the user:
+         "File <path> still has N error(s) after 3 fix attempts. Errors:
+         <details>. Manual intervention needed."
+
+      5. If the fix is clean (zero errors on that file), commit the change:
+         `holly task exec_in_current_task_worktree -- git add <file> && holly task exec_in_current_task_worktree -- git commit -m "fix(<scope>): resolve <error-type> in <filename>"`
+
+      Track progress with manage_todo_list -- one todo item per file.
+
+postflight:
+  - prompt: >-
+      Run get_errors one final time with no file filter to capture the
+      complete state of the Problems panel.
+
+      Report a summary:
+        - Files fixed: N
+        - Files escalated: N (with details)
+        - External files resolved: N (deleted/ignored/moved)
+        - Remaining errors: N
+
+      If remaining errors is zero, print "Zero problems achieved."
+      If remaining errors is non-zero, list them clearly for the user.
+    category: quality
+
+hooks:
+  afterEach:
+    prompt: >-
+      After each main step, read the current error count by calling
+      get_errors. If new errors have been INTRODUCED by a fix (error
+      count increased), flag this immediately and include the new errors
+      in the next step's context.
+    category: quality

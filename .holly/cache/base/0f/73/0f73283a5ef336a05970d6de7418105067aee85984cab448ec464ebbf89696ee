@@ -1,0 +1,121 @@
+# Swarm agent routing manifest.
+#
+# This is the machine-readable source of truth for swarm agent routing. Agent
+# markdown files (swarm-*.agent.md) carry the human-readable worker
+# instructions; this manifest carries the routing metadata the Orchestrator and
+# tests depend on. The two MUST stay aligned (enforced by tests in holly-797.5).
+#
+# Validated against swarm-agents.manifest.schema.json.
+#
+# Field meanings:
+#   capability_tier                  Role/tier identifier.
+#   preferred_model_family           Hint for the Orchestrator's first choice.
+#   minimum_model_strength           Floor strength from model-capability-tiers.yaml
+#                                    (any|standard|senior). Dispatch is blocked
+#                                    below this unless a valid fallback applies.
+#   fallback_allowed                 May a weaker-but-sufficient model be used?
+#   fallback_requires_explicit_report  Final report must declare fallback usage.
+#   fallback_unavailable_action      Required when fallback_allowed is false.
+#   edit_permission                  May the agent edit files?
+#   close_permission                 May the agent close/release issues? (always false)
+#   merge_permission                 May the agent merge to main? (always false)
+#   max_files / max_changed_lines    Hard envelope for implementation agents.
+#   requires_browser_tool            UI-browser tier only.
+#   browser_unavailable_visual_proof Behaviour when browser missing + proof required.
+#   browser_unavailable_no_visual_proof Behaviour when browser missing + no proof needed.
+
+agents:
+  swarm-tiny-implementation:
+    capability_tier: tiny_implementation
+    preferred_model_family: cheapest_available
+    minimum_model_strength: any
+    fallback_allowed: true
+    fallback_requires_explicit_report: true
+    edit_permission: true
+    close_permission: false
+    merge_permission: false
+    max_files: 2
+    max_changed_lines: 120
+
+  swarm-standard-implementation:
+    capability_tier: standard_implementation
+    preferred_model_family: standard
+    minimum_model_strength: standard
+    fallback_allowed: true
+    fallback_requires_explicit_report: true
+    edit_permission: true
+    close_permission: false
+    merge_permission: false
+    max_files: 4
+    max_changed_lines: 250
+
+  swarm-senior-implementation:
+    capability_tier: senior_implementation
+    preferred_model_family: senior
+    minimum_model_strength: senior
+    fallback_allowed: false
+    fallback_unavailable_action: escalate
+    fallback_requires_explicit_report: true
+    edit_permission: true
+    close_permission: false
+    merge_permission: false
+    max_files: 8
+    max_changed_lines: 600
+
+  swarm-principal-implementation:
+    capability_tier: principal_implementation
+    preferred_model_family: principal
+    minimum_model_strength: principal
+    fallback_allowed: false
+    fallback_unavailable_action: escalate
+    fallback_requires_explicit_report: true
+    edit_permission: true
+    close_permission: false
+    merge_permission: false
+    max_files: 12
+    max_changed_lines: 900
+
+  swarm-ui-browser-implementation:
+    capability_tier: ui_browser_implementation
+    preferred_model_family: standard
+    minimum_model_strength: standard
+    requires_browser_tool: true
+    browser_unavailable_visual_proof: escalate
+    browser_unavailable_no_visual_proof: proceed_with_limitation_note
+    fallback_allowed: true
+    fallback_requires_explicit_report: true
+    edit_permission: true
+    close_permission: false
+    merge_permission: false
+    max_files: 4
+    max_changed_lines: 250
+
+  swarm-reviewer:
+    capability_tier: standard_review
+    preferred_model_family: standard
+    minimum_model_strength: standard
+    fallback_allowed: true
+    fallback_requires_explicit_report: true
+    edit_permission: false
+    close_permission: false
+    merge_permission: false
+
+  swarm-senior-reviewer:
+    capability_tier: senior_review
+    preferred_model_family: senior
+    minimum_model_strength: senior
+    fallback_allowed: false
+    fallback_unavailable_action: escalate
+    edit_permission: false
+    close_permission: false
+    merge_permission: false
+
+  swarm-principal-reviewer:
+    capability_tier: principal_review
+    preferred_model_family: principal
+    minimum_model_strength: principal
+    fallback_allowed: false
+    fallback_unavailable_action: escalate
+    edit_permission: false
+    close_permission: false
+    merge_permission: false

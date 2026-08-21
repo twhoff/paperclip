@@ -1,0 +1,453 @@
+---
+name: holly
+description: >-
+  Base bootstrap skill for the Holly live orchestration platform. Use when the
+  user asks for /holly, asks to bootstrap Holly, or asks to prepare
+  orchestration for an issue such as "Prepare to orchestrate ACME-492". Validates
+  installation, verifies adapter context, boots Holly runtime readiness,
+  analyses task scope, and prepares bounded runSubagent swarm delivery.
+---
+
+# Holly
+
+> ## ⛔ MANDATORY SKILL READS — NON-NEGOTIABLE, STOP IMMEDIATELY IF MISSING
+>
+> **EVERY agent bootstrapping Holly MUST load all mandatory skills below.
+> This is non-negotiable and enforced: if any mandatory skill is missing,
+> STOP THE RUN IMMEDIATELY and report which skill is missing.**
+>
+> Do not proceed without them. Do not skip. Do not guess. Do not invent
+> workarounds. Skipping this is not a shortcut — it will cost more tokens
+> than reading the skills, because you will re-invent tooling that the
+> skills already provide.
+>
+> **Mandatory skills (no exceptions, load before ANY other action):**
+>
+> | File                                                | What it gives you                                                                                    |
+> | --------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+> | `issue-tracker/SKILL.md`                            | Issue CRUD, board state, verdict posting                                                             |
+> | active tracker addendum skill                       | Every tracker command verb for the current adapter                                                   |
+> | `agent-fs/SKILL.md`                                 | **CRITICAL: File write registry and sanctioned paths. ALL file mutations depend on this.**            |
+> | `ui-visual-capture/SKILL.md`                        | One CLI that captures all 4 viewports in parallel; replaces all manual Playwright browser tool calls |
+> | project tracker CLI skill, if the project ships one | Board queries, status updates, comments, and local tracker ergonomics                                |
+> | **role-based skill matrix (see step 2 below)**      | Tier 1 common skills — EVERY agent MUST load these + Tier 2/3 and surface specializations           |
+>
+> **STOP IMMEDIATELY if any skill above is missing or cannot be loaded.**
+> Do not start bootstrap step 1 until:
+> - Every mandatory skill file above is open in context
+> - You have classified the agent against the role-based matrix in bootstrap step 2
+> - You have confirmed `agent-fs` is loaded and ready
+>
+> This role-based matrix is the canonical skill floor: the Orchestrator and
+> every dispatched worker classify against the same matrix and load the same
+> baseline skills before substantive work begins. Non-compliance breaks the
+> delivery contract.
+>
+> **Example of non-compliance:** If you skip `agent-fs` or `ui-visual-capture`
+> and then manually call `browser_resize`, `browser_take_screenshot`, write
+> to `/tmp`, or use raw file paths, you are breaking the system. Read the
+> skills. Use the CLIs. This is not optional.
+
+---
+
+Adapter-agnostic bootstrap entrypoint for running Holly in any IDE or runtime.
+This skill does not encode tracker-specific command verbs. It determines the
+active adapter, then routes to the appropriate adapter addendum through the
+issue-tracker skill.
+
+## What This Skill Owns
+
+Use this skill to prepare live orchestration end-to-end:
+
+1. Validate Holly installation and runtime context.
+2. Confirm the active tracker adapter and load adapter-specific guidance.
+3. Bootstrap session readiness.
+4. Analyse the user task and select the right workflow.
+5. For multi-agent work, plan swarm delivery: decompose the epic, run the
+   granularity gate, and prepare bounded `runSubagent` / `spawn_agent`
+   dispatch via the `orchestrate-swarm` workflow.
+
+## Trigger Phrases
+
+Activate this skill when requests include language like:
+
+- `/holly`
+- `bootstrap holly`
+- `prepare to orchestrate <issue-id>`
+- `set up live orchestration`
+- `start multi-agent delivery`
+
+## Bootstrap Protocol
+
+### 1) Validate installation and version source
+
+Run a fast environment check before orchestration:
+
+```bash
+holly validate
+holly tracker info
+holly skills list
+```
+
+Then verify the installed package path and version:
+
+```bash
+HOLLY_BIN="$(command -v holly)"
+ls -l "$HOLLY_BIN"
+
+HOLLY_REAL_BIN="$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$HOLLY_BIN")"
+HOLLY_PY="$(cd "$(dirname "$HOLLY_REAL_BIN")" && pwd)/python"
+"$HOLLY_PY" -c '
+import holly
+from pathlib import Path
+from importlib.metadata import version
+print("holly_version=" + version("holly"))
+print("holly_path=" + str(Path(holly.__file__).resolve()))
+'
+```
+
+Do not assume `python` or `python3` can import `holly`. A uv-installed Holly
+tool often exposes a PATH symlink while the package environment lives beside
+the resolved launcher, so canonicalize that launcher before selecting its
+sibling interpreter. This is not Codex-specific.
+
+If the user expects the local checkout at `../holly` to be active, compare the
+reported package path with that checkout and stop to fix environment drift
+before planning delivery.
+
+### 2) Detect adapter and load the correct skill set
+
+Read the active adapter first:
+
+```bash
+holly tracker info
+```
+
+#### Mandatory skills (always load, regardless of task)
+
+Load these on every `/holly` invocation before doing anything else:
+
+| Skill                                 | Source          | Purpose                                                               |
+| ------------------------------------- | --------------- | --------------------------------------------------------------------- |
+| `issue-tracker`                       | holly package   | Issue CRUD, board state, verdict posting                              |
+| active tracker addendum               | adapter package | Adapter-specific commands and tracker verbs                           |
+| `ui-visual-capture`                   | holly package   | Screenshot capture for UI evidence and reviews                        |
+| project tracker CLI skill, if present | project skill   | Board queries, status updates, comments, and local tracker ergonomics |
+
+Load the active adapter addendum immediately after reading `issue-tracker/SKILL.md`.
+The active tracker addendum is the authoritative source for all
+tracker-specific command syntax.
+
+If the adapter's tracker CLI reports project or company context errors, stop
+guessing and consult the active tracker addendum for the exact bootstrap or
+priming command before treating the output as a real blocker.
+
+#### Role-based skill matrix (load matching tiers + specializations)
+
+In addition to the Holly-specific table above, every agent — the Orchestrator
+running `/holly` AND every worker the Orchestrator dispatches — MUST classify
+against the role-based matrix below and load the corresponding skills before
+substantive work begins. This matrix is the canonical floor; agent-specific
+`desiredSkills` extend it but never substitute for it.
+
+The matrix has two axes: **role tiers** (Common / Engineering / Reviewer) and
+**surface specializations** (Frontend / Backend). Specializations are
+orthogonal overlays — load whichever apply to the work _this run_, not just
+your nominal role.
+
+**Tier 1 — Common (ALL agents, every role):**
+
+- `issue-tracker` — the active tracker adapter's operator surface
+  (claim / checkout, status updates, comments, board state); load the
+  matching adapter addendum for the concrete command verbs.
+- `agent-sessions` — required whenever the runtime has session-gated
+  terminal or write tools.
+- `agent-fs` — sanctioned filesystem paths. **Hard dependency of every
+  skill that writes evidence, screenshots, or scratch artifacts**
+  (notably `ui-visual-capture`, `live-session-capture`, `webapp-testing`).
+- `use-workflow` — declarative YAML workflows under `workflows/`. Required
+  to execute named workflows like `review-implementation`, `commit`,
+  `track`.
+- `ax-commandments` — the 10 AX (Agent Experience) commandments.
+  Mandatory rules governing tool design, modification, and usage.
+- `agent-chat` — Holly chat CLI for agent-to-agent communication, status
+  posting, and coordination. Required whenever an agent needs to communicate
+  outside its local context.
+- `second-brain` — shared cross-agent memory at `~/.memory/`. **Must be
+  read before commencing a task and written to after non-obvious
+  learnings.**
+- `qmd:qmd` — context-mode search over the local QMD knowledge base
+  (operator-memory + agent-home collections). Required for cross-document
+  recall during planning and audit work.
+
+**Tier 2 — Engineering (Lead Engineer, Principal Engineers, anyone shipping
+code commits):**
+
+- `test-driven-development` — TDD always, before any implementation code.
+- `adr-skill` — Architecture Decision Records. Architecture decisions
+  live here and MUST be consulted + honoured.
+- `systematic-debugging` — required before proposing fixes for any bug,
+  test failure, or unexpected behaviour.
+
+**Tier 3 — Reviewer (QA Lead, UI/UX Advisor, anyone running a review pass):**
+
+- `ui-visual-capture` — required for any review touching UI / frontend
+  surfaces. Hard dependency on `agent-fs` (Tier 1).
+- `webapp-testing` — Playwright + frontend test reference for
+  reviewer-side replay and live-interaction proof.
+- The `workflows/review-implementation.yaml` workflow (executed via
+  `use-workflow`) — the review-standards source of truth.
+
+**Specialization F — Frontend** (load when ANY work this run touches
+`frontend/**`, UI surfaces, design tokens, components, routes, or styles —
+whether you're implementing, reviewing, or auditing):
+
+- project design-system skill (e.g. `groceries-design-system`) — the
+  canonical component registry + design tokens for the active project, when
+  one exists.
+- `typescript-advanced-types` — TS type-system reference; required for any
+  non-trivial TypeScript work.
+- `atomic-design-fundamentals` — quarks → atoms → molecules → organisms →
+  templates → pages hierarchy.
+- `design-system-patterns` — design tokens, theming, component
+  architecture.
+- `next-best-practices` — Next.js conventions for file structure, RSC
+  boundaries, data patterns, async APIs, metadata, error handling.
+- `next-cache-components` — Next 16 Cache Components: PPR, `use cache`,
+  `cacheLife`, `cacheTag`, `updateTag`.
+- `tailwind-v4` — Tailwind v4 utility classes, dark mode, responsive
+  patterns, component composition.
+- `tailwind-design-system` — scalable design systems with Tailwind v4 and
+  design tokens.
+- `ui-visual-capture` — visual feedback loop for ALL frontend UI work.
+  Hard dependency on `agent-fs` (Tier 1).
+- `webapp-testing` — Playwright + frontend test patterns.
+
+**Specialization B — Backend** (load when ANY work this run touches
+`backend/**`, Python services, migrations, schemas, or CLI tools — whether
+you're implementing, reviewing, or auditing):
+
+- `python-expert` — senior Python developer expertise for clean,
+  efficient, well-documented code; PEP 8; debugging.
+- `python-patterns` — Pythonic idioms, type hints, PEP 8, robust +
+  efficient patterns.
+- `python-testing` — pytest expertise + TDD for Python.
+- `rich-cli-capture` — capture CLI output as SVG using Rich's export
+  pipeline. Required for any CLI artifact that needs review evidence.
+
+**Detection rules for the specialization overlay** (apply for this run, not
+just nominal role):
+
+- Inspect the assigned/checked-out ticket(s)'s scope (description, labels,
+  ACs).
+- If a worktree exists, check the diff through Holly (`holly task exec_in_current_task_worktree -- git diff --name-only`
+  against the merge-base): frontend matches `*.tsx`, `*.jsx`, `*.css`, `*.scss`,
+  `frontend/app/**`, `frontend/src/**`, `frontend/COMPONENT_REGISTRY.md`,
+  `frontend/tailwind.config.*`, `frontend/postcss.config.*`; backend
+  matches `backend/**`, `*.py`, `*.sql`, `alembic/versions/**`.
+- If the run is pure triage / coordination / non-code audit and a surface
+  cannot yet be determined, declare specializations as
+  `deferred (will load on first code-touching action)`. Never silently
+  skip — declaring "deferred" IS the report.
+
+**STOP-THE-RUN CONDITIONS (non-negotiable, no exceptions):**
+
+If ANY Tier 1 skill (especially `agent-fs`), any applicable Tier 2/3 skill, or
+any in-scope specialization skill cannot be loaded, you MUST STOP THE RUN
+IMMEDIATELY. Do not proceed. Do not guess. Do not work around it.
+
+Report to the user:
+- Which skill is missing
+- Why it matters (what breaks without it)
+- What the next action is to unblock
+
+Do not proceed on a partial floor. The skill floor is the contract.
+
+**Cross-reference:** this matrix is the canonical skill floor; the
+`swarm-delivery` dispatch contract points every worker at the same floor.
+Keep the two in sync when either is edited.
+
+#### Orchestration-only skills (load only when coordinating parallel agents)
+
+Load these only when the task involves dispatching swarm agents or managing a
+multi-agent delivery:
+
+- `agent-sessions`
+- `agent-lifecycle`
+- `orchestration`
+- `swarm-delivery`
+
+For heartbeat, IC pickup, or solo delivery tasks these skills are not needed and
+should be skipped to reduce context overhead. (Note: `agent-chat` is now Tier 1
+Common — required for any agent communication, regardless of delivery model.)
+
+### 3) Start the Holly task
+
+Holly is the public lifecycle surface. Do not call raw session, chat, tracker
+backend, memory, or Git lifecycle commands.
+
+`HOLLY_SESSION_ID` must already be present before any task lifecycle command.
+It is shell/runtime-owned and read-only. If it is missing, stop and fix
+bootstrap; do not use Holly lifecycle commands to manufacture identity.
+
+Context-mode exception: the parent shell may have `HOLLY_SESSION_ID` even when
+the context-mode sandbox does not. Every `holly ...` command sent through
+`ctx_execute` or `ctx_batch_execute` MUST be written as
+`HOLLY_SESSION_ID=$HOLLY_SESSION_ID holly ...`. Do not report a missing
+`HOLLY_SESSION_ID` from context-mode until the command has been retried with
+that prefix. If the prefix expands empty inside context-mode, resolve the
+existing value in the real shell and pass it explicitly as
+`HOLLY_SESSION_ID=agent-<existing-parent-shell-value> holly ...`.
+
+If an issue already exists:
+
+```bash
+eval "$(holly task start --id <issue-id> --intent '<agent-intent>')"
+```
+
+`holly task start` requires the existing `HOLLY_SESSION_ID`, records the task ID
+and intent on that session, claims the issue, creates the task worktree, posts
+the intent to `all-agents`, and changes into the worktree when eval'd.
+Implementation writes happen in that worktree. Use `holly task start --intent
+'<agent-intent>'` without `--id` only for read-only/non-implementation work on
+the main checkout.
+
+If no issue exists yet:
+
+```bash
+holly tracker create "<title>" --type task --priority 2
+eval "$(holly task start --id <new-issue-id> --intent '<agent-intent>')"
+```
+
+If the hook reports an unclaimed VS Code UUID, use only the Holly surface it
+prints, for example:
+
+```bash
+holly session claim-vscode-uuid <vscode-uuid>
+```
+
+### 4) Use Holly chat when coordination is needed
+
+Establish coordination through Holly:
+
+```bash
+holly chat read --channel all-agents --last 5 --include-self
+holly chat post --channel all-agents --message "STATUS: Orchestrator online and preparing delivery plan."
+holly chat who --channel all-agents --since 60
+```
+
+When an epic or parent issue is known, initialize its channel and post plan
+status there through `holly chat ...`.
+
+Codex-specific note: verify optional chat flags with `holly chat <subcommand>
+--help` before guessing. For example, `read` uses `--last`, not `--limit`.
+
+### 5) Analyse task and choose workflow
+
+Parse the user task for issue IDs and intent. Then choose the workflow:
+
+- For preparation, routing, and context gathering: `workflows/begin-session.yaml`
+- For requirement capture and epic decomposition: `workflows/track.yaml`
+- For direct implementation: `workflows/implement.yaml`
+- For review passes: `workflows/review-implementation.yaml`
+- For committing grouped local changes: `workflows/commit.yaml`
+- For graceful teardown and landing follow-through: `workflows/end-session.yaml`
+- For queue-driven worker loops: `workflows/grind.yaml`
+- For VS Code Problems cleanup: `workflows/zero-problems.yaml`
+- For parallel epic delivery: `workflows/orchestrate-swarm.yaml`
+- If no specific workflow matches: `workflows/default.yaml`
+
+When the request is "Prepare to orchestrate <issue>", perform preparation only:
+resolve scope, collect context, build agent plan, and stop at the user handoff
+point before execution.
+
+If no issue or epic ID is supplied yet, stop after installation, adapter,
+Holly runtime readiness. Report what is ready, what blocked, and what input
+is needed next instead of inventing scope.
+
+### 6) Produce the swarm delivery plan
+
+Multi-agent delivery is the swarm model: the Orchestrator stays in one window
+and dispatches bounded runtime subagent calls (`runSubagent` on VS Code,
+`Agent` on Claude Code, `multi_agent_v1.spawn_agent` on Codex). There are no
+separate user-opened chat windows, no channel registration, no BEGIN message,
+and no `chat wait`. Read the `swarm-delivery` skill for the full procedure.
+
+Generate:
+
+- Execution snapshot (issue, adapter, workflow, safety gates)
+- DAG decomposition with dependencies and wave order
+- A granularity classification of every child against an implementation tier
+  (`swarm-tiny-implementation`, `swarm-standard-implementation`,
+  `swarm-senior-implementation`, `swarm-ui-browser-implementation`, or
+  `swarm-principal-implementation` for the hardest large-context work), with a
+  reviewer tier (`swarm-reviewer`, `swarm-senior-reviewer`, or
+  `swarm-principal-reviewer`)
+- Per-child dispatch-preflight notes: requested capability tier vs available
+  model strength, required tools, and any fallback/escalation decision
+
+### 7) Dispatch (or hand off the plan)
+
+**Mode gate.** Sub-agent dispatch requires `multi-agent` mode. Run `holly mode`
+(or read it from `holly status`) before dispatching. In `single-agent` mode do
+NOT spawn workers — the PreToolUse hook hard-blocks `Agent`/`Task`/`runSubagent`;
+deliver directly or ask the user to switch (`holly mode multi` /
+`holly mode multi --default`).
+
+If the request is "Prepare to orchestrate <issue>", stop after the plan and
+present it for confirmation. Otherwise run the `orchestrate-swarm` workflow: the
+Orchestrator dispatches implementation agents wave by wave as bounded
+runtime subagent calls, dispatches a reviewer per returned branch, and
+integrates approved branches in dependency order. Only the Orchestrator
+integrates and closes issues. The user does NOT open chat windows or paste
+prompts.
+
+## Guardrails
+
+- Stay adapter-agnostic in this skill. Route command specifics through the
+  issue-tracker adapter addendum.
+- Do not start execution before user confirmation when the request is
+  preparation-only.
+- Keep messages ASCII-safe when using direct chat message flags.
+- Prefer deterministic verification commands over assumptions.
+- When decomposing UI/component work, add a reuse-check step before dispatch: a
+  surface used on more than one screen (overlay, sheet, card, empty/error state,
+  shell) is ONE shared component, so a worker must reuse or extract it, never
+  build a per-screen copy. Scope each child to the shared component, not a
+  duplicate, and route design specifics through the project's design skill (for
+  Tizzi: `tizzi-design-guide` + the Atomic Composition USED BY view). Independent
+  workers each re-creating "the same thing" is how treatments silently drift.
+- Codex-specific: if `chat` or the active tracker CLI fails against
+  `http://localhost` with `Operation not permitted` or a similar sandbox error,
+  request local-network permission and retry before concluding the local server
+  is down.
+
+## Related Assets
+
+**Mandatory skills:**
+
+- `issue-tracker/SKILL.md`
+- active tracker addendum skill for the current adapter
+- `ui-visual-capture/SKILL.md` (holly package; synced into projects)
+- project tracker CLI skill, if the project ships one
+
+**Orchestration-only skills:**
+
+- `agent-sessions/SKILL.md`
+- `orchestration/SKILL.md`
+- `swarm-delivery/SKILL.md`
+- `agent-lifecycle/SKILL.md`
+- `agent-chat/SKILL.md` (only for human-visible status / cross-agent messaging)
+
+**Workflows:**
+
+- `workflows/begin-session.yaml`
+- `workflows/track.yaml`
+- `workflows/implement.yaml`
+- `workflows/review-implementation.yaml`
+- `workflows/commit.yaml`
+- `workflows/end-session.yaml`
+- `workflows/grind.yaml`
+- `workflows/zero-problems.yaml`
+- `workflows/orchestrate-swarm.yaml`
+- `workflows/default.yaml`

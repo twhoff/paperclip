@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://holly.dev/schemas/swarm-agents.manifest.schema.json",
+  "title": "Swarm agents routing manifest",
+  "description": "Machine-readable routing metadata for swarm agents. The companion to swarm-*.agent.md instruction files.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["agents"],
+  "properties": {
+    "agents": {
+      "type": "object",
+      "description": "Map of agent name to its routing metadata.",
+      "minProperties": 1,
+      "additionalProperties": {
+        "$ref": "#/$defs/agentEntry"
+      }
+    }
+  },
+  "$defs": {
+    "strength": {
+      "enum": ["any", "standard", "senior", "principal"]
+    },
+    "capabilityTier": {
+      "enum": [
+        "tiny_implementation",
+        "standard_implementation",
+        "senior_implementation",
+        "ui_browser_implementation",
+        "principal_implementation",
+        "standard_review",
+        "senior_review",
+        "principal_review"
+      ]
+    },
+    "agentEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "capability_tier",
+        "preferred_model_family",
+        "minimum_model_strength",
+        "fallback_allowed",
+        "edit_permission",
+        "close_permission",
+        "merge_permission"
+      ],
+      "properties": {
+        "capability_tier": { "$ref": "#/$defs/capabilityTier" },
+        "preferred_model_family": { "type": "string" },
+        "minimum_model_strength": { "$ref": "#/$defs/strength" },
+        "fallback_allowed": { "type": "boolean" },
+        "fallback_requires_explicit_report": { "type": "boolean" },
+        "fallback_unavailable_action": { "enum": ["escalate"] },
+        "edit_permission": { "type": "boolean" },
+        "close_permission": { "type": "boolean" },
+        "merge_permission": { "type": "boolean" },
+        "max_files": { "type": "integer", "minimum": 1 },
+        "max_changed_lines": { "type": "integer", "minimum": 1 },
+        "requires_browser_tool": { "type": "boolean" },
+        "browser_unavailable_visual_proof": { "enum": ["escalate"] },
+        "browser_unavailable_no_visual_proof": {
+          "enum": ["proceed_with_limitation_note"]
+        }
+      },
+      "allOf": [
+        {
+          "$comment": "Issue lifecycle is Orchestrator-owned: no swarm agent may close or merge.",
+          "properties": {
+            "close_permission": { "const": false },
+            "merge_permission": { "const": false }
+          }
+        },
+        {
+          "$comment": "Implementation tiers must declare a file/line envelope.",
+          "if": {
+            "properties": {
+              "capability_tier": {
+                "enum": [
+                  "tiny_implementation",
+                  "standard_implementation",
+                  "senior_implementation",
+                  "ui_browser_implementation",
+                  "principal_implementation"
+                ]
+              }
+            }
+          },
+          "then": { "required": ["max_files", "max_changed_lines"] }
+        },
+        {
+          "$comment": "Review tiers must not have edit permission.",
+          "if": {
+            "properties": {
+              "capability_tier": {
+                "enum": ["standard_review", "senior_review", "principal_review"]
+              }
+            }
+          },
+          "then": { "properties": { "edit_permission": { "const": false } } }
+        },
+        {
+          "$comment": "requires_browser_tool is only valid for the ui_browser tier.",
+          "if": {
+            "not": {
+              "properties": {
+                "capability_tier": { "const": "ui_browser_implementation" }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "requires_browser_tool": false
+            }
+          }
+        },
+        {
+          "$comment": "When fallback is disallowed, an unavailable action is required.",
+          "if": { "properties": { "fallback_allowed": { "const": false } } },
+          "then": { "required": ["fallback_unavailable_action"] }
+        }
+      ]
+    }
+  }
+}

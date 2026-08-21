@@ -1,0 +1,64 @@
+// Config loader for agent-fs. Reads ~/.config/agent-fs/config.json with sensible defaults.
+// No external dependencies; pure JSON.
+
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+const DEFAULT_CONFIG = {
+  root: path.join(os.homedir(), '.agent-scratch'),
+  tmpdir_override: true,
+  cleanup: {
+    scratch_max_age_hours: 24,
+    evidence_max_age_days: 7,
+    session_max_age_days: 30,
+    auto_clean_on_call: false,
+  },
+  upload: {
+    default_target: 'paperclip',
+  },
+  doctor: {
+    orphan_warn_threshold: 10,
+    uploaded_evidence_warn_mb: 100,
+  },
+};
+
+const CONFIG_PATH = path.join(os.homedir(), '.config', 'agent-fs', 'config.json');
+
+function deepMerge(a, b) {
+  if (a === null || typeof a !== 'object' || Array.isArray(a)) return b ?? a;
+  if (b === null || typeof b !== 'object' || Array.isArray(b)) return b ?? a;
+  const out = { ...a };
+  for (const [k, v] of Object.entries(b)) out[k] = deepMerge(a[k], v);
+  return out;
+}
+
+export function loadConfig() {
+  let user = {};
+  try {
+    const raw = fs.readFileSync(CONFIG_PATH, 'utf8');
+    user = JSON.parse(raw);
+  } catch (err) {
+    if (err.code !== 'ENOENT') {
+      process.stderr.write(`warning: failed to read ${CONFIG_PATH}: ${err.message}\n`);
+    }
+  }
+  const merged = deepMerge(DEFAULT_CONFIG, user);
+  // Env-var override wins over config file. Lets users relocate the root and
+  // gives tests a clean way to sandbox without touching ~/.config/agent-fs/.
+  if (process.env.AGENT_FS_ROOT) {
+    merged.root = process.env.AGENT_FS_ROOT;
+  }
+  return merged;
+}
+
+export function writeDefaultConfigIfMissing() {
+  if (fs.existsSync(CONFIG_PATH)) return false;
+  fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
+  fs.writeFileSync(CONFIG_PATH, JSON.stringify(DEFAULT_CONFIG, null, 2) + '\n');
+  return true;
+}
+
+export function configPath() {
+  return CONFIG_PATH;
+}

@@ -1,0 +1,434 @@
+---
+name: swarm-delivery
+description: >-
+  Reference for bounded runSubagent/spawn_agent swarm delivery: the swarm
+  agents, capability-tier model routing, granularity limits, reviewer gates,
+  integration ownership, adapter differences, and the model-fallback protocol.
+  Use when running or authoring orchestrate-swarm delivery.
+---
+
+# Swarm Delivery
+
+Reference guide for the Holly swarm delivery model. The Orchestrator stays in
+one window and dispatches bounded subagent workers — `runSubagent` on VS Code,
+`Agent` on Claude Code, or `multi_agent_v1.spawn_agent` on Codex — that each do
+one assigned issue, return a structured final report, and exit. This skill is
+the operations manual for the `orchestrate-swarm` workflow. The cockpit
+checklist lives in `orchestrator-v2.agent.md`; the routing summary lives in the
+`orchestration` skill.
+
+The machine-readable routing source of truth is
+`src/holly/agents/swarm-agents.manifest.yaml`. The runtime/model strength map is
+`src/holly/agents/model-capability-tiers.yaml`. Keep this skill aligned with
+those files; they win on any numeric conflict.
+
+---
+
+## 0. Mode gate (single-agent vs multi-agent)
+
+Swarm delivery requires `multi-agent` mode. Holly's operating mode is resolved by
+`holly mode` (and shown in `holly status`): `multi-agent` allows sub-agent
+dispatch; `single-agent` blocks it.
+
+Before any dispatch, the Orchestrator checks the mode. In `single-agent` mode:
+
+- Do NOT dispatch swarm workers. The PreToolUse hook hard-blocks
+  `Agent`/`Task`/`runSubagent`, so dispatch will fail anyway.
+- Deliver the work directly in the Orchestrator session, or ask the user to
+  switch: `holly mode multi` (this session) or `holly mode multi --default`
+  (project default).
+- A dispatched worker that somehow starts in single-agent mode MUST refuse and
+  report the coordination error rather than work around it.
+
+The rest of this skill assumes `multi-agent` mode.
+
+---
+
+## 1. The bounded subagent model
+
+Swarm agents do exactly ONE assignment via the runtime's subagent dispatcher
+(`runSubagent` on VS Code, `Agent` on Claude Code, `spawn_agent` on Codex) and
+then exit. They never call `holly chat wait`, never join a channel, never post
+BEGIN/SIGN-OFF, and never wait for peers. The Orchestrator drives the whole
+cycle from a single window: dispatch -> collect report -> review -> integrate
+-> close.
+
+This is the only multi-agent delivery model. There are no persistent
+chat-delivery workers: a swarm agent MUST NEVER be opened as a persistent chat
+window or instructed to use `holly chat wait`.
+
+Use swarm delivery when an epic decomposes into granular children with low file
+overlap that can each be described completely up front. If the work needs
+persistent negotiation, evolving shared context, or continuous reassignment,
+stop and use a lighter path: finer decomposition, sequential `/implement`, or
+direct handling by the Orchestrator.
+
+### Codex runtime mapping
+
+In Codex, bounded swarm dispatch maps to the `multi_agent_v1.spawn_agent` tool:
+
+- Use `agent_type: "worker"` for implementation and reviewer swarm assignments.
+- Set `model` and reasoning effort from `model-capability-tiers.yaml` ->
+  `runtimes.codex.projection` keyed on the agent's `capability_tier`. Projection
+  is tier-keyed, so reviewers resolve to `gpt-5.5` even at standard strength
+  (`standard_review` -> `gpt-5.5`/`high`, `senior_review` -> `gpt-5.5`/`xhigh`),
+  NOT `gpt-5.4`. `gpt-5.3-codex-spark` stays an explicit cheaper override for the
+  lightest tiny work.
+- Codex does not automatically load Holly `.agent.md` files into spawned agents.
+  The Orchestrator prompt must include the swarm role envelope, issue ID,
+  allowed files or file areas, required skill floor, verification commands, and
+  the hard rules: do not close issues, do not merge, do not revert unrelated
+  changes, and return a structured report.
+- `spawn_agent` returns the requested agent ID/nickname, not an independently
+  verified `actual_model`. Record the requested model and model label used for
+  audit. Do not treat a worker's self-report as proof of the actual model.
+
+---
+
+## 2. The swarm agents and their envelopes
+
+Pulled from `swarm-agents.manifest.yaml`:
+
+| Agent | Capability tier | Min model strength | Fallback | Envelope |
+|-------|-----------------|--------------------|----------|----------|
+| **swarm-tiny-implementation** | `tiny_implementation` | any | allowed | <=2 files / <=120 changed lines |
+| **swarm-standard-implementation** | `standard_implementation` | standard | allowed | <=4 files / <=250 changed lines |
+| **swarm-senior-implementation** | `senior_implementation` | senior | NOT allowed (escalate) | <=8 files / <=600 changed lines; architecture/cross-cutting/migration with explicit scope |
+| **swarm-ui-browser-implementation** | `ui_browser_implementation` | standard | allowed | <=4 files / <=250 changed lines; requires browser tool |
+| **swarm-principal-implementation** | `principal_implementation` | principal | NOT allowed (escalate) | <=12 files / <=900 changed lines; hardest large-context work; needs Claude Fable 5 |
+| **swarm-reviewer** | `standard_review` | standard | allowed | read-only; verdict only |
+| **swarm-senior-reviewer** | `senior_review` | senior | NOT allowed (escalate) | read-only; verdict only |
+| **swarm-principal-reviewer** | `principal_review` | principal | NOT allowed (escalate) | read-only; verdict only; highest-stakes; needs Claude Fable 5 |
+
+All swarm agents have `close_permission: false` and `merge_permission: false`.
+Implementation agents have `edit_permission: true`; both reviewers have
+`edit_permission: false`.
+
+swarm-ui-browser-implementation has browser-tool fallback rules: if the browser
+tool is unavailable and visual proof is required, escalate; if visual proof is
+not required, proceed with a limitation note.
+
+---
+
+## 3. Capability-tier model routing
+
+Two files cooperate. The manifest declares what each agent *requires*
+(`minimum_model_strength`). `model-capability-tiers.yaml` declares what each
+runtime *provides* by mapping `runtime + model -> strength`.
+
+Strength order (ascending): `tiny < standard < senior`.
+
+If a runtime or model is not listed, its strength defaults to `tiny`. An agent
+that requires `standard` or `senior` on an unlisted runtime/model must escalate
+rather than silently run under-powered.
+
+For Codex, model labels are routing hints, not proof:
+
+- `holly:track:model-spark` -> request `gpt-5.3-codex-spark`; dispatch only
+  tiny envelopes unless the child is split or escalated.
+- `holly:track:model-gpt-5-5` -> request `gpt-5.5`; suitable for senior
+  implementation and senior review when the runtime accepts the override.
+
+Before each dispatch the Orchestrator runs the dispatch preflight gate:
+
+1. Resolve the child's `requested_capability_tier` from the granularity
+   classification and the manifest.
+2. Resolve `available_model_strength` from the current runtime + model via
+   `model-capability-tiers.yaml`.
+3. If available strength >= the agent's `minimum_model_strength`, dispatch.
+4. If available strength is below the minimum and `fallback_allowed` is true,
+   dispatch on the strongest available model that still meets the minimum, and
+   the agent must report `fallback_used: true`.
+5. If no available model meets the minimum and fallback is not allowed
+   (`senior_review`, `fallback_allowed: false`), ESCALATE to the user and do
+   NOT dispatch.
+
+Do not dispatch any child whose required tier cannot be satisfied.
+
+---
+
+## 4. Granularity limits and the granularity gate
+
+Each tier has a hard envelope (file/line caps from section 2). The granularity
+gate runs before any subagent launch planning and classifies every open child
+to the cheapest safe implementation agent:
+
+- **tiny:** one mechanical change, 1-2 files, no cross-module contracts, no
+  user-facing judgement, one focused verification command.
+- **standard:** one focused fix or implementation slice, 1-4 files, clear
+  acceptance criteria, no architecture/migration/auth/security/broad refactor.
+- **senior:** one coherent architecture-bearing change with explicit scope —
+  cross-cutting refactors, migrations, concurrency, or security-sensitive work
+  the cheaper tiers must reject. Up to ~8 files / 600 lines, still one issue.
+  Requires a senior model; escalate if none is available.
+- **ui-browser:** one scoped UI/browser-flow slice with a known route or
+  component, expected states, and browser-verifiable acceptance criteria.
+
+A child is **oversized** if it contains multiple independent behaviours, spans
+unrelated subsystems, exceeds the selected agent envelope, requires multiple
+unrelated suites or manual judgement, has unclear dependencies, or cannot be
+verified from a bounded final report.
+
+For every oversized child, propose a split into smaller replacement children
+under the same epic, present the plan to the user, and wait for explicit
+approval before changing the tracker. If the user declines splitting, do not
+dispatch the oversized child to a cheap agent — route it to direct handling, a
+stronger one-shot agent, sequential `/implement`, or defer it.
+
+---
+
+## 5. Session bootstrap expectations
+
+How the worker obtains `$HOLLY_SESSION_ID` depends on the runtime's dispatch tool:
+
+- **VS Code (`runSubagent`)** — the worker inherits `$HOLLY_SESSION_ID` from the
+  Orchestrator automatically. It does NOT run `holly session get`, does NOT
+  create a new session, and does NOT call `holly session subagent register`
+  itself. If the inherited value is missing, the worker STOPs before doing
+  task work.
+- **Claude Code (`Agent`)** — `$HOLLY_SESSION_ID` is NOT auto-wired into the worker's
+  shell. The Orchestrator must pre-register each worker with
+  `holly session subagent register <ISSUE_ID>` BEFORE dispatch and inject the literal
+  `HOLLY_SESSION_ID=sess-...` value into the dispatched prompt. If the Orchestrator
+  does not wire the session, the worker STOPs and reports the bootstrap failure.
+
+When the worker has `$HOLLY_SESSION_ID`, the contract every dispatched prompt must
+include:
+
+1. **Load the mandatory skills first.** Before any substantive work the worker
+   loads its role-based skill floor: the Tier-1 common skills
+   (`ax-commandments`, `agent-fs`, `agent-sessions`, `use-workflow`,
+   `second-brain`, `qmd`, and the active tracker skill) plus the skills for its
+   capability tier and the surface it touches — see "Per-worker skill floor"
+   below. If a mandatory skill cannot be loaded, the worker STOPs and reports
+   rather than proceeding on a partial floor. Each swarm agent definition also
+   carries this list, but the dispatch prompt MUST restate it so a worker on a
+   runtime that does not auto-load the agent's skills still gets the floor.
+2. **Consult and update project memory.** On task start, load the project
+   memory through Holly (per the `project-knowledge` skill): run
+   `holly memory read` and `holly memory search "<issue entities>"`. On finish,
+   implementation workers record durable, non-obvious facts
+   they learned or corrected as `project-knowledge` nodes; reviewers (read-only)
+   surface such facts in their report for the Orchestrator to record instead.
+   Skip if the project has no memory tree (`holly doctor` warns when it is absent).
+3. `HOLLY_SESSION_ID="$HOLLY_SESSION_ID" holly task status`
+4. `HOLLY_SESSION_ID="$HOLLY_SESSION_ID" holly session subagent active --json`
+5. Find the active subagent entry for the assigned issue ID. Ignore unrelated
+   active subagents. If the assigned issue ID is missing, STOP and report the
+   bootstrap failure.
+6. On completion run exactly:
+   `HOLLY_SESSION_ID="$HOLLY_SESSION_ID" holly session subagent complete <ISSUE_ID> --status <status>`.
+
+Reviewers use the same inherited-session bootstrap and also complete their own
+active subagent entry with a targeted `holly session subagent complete <ISSUE_ID>`.
+
+### Parent/child session isolation (the task-state contract)
+
+A worker shares the Orchestrator's `$HOLLY_SESSION_ID` only for read-only context
+and subagent bookkeeping. It MUST NOT run `holly task start` or `holly task finish`
+under that inherited id — doing so overwrites the Orchestrator's own
+`current_task`/`worktree_path`, and when the worker's worktree is later removed the
+Orchestrator is left pointing at a path that no longer exists (the TIZA-873
+regression).
+
+Holly enforces this on two levels:
+
+- **Identity:** Claude Code and VS Code use `SubagentStart` to mint a deterministic
+  CHILD session id, pre-create a parent-linked child session, and print
+  `export HOLLY_SESSION_ID=<child-id>` in startup context. Codex does not emit
+  `SubagentStart`; its worker inherits the parent Holly id but receives a unique,
+  runtime-owned `CODEX_THREAD_ID`. Every Holly session entry point resolves that
+  mismatch to a deterministic parent-linked child before every Holly mutation.
+  `holly task start` also emits the child export for its current eval shell. A worker that
+  needs its own worktree lifecycle therefore runs under the child id on every
+  supported runtime, never the parent id.
+- **Guard:** `holly task start` refuses to run on a session that is currently
+  parenting running subagents (the Orchestrator mid-dispatch) when the new task
+  differs, with a message pointing at the child-id contract. A worker that leaked
+  the parent id is stopped before it can corrupt parent state. `--force` is the
+  Orchestrator's own escape hatch.
+
+Subagent bookkeeping (`holly session subagent active`/`complete`) always resolves
+to the parent's records, whether the worker prefixes the parent id or its child
+id — so the parent can always inspect and complete its children. Use
+`holly session subagent list --json` to inspect active and completed subagents,
+including each worker's `child_session_id`.
+
+For Codex, fresh tool calls also start fresh shells, so shell exports are not the
+cross-command guarantee. Runtime-thread re-resolution is. `holly task status
+--json` is the authoritative bootstrap check: its `session_id` must differ from
+`inherited_session_id` before the worker manages a worktree. If it does not, stop
+rather than passing `--force`.
+
+In the normal swarm flow workers do not run the task lifecycle at all (see §7,
+integration ownership): they push a branch and stop, and the Orchestrator
+integrates. The child-session mechanism exists for the adapter flows (e.g. a
+claim/release flow) where a worker genuinely owns its worktree end to end — the
+concrete commands live in the active adapter addendum, not here.
+
+### Per-worker skill floor
+
+The role-based skill matrix in the `holly` skill is the source of truth; this is
+the per-tier summary the Orchestrator restates in each dispatch prompt. If a
+required skill is missing in the consumer project, install it with
+`holly skills install <name>` or escalate — never dispatch onto a partial floor.
+
+- **Every worker (Tier 1):** `ax-commandments`, `agent-fs`, `agent-sessions`,
+  `use-workflow`, `second-brain`, `qmd`, the active tracker skill (resolved per
+  adapter — see the `issue-tracker` addendum), and `issue-tracker` itself for the
+  read-only verbs the worker is allowed.
+- **Implementation** (`swarm-tiny`/`swarm-standard`/`swarm-senior-implementation`):
+  also `test-driven-development` and `systematic-debugging`; `adr-skill` for
+  senior; plus the Frontend or Backend specialization skills for whatever the
+  assigned diff touches.
+- **`swarm-ui-browser-implementation`:** also the Frontend specialization,
+  `ui-visual-capture` (required — capture every viewport before and after), and
+  `webapp-testing`.
+- **Reviewers** (`swarm-reviewer`/`swarm-senior-reviewer`): also the
+  `review-implementation` workflow as the review-standards source of truth; add
+  `ui-visual-capture` and `webapp-testing` when the change under review touches UI.
+
+---
+
+## 6. Reviewer gate protocol
+
+Reviewers are strictly read-only (no edit tool). A reviewer returns exactly one
+verdict:
+
+| Verdict | Meaning |
+|---------|---------|
+| `approve` | Branch meets acceptance criteria and scope; safe to integrate |
+| `changes-requested` | Specific blocking findings; send a bounded fix prompt back |
+| `blocked` | Cannot complete review (missing evidence, broken branch) |
+| `escalate` | Needs senior review or a user decision |
+
+Reviewers NEVER patch, commit, close, or merge. Their report includes the
+verdict, blocking findings, non-blocking findings, tests checked, scope
+assessment, closure recommendation, and the model+runtime report fields.
+
+Choose `swarm-reviewer` for normal scoped review and `swarm-senior-reviewer`
+for high-risk, disputed, architectural, security-sensitive, data-sensitive,
+migration, or cross-cutting work. If senior review is required and no
+senior-capable model is available, escalate — never approve on an under-powered
+model.
+
+---
+
+## 7. Integration ownership
+
+ONLY the Orchestrator integrates branches and closes issues. Implementation
+agents push their task branch and stop — they do NOT run `holly task finish`,
+do NOT merge to main, and do NOT close issues.
+
+Integration discipline:
+
+1. Use a dedicated integration worktree; never merge from the main checkout.
+2. Pull latest `origin/main` before each integration batch.
+3. Merge approved branches one at a time in dependency order; resolve conflicts
+   deliberately.
+4. Run child-level verification after each merge and wave-level gates after the
+   wave merge.
+5. Close a child only after its branch is merged, verification passes, and the
+   reviewer verdict is `approve`.
+
+---
+
+## 8. Model + runtime fallback report
+
+Every implementation and reviewer final report MUST include these fields so the
+Orchestrator can audit routing and fallback decisions:
+
+- `runtime_used`
+- `model_used`
+- `capability_tier_requested`
+- `capability_tier_satisfied`
+- `fallback_used`
+- `fallback_limitations`
+- `escalation_required`
+
+Implementation reports additionally carry status, issue_id, branch_name,
+worktree_path, commit_sha, files_changed, verification commands and results,
+reviewer recommendation (normal | senior), blockers, risks, and follow-ups.
+
+### Worker handoff checklist
+
+Every worker's final report is a handoff, not a status ping. It MUST state, in
+plain copy-pasteable terms:
+
+- **Exact commit** — the full `commit_sha` (not "latest" or a branch name).
+- **Worktree path** — the absolute `worktree_path` the work lives in.
+- **Verification commands** — the exact commands run and their pass/fail result,
+  so the Orchestrator (or a reviewer) can re-run them verbatim.
+- **Evidence path or URL** — where the proof artifacts live (screenshots, video,
+  logs, uploaded tracker attachments). Name the path/URL explicitly.
+- **Release / handoff status** — whether the branch is pushed, whether the issue
+  was released, and what state the issue is now in.
+
+**Evidence: Storybook component proof vs authenticated route proof.** A Storybook
+story renders a component in isolation. It is acceptable proof for an isolated
+component or styling change. It is NOT sufficient when acceptance depends on the
+component inside a real authenticated route (data wiring, auth/session state,
+route-level layout, server data). For those, capture the component in the
+authenticated route as required proof; a Storybook capture alone is a limitation
+the worker must call out, not silently substitute. State which kind of proof you
+captured and why it is sufficient for the assigned acceptance criteria.
+
+**Mentions and release semantics are adapter-specific.** Use the active adapter's
+canonical mention format for QA/review handoff (a bare display-name mention may
+not resolve to the agent), and know that on some adapters releasing an issue
+returns it to its unassigned/todo state by design — that is expected, not a
+regression. The exact mention syntax and release behaviour live in the active
+adapter addendum in the `issue-tracker` skill; the worker dispatch prompt in the
+active `orchestrate-swarm` workflow restates them.
+
+---
+
+## 9. Adapter differences
+
+The `orchestrate-swarm` workflow is adapter-specific and selected by sync from
+the active adapter package; only its tracker commands differ, not the swarm
+model. Read the active adapter addendum in the `issue-tracker` skill for the
+concrete command surface. The shape of the differences:
+
+| Capability | Notes |
+|------------|-------|
+| **Full-featured adapter** | Ships a complete `orchestrate-swarm` workflow with automated dependency/DAG analysis, structured decomposition gates, and explicit tracker state sync in postflight. |
+| **Reduced adapter** | Ships a workflow with a shorter preflight when the tracker has no DAG-validation tooling; wave ordering is derived manually from parent/child relationships and descriptions. Closure may use a comment-then-handoff sequence rather than a single close call. May still be pending — see its addendum. |
+| **Unknown adapter** | Receives a hard-blocking stub that refuses to run rather than guessing tracker semantics. |
+
+When the active adapter provides no swarm workflow, stop and escalate rather
+than improvise tracker commands. Adapter-specific command detail — canonical
+mention format, release/claim semantics, and worktree commands — belongs in the
+adapter addendum and the active adapter's `orchestrate-swarm` workflow, never in
+this skill. Where a worker owns its worktree through a claim/release flow, that
+lifecycle runs under the worker's CHILD session id (§5, parent/child isolation)
+so it never rewrites the Orchestrator's task state.
+
+---
+
+## 10. Failure and escalation rules
+
+- If a subagent returns `blocked` or `failed`, triage the cause. Retry once with
+  clearer instructions if it is prompt/scope ambiguity; otherwise escalate to a
+  stronger implementation agent or ask the user.
+- If review requests changes, send one bounded fix prompt back to the original
+  implementation agent when safe. Escalate to senior review or the user if the
+  fix would change architecture, scope, or dependencies.
+- If senior review is required and no senior-capable model is available,
+  escalate — do not approve on an under-powered model.
+- If a ui-browser child needs visual proof and no browser tool is available,
+  escalate rather than dispatch.
+- If useful parallelism drops below 2 or the remaining work is a shared
+  integration path, execute directly or with a single subagent rather than
+  pretending it is still a swarm.
+
+---
+
+## 11. Cross-references
+
+- `orchestrator-v2.agent.md` — cockpit checklist, execution modes, hard rules
+- `orchestration` skill — routing tables, formula reference, recovery playbook
+- `orchestrate-swarm.yaml` (active adapter) — the executable workflow
+- `swarm-agents.manifest.yaml` — agent routing metadata (source of truth)
+- `model-capability-tiers.yaml` — runtime/model strength map
+- `issue-tracker` skill — issue lifecycle, worktree commands

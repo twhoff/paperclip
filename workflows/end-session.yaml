@@ -1,0 +1,64 @@
+# yaml-language-server: $schema=../schemas/workflow.schema.json
+
+name: End Session
+skip_wrapper: true
+description: >-
+  Graceful session teardown. Archives the current task, files follow-up
+  issues, closes finished Beads work, pushes everything to remote, and
+  transitions the session to idle.
+
+  This workflow runs WITHOUT the workflow-wrapper sandwich because it IS
+  the teardown path -- wrapping it in something that boots up a session
+  in preflight would be counterproductive.
+
+preflight:
+  - prompt: >-
+      Check the current session state by reading `.agent-sessions.json`.
+      If no active session exists, report that and STOP -- nothing to tear down.
+
+steps:
+  - prompt: >-
+      Archive the current task. Run:
+        holly task abort
+      This moves the current_task to task_history with an ended_at timestamp.
+      If current_task is already null, this is a no-op.
+
+  - prompt: >-
+      Check for uncommitted changes. Run `holly task exec_in_current_task_worktree -- git status --porcelain`.
+      If there are staged or unstaged changes, commit them using the
+      commit workflow conventions (commitizen format, issue IDs).
+      If the working tree is clean, skip to the next step.
+    condition: holly task exec_in_current_task_worktree -- git status shows uncommitted changes.
+
+  - prompt: >-
+      File Beads issues for any remaining or follow-up work discovered
+      during this session. Use `holly tracker create` with appropriate type, priority,
+      and `discovered-from` dependencies.
+    condition: There is remaining work that needs follow-up issues.
+
+  - prompt: >-
+      Close reviewed Beads work. Run `holly tracker exec -- list --status=in_review --json`
+      to find any issues that have passed review and are now ready to be
+      completed at session teardown.
+      Close them with `holly tracker close <id> --reason "Reviewed and approved"`.
+    condition: There are in-review Beads issues that are now complete.
+
+  - prompt: >-
+      If an active task remains, finish it through Holly:
+      `eval "$(holly task finish)"`.
+      If finish is blocked or prints a recovery command, follow the printed command
+      first; do not run manual push/rebase sequences.
+
+  - prompt: >-
+      Transition the session to idle. Run:
+        holly session end
+      This sets the holly session status to idle. The background sweep will
+      transition it to ended after 60 minutes of inactivity.
+
+postflight:
+  - prompt: >-
+      Provide a handoff summary for the next session. Include:
+        - What was accomplished (list completed tasks from task_history)
+        - Current state of any in-progress work
+        - Any filed follow-up issues with their IDs
+        - Anything the next agent should know

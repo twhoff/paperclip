@@ -1,0 +1,474 @@
+// agent-fs evidence — multi-action verb.
+//   evidence --issue <ID> <name>            → return issue-scoped capture dir
+//   evidence manifest --issue <ID> <name>   → write capture-manifest.json
+//   evidence upload --issue <ID> <name>     → upload to Paperclip (week 2 follow-up)
+//
+// Default action (no sub-action) is the path-getter used by skills like
+// ui-visual-capture.
+
+import { spawnSync as spawnSyncFn } from 'node:child_process';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import { findPcli } from '../pcli.mjs';
+import { getUploader, listUploaders } from '../uploaders/index.mjs';
+import { isSafeName, normalizeIssueId, ISSUE_ID_RULE } from '../paths.mjs';
+import { VERBS } from '../registry.mjs';
+
+const MANIFEST_SKIP_FILES = new Set(['upload-receipt.json']);
+const MANIFEST_SKIP_DIRS = new Set(['manifests']);
+
+const MIME_BY_EXT = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.webm': 'video/webm',
+  '.mp4': 'video/mp4',
+  '.mov': 'video/quicktime',
+  '.svg': 'image/svg+xml',
+  '.html': 'text/html',
+  '.json': 'application/json',
+  '.txt': 'text/plain',
+  '.md': 'text/markdown',
+  '.log': 'text/plain',
+  '.csv': 'text/csv',
+};
+
+function guessMimeType(name) {
+  const ext = path.extname(name).toLowerCase();
+  return MIME_BY_EXT[ext] ?? 'application/octet-stream';
+}
+
+function hashFile(filePath) {
+  const hash = crypto.createHash('sha256');
+  const buf = fs.readFileSync(filePath);
+  hash.update(buf);
+  return hash.digest('hex');
+}
+
+function validateIssueAndName(args) {
+  if (!args.issue) {
+    process.stderr.write(
+      'error: --issue <ID> is required (any tracker prefix; e.g. GRO-881, pcli-8ms, ENG-1234)\n',
+    );
+    process.exit(65);
+  }
+  const issue = normalizeIssueId(args.issue);
+  if (!issue) {
+    process.stderr.write(`error: invalid issue id "${args.issue}" — ${ISSUE_ID_RULE}\n`);
+    process.exit(65);
+  }
+  const name = args._[0];
+  if (!name) {
+    process.stderr.write('error: capture name is required (usage: agent-fs evidence ... <name>)\n');
+    process.exit(65);
+  }
+  if (!isSafeName(name)) {
+    process.stderr.write(`error: name "${name}" is not safe (alphanumeric, ._- only, max 128 chars)\n`);
+    process.exit(65);
+  }
+  return { issue, name };
+}
+
+function evidencePath(args, ctx) {
+  const { issue, name } = validateIssueAndName(args);
+  const dir = path.join(ctx.layout.evidence, issue, name);
+  fs.mkdirSync(dir, { recursive: true });
+  ctx.registry.append({
+    verb: VERBS.EVIDENCE,
+    path: dir,
+    issue,
+    agent: ctx.agent,
+    runtime: ctx.runtime,
+  });
+  if (args.json) {
+    process.stdout.write(JSON.stringify({ path: dir, verb: 'evidence', issue }) + '\n');
+  } else {
+    process.stdout.write(dir + '\n');
+  }
+}
+
+function discoverFiles(captureDir, withHashes) {
+  const files = [];
+  const subdirSummary = [];
+  let entries;
+  try {
+    entries = fs.readdirSync(captureDir, { withFileTypes: true });
+  } catch (err) {
+    process.stderr.write(`error: cannot read capture dir: ${err.message}\n`);
+    process.exit(69);
+  }
+  for (const entry of entries) {
+    if (entry.isFile()) {
+      if (MANIFEST_SKIP_FILES.has(entry.name)) continue;
+      const filePath = path.join(captureDir, entry.name);
+      const stat = fs.statSync(filePath);
+      const fileEntry = {
+        name: entry.name,
+        size: stat.size,
+        mimeType: guessMimeType(entry.name),
+        mtime: new Date(stat.mtimeMs).toISOString(),
+      };
+      if (withHashes) {
+        fileEntry.sha256 = hashFile(filePath);
+      }
+      files.push(fileEntry);
+    } else if (entry.isDirectory()) {
+      if (MANIFEST_SKIP_DIRS.has(entry.name)) continue;
+      const subdirPath = path.join(captureDir, entry.name);
+      let childCount = 0;
+      try {
+        childCount = fs.readdirSync(subdirPath).length;
+      } catch {
+        // ignore
+      }
+      subdirSummary.push({ name: entry.name, kind: 'directory', childCount });
+    }
+  }
+  // Stable ordering for diffability.
+  files.sort((a, b) => a.name.localeCompare(b.name));
+  subdirSummary.sort((a, b) => a.name.localeCompare(b.name));
+  return { files, subdirs: subdirSummary };
+}
+
+function evidenceManifest(args, ctx) {
+  const { issue, name } = validateIssueAndName(args);
+  const captureDir = path.join(ctx.layout.evidence, issue, name);
+  if (!fs.existsSync(captureDir)) {
+    process.stderr.write(
+      `error: capture dir not found: ${captureDir}\n` +
+        `hint: run \`agent-fs evidence --issue ${issue} ${name}\` first to create it, then add files.\n`,
+    );
+    process.exit(69);
+  }
+
+  const { files, subdirs } = discoverFiles(captureDir, Boolean(args['with-hashes']));
+
+  const manifest = {
+    schemaVersion: 1,
+    issue,
+    captureName: name,
+    capturedAt: new Date().toISOString(),
+    capturedBy: ctx.agent,
+    runtime: ctx.runtime,
+    sessionId: ctx.sessionId,
+    captureDir,
+    files,
+    subdirs,
+  };
+
+  const manifestDir = path.join(captureDir, 'manifests');
+  fs.mkdirSync(manifestDir, { recursive: true });
+  const manifestPath = path.join(manifestDir, 'capture-manifest.json');
+
+  if (!args.force && fs.existsSync(manifestPath)) {
+    // Preserve any prior validForReview / route / viewport / custom keys an
+    // operator may have hand-edited. Carry them forward unless --force.
+    try {
+      const prior = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+      for (const key of ['validForReview', 'route', 'viewport', 'custom', 'notes']) {
+        if (prior[key] !== undefined) manifest[key] = prior[key];
+      }
+    } catch {
+      // corrupt prior manifest — just overwrite
+    }
+  }
+
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+  ctx.registry.append({
+    verb: VERBS.MANIFEST,
+    path: manifestPath,
+    issue,
+    agent: ctx.agent,
+    runtime: ctx.runtime,
+    meta: { captureName: name, fileCount: files.length, subdirCount: subdirs.length },
+  });
+
+  if (args.json) {
+    process.stdout.write(JSON.stringify({ manifestPath, manifest }, null, 2) + '\n');
+  } else {
+    process.stdout.write(manifestPath + '\n');
+  }
+}
+
+function loadManifestFiles(captureDir, fallbackToScan) {
+  const manifestPath = path.join(captureDir, 'manifests', 'capture-manifest.json');
+  if (fs.existsSync(manifestPath)) {
+    try {
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+      const files = (manifest.files ?? []).map((f) => ({
+        name: f.name,
+        path: path.join(captureDir, f.name),
+        expectedSize: f.size,
+        expectedSha: f.sha256,
+      }));
+      return { files, manifestPath, source: 'manifest' };
+    } catch {
+      // fall through to scan
+    }
+  }
+  if (!fallbackToScan) {
+    return { files: null, manifestPath, source: null };
+  }
+  const files = [];
+  for (const entry of fs.readdirSync(captureDir, { withFileTypes: true })) {
+    if (!entry.isFile()) continue;
+    if (entry.name === 'upload-receipt.json') continue;
+    files.push({ name: entry.name, path: path.join(captureDir, entry.name) });
+  }
+  return { files, manifestPath, source: 'scan' };
+}
+
+function performUpload({ issue, captureDir, files, source, target, commentId, ctx }) {
+  const uploader = getUploader(target);
+  if (!uploader) {
+    process.stderr.write(
+      `error: unknown upload target "${target}". Available: ${listUploaders().join(', ')}\n`,
+    );
+    process.exit(64);
+  }
+  const probe = uploader.probe();
+  if (!probe.available) {
+    process.stderr.write(`error: upload target "${target}" not available: ${probe.reason}\n`);
+    process.exit(70);
+  }
+
+  const uploadedAt = new Date().toISOString();
+  const { attachments, failures } = uploader.upload({ issue, files, commentId, ctx });
+
+  const receipt = {
+    schemaVersion: 1,
+    issue,
+    captureName: path.basename(captureDir),
+    target,
+    uploadedAt,
+    uploadedBy: ctx.agent,
+    runtime: ctx.runtime,
+    sessionId: ctx.sessionId,
+    manifestSource: source,
+    keepLocal: true,
+    attachments,
+    failures,
+  };
+  const receiptPath = path.join(captureDir, 'upload-receipt.json');
+  fs.writeFileSync(receiptPath, JSON.stringify(receipt, null, 2) + '\n');
+
+  ctx.registry.append({
+    verb: VERBS.UPLOAD,
+    path: captureDir,
+    issue,
+    agent: ctx.agent,
+    runtime: ctx.runtime,
+    meta: {
+      target,
+      receiptPath,
+      attachmentCount: attachments.length,
+      failureCount: failures.length,
+      attachmentIds: attachments.map((a) => a.attachmentId),
+    },
+  });
+
+  return { receipt, receiptPath, attachments, failures };
+}
+
+function evidenceUpload(args, ctx) {
+  const { issue, name } = validateIssueAndName(args);
+  const captureDir = path.join(ctx.layout.evidence, issue, name);
+  if (!fs.existsSync(captureDir)) {
+    process.stderr.write(`error: capture dir not found: ${captureDir}\n`);
+    process.exit(69);
+  }
+
+  const target = args.target ?? ctx.config.upload?.default_target ?? 'paperclip';
+
+  const { files, manifestPath, source } = loadManifestFiles(
+    captureDir,
+    Boolean(args['skip-manifest']),
+  );
+  if (files === null) {
+    process.stderr.write(
+      `error: manifest missing at ${manifestPath}\n` +
+        `hint: run \`agent-fs evidence manifest --issue ${issue} ${name}\` first,\n` +
+        `      or pass --skip-manifest to scan and upload everything in the capture dir.\n`,
+    );
+    process.exit(64);
+  }
+  if (files.length === 0) {
+    process.stderr.write(`error: no files to upload in ${captureDir}\n`);
+    process.exit(64);
+  }
+
+  const { receipt, receiptPath, attachments, failures } = performUpload({
+    issue,
+    captureDir,
+    files,
+    source,
+    target,
+    commentId: args['comment-id'],
+    ctx,
+  });
+
+  if (args.json) {
+    process.stdout.write(JSON.stringify(receipt, null, 2) + '\n');
+  } else {
+    process.stdout.write(
+      `uploaded ${attachments.length} file(s) to ${target}, ${failures.length} failure(s).\n`,
+    );
+    process.stdout.write(`receipt: ${receiptPath}\n`);
+    if (attachments.length > 0) {
+      process.stdout.write(`\nattachment IDs:\n`);
+      for (const a of attachments) {
+        process.stdout.write(`  ${a.name.padEnd(24)} ${a.attachmentId}  ${a.contentPath ?? ''}\n`);
+      }
+    }
+    if (failures.length > 0) {
+      process.stdout.write(`\nfailures:\n`);
+      for (const f of failures) {
+        process.stdout.write(`  ${f.name.padEnd(24)} ${f.error}\n`);
+      }
+    }
+  }
+
+  if (failures.length > 0) process.exit(70);
+}
+
+function buildAttachmentMarkdown(attachments) {
+  if (attachments.length === 0) return '';
+  const lines = ['### Attachments', ''];
+  for (const a of attachments) {
+    const link = a.contentPath || `attachment ${a.attachmentId}`;
+    const sizeStr = a.byteSize ? ` (${a.byteSize} bytes)` : '';
+    lines.push(`- ![${a.name}](${link})${sizeStr}`);
+  }
+  return lines.join('\n');
+}
+
+function evidencePost(args, ctx) {
+  // upload + comment in a single call. Used by Holly workers to publish
+  // evidence with one verb.
+  const { issue, name } = validateIssueAndName(args);
+  const captureDir = path.join(ctx.layout.evidence, issue, name);
+  if (!fs.existsSync(captureDir)) {
+    process.stderr.write(`error: capture dir not found: ${captureDir}\n`);
+    process.exit(69);
+  }
+
+  const target = args.target ?? ctx.config.upload?.default_target ?? 'paperclip';
+  if (target !== 'paperclip') {
+    process.stderr.write(
+      `error: evidence post is only implemented for target "paperclip" (got "${target}"). The post step uses pcli comment.\n`,
+    );
+    process.exit(64);
+  }
+
+  const userComment = args.comment ? String(args.comment) : '';
+  if (!userComment && !args['allow-empty-comment']) {
+    process.stderr.write(
+      'error: --comment is required (use --allow-empty-comment to post just the attachments).\n',
+    );
+    process.exit(65);
+  }
+
+  const { files, manifestPath, source } = loadManifestFiles(
+    captureDir,
+    Boolean(args['skip-manifest']),
+  );
+  if (files === null) {
+    process.stderr.write(
+      `error: manifest missing at ${manifestPath}\n` +
+        `hint: run \`agent-fs evidence manifest --issue ${issue} ${name}\` first.\n`,
+    );
+    process.exit(64);
+  }
+  if (files.length === 0) {
+    process.stderr.write(`error: no files to upload in ${captureDir}\n`);
+    process.exit(64);
+  }
+
+  // Step 1: upload.
+  const uploadResult = performUpload({
+    issue,
+    captureDir,
+    files,
+    source,
+    target,
+    commentId: undefined,
+    ctx,
+  });
+
+  if (uploadResult.attachments.length === 0) {
+    process.stderr.write(
+      `error: no attachments succeeded; refusing to post comment. See receipt: ${uploadResult.receiptPath}\n`,
+    );
+    process.exit(70);
+  }
+
+  // Step 2: compose + send comment.
+  const attachmentMd = buildAttachmentMarkdown(uploadResult.attachments);
+  const fullBody = userComment ? `${userComment}\n\n${attachmentMd}` : attachmentMd;
+
+  const pcliBin = findPcli();
+  if (!pcliBin) {
+    process.stderr.write(
+      'error: pcli not found; upload succeeded but comment could not be posted.\n' +
+        `receipt: ${uploadResult.receiptPath}\n`,
+    );
+    process.exit(70);
+  }
+
+  // pcli comment emits plain text ("✓ Comment added to GRO-XXX") on success,
+  // so we don't parse it as JSON. Pass the body via stdin to avoid argv-length
+  // limits and escaping issues with multi-line markdown.
+  const pcliBinResolved = findPcli();
+  const result = spawnSyncWithStdin(pcliBinResolved, ['comment', issue, '-'], fullBody, 30_000);
+  if (result.status !== 0) {
+    process.stderr.write(
+      `error: pcli comment failed (exit ${result.status}): ${(result.stderr || result.stdout || '').trim().slice(0, 400)}\n` +
+        `upload receipt (already on disk): ${uploadResult.receiptPath}\n`,
+    );
+    process.exit(70);
+  }
+
+  const updatedReceipt = {
+    ...uploadResult.receipt,
+    comment: {
+      postedAt: new Date().toISOString(),
+      bodyChars: fullBody.length,
+      pcliMessage: (result.stdout || '').trim().slice(0, 200),
+    },
+  };
+  fs.writeFileSync(uploadResult.receiptPath, JSON.stringify(updatedReceipt, null, 2) + '\n');
+
+  if (args.json) {
+    process.stdout.write(JSON.stringify(updatedReceipt, null, 2) + '\n');
+    return;
+  }
+  process.stdout.write(
+    `posted to ${issue}: ${uploadResult.attachments.length} attachment(s), 1 comment.\n`,
+  );
+  process.stdout.write(`pcli: ${(result.stdout || '').trim()}\n`);
+  process.stdout.write(`receipt: ${uploadResult.receiptPath}\n`);
+}
+
+function spawnSyncWithStdin(bin, args, input, timeoutMs) {
+  // Local helper that allows passing stdin (pcli comment ISSUE - reads body from stdin).
+  return spawnSyncFn(bin, args, { encoding: 'utf8', input, timeout: timeoutMs });
+}
+
+const SUB_ACTIONS = {
+  manifest: evidenceManifest,
+  upload: evidenceUpload,
+  post: evidencePost,
+};
+
+export function evidenceVerb(args, ctx) {
+  // If the first positional is a known sub-action, dispatch to it. Otherwise
+  // treat the call as the path-getter (default action).
+  const first = args._[0];
+  if (first && Object.prototype.hasOwnProperty.call(SUB_ACTIONS, first)) {
+    return SUB_ACTIONS[first]({ ...args, _: args._.slice(1) }, ctx);
+  }
+  return evidencePath(args, ctx);
+}

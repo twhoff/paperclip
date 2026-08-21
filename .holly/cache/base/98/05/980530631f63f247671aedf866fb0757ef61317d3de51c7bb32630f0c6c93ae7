@@ -1,0 +1,268 @@
+#!/usr/bin/env bash
+# agent-fs PreToolUse hook for Claude Code.
+#
+# Blocks Write/Edit/Bash tool calls that target /tmp/<not-sanctioned> paths,
+# pointing agents at the agent-fs CLI instead.
+#
+# Distinguishes write contexts from reads in Bash commands so ordinary `cat`,
+# `grep`, `ls`, `head`, `find`, etc. against /tmp/ paths pass through. Only
+# paths in write positions (redirects, tee, cp/mv destinations, mkdir/touch,
+# --output style flags) get scanned for sanction.
+#
+# Decision protocol: stdout = JSON {decision, reason} blocks the call;
+# empty stdout with exit 0 allows it. We never exit non-zero (that surfaces as
+# a hook error to the user, not as a clean block).
+
+set -uo pipefail
+
+INPUT="$(cat)"
+
+# jq is mandatory for parsing; if absent we must not false-positive.
+if ! command -v jq >/dev/null 2>&1; then
+  exit 0
+fi
+
+# Resolve agent-fs binary.
+#
+# Resolution order:
+#   1. $AGENT_FS_BIN                                    (explicit override)
+#   2. this script's own sibling bin (../bin/agent-fs). The guard always ships
+#      beside the bin — including inside the holly package, where neither the
+#      global ~/.agents path nor a project-local copy may exist (the guard is
+#      dispatched via `holly hooks agent-fs-guard`). Resolving relative to the
+#      script makes it self-contained wherever it lives.
+#   3. ${HOME}/.agents/skills/agent-fs/bin/agent-fs     (global install)
+#   4. a project-local install, found by resolving the PROJECT directory and
+#      walking up from it. The global location is not guaranteed — a project
+#      may ship agent-fs locally only — so when it fails we must find the
+#      project's copy rather than assume the tool call's $PWD is the project
+#      root. The cwd may be a subdirectory or a git worktree, so a bare
+#      ${PWD}/.agents check misses a real local install; we therefore try
+#      $CLAUDE_PROJECT_DIR (Claude Code exports it to hooks), then the tool
+#      call's reported cwd, then $PWD — and walk each up to the filesystem
+#      root looking for the install.
+AGENT_FS_REL=".agents/skills/agent-fs/bin/agent-fs"
+
+# Absolute path to this script's sibling bin (<skill>/hooks/.. -> <skill>/bin).
+SELF_SIBLING_BIN=""
+_self_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
+if [ -n "${_self_dir}" ]; then
+  _cand="$(cd "${_self_dir}/.." 2>/dev/null && pwd)/bin/agent-fs"
+  [ -x "${_cand}" ] && SELF_SIBLING_BIN="${_cand}"
+fi
+
+# Walk up from $1 (a directory) looking for a project-local agent-fs install.
+# Prints the absolute binary path and returns 0 on success; returns 1 otherwise.
+find_project_agent_fs() {
+  local dir="$1"
+  [ -z "${dir}" ] && return 1
+  dir="$(cd "${dir}" 2>/dev/null && pwd)" || return 1
+  while [ -n "${dir}" ]; do
+    if [ -x "${dir}/${AGENT_FS_REL}" ]; then
+      printf '%s' "${dir}/${AGENT_FS_REL}"
+      return 0
+    fi
+    [ "${dir}" = "/" ] && break
+    dir="$(dirname "${dir}")"
+  done
+  return 1
+}
+
+BIN="${AGENT_FS_BIN:-}"
+if [ -z "${BIN}" ] || [ ! -x "${BIN}" ]; then
+  GUESS_GLOBAL="${HOME}/${AGENT_FS_REL}"
+  if [ -x "${GUESS_GLOBAL}" ]; then
+    BIN="${GUESS_GLOBAL}"
+  else
+    # Global install missing — resolve the project directory and search there.
+    HOOK_CWD="$(printf '%s' "$INPUT" | jq -r '.cwd // empty')"
+    BIN="$(find_project_agent_fs "${CLAUDE_PROJECT_DIR:-}" \
+        || find_project_agent_fs "${HOOK_CWD}" \
+        || find_project_agent_fs "${PWD}")"
+    # Last resort: this script's own sibling bin. Only reached when neither a
+    # global nor a project-local copy exists — e.g. the guard was dispatched
+    # via `holly hooks agent-fs-guard` from the holly package in a directory
+    # with no project-local install. Every copy reads the same ~/.agent-scratch
+    # registry, so which one runs is immaterial to the sanction decision.
+    if { [ -z "${BIN}" ] || [ ! -x "${BIN}" ]; } && [ -n "${SELF_SIBLING_BIN}" ]; then
+      BIN="${SELF_SIBLING_BIN}"
+    fi
+    if [ -z "${BIN}" ] || [ ! -x "${BIN}" ]; then
+      exit 0
+    fi
+  fi
+fi
+
+TOOL_NAME="$(printf '%s' "$INPUT" | jq -r '.tool_name // empty')"
+
+# agent-fs self-invocation exemption (first command-token is agent-fs).
+if [ "$TOOL_NAME" = "Bash" ]; then
+  CMD_PEEK="$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty')"
+  FIRST_TOKEN="$(printf '%s' "$CMD_PEEK" | awk 'NR==1 {sub(/^[[:space:]]+/, ""); split($0, a, /[[:space:]|;&]/); print a[1]; exit}')"
+  FIRST_TOKEN_CLEAN="$(printf '%s' "$FIRST_TOKEN" | sed -E 's/^["'"'"']+//; s/["'"'"']+$//')"
+  case "$FIRST_TOKEN_CLEAN" in
+    "$BIN"|*/agent-fs|agent-fs|'$AGENT_FS_BIN'|'${AGENT_FS_BIN}')
+      exit 0
+      ;;
+  esac
+fi
+
+extract_write_targets() {
+  # Tokenize the Bash command and emit /tmp/* paths that appear in WRITE
+  # positions only. Reads (cat /tmp/foo, grep /tmp/foo, etc.) are not emitted.
+  #
+  # Step 1: strip quoted-string contents so /tmp/* literals inside bash quotes
+  # don't get treated as syntactic redirect targets. Without this, commands
+  # that PASS a /tmp string as data (e.g. a JSON payload being built up for
+  # hook-on-hook testing) get falsely flagged as writes.
+  #
+  # Step 2: normalise whitespace around redirect operators and clause
+  # separators so awk can see them as distinct tokens.
+  local cmd="$1"
+  if command -v python3 >/dev/null 2>&1; then
+    cmd="$(printf '%s' "$cmd" | python3 -c '
+import sys
+s = sys.stdin.read()
+out = []
+i = 0
+while i < len(s):
+    c = s[i]
+    if c == "\x27":  # single quote — no interpolation, copy as a space-padded blank
+        j = s.find("\x27", i + 1)
+        if j == -1:
+            break
+        out.append(" " * (j - i + 1))
+        i = j + 1
+        continue
+    if c == "\"":  # double quote — content is data; treat as blank-padded
+        j = i + 1
+        while j < len(s):
+            if s[j] == "\\" and j + 1 < len(s):
+                j += 2
+                continue
+            if s[j] == "\"":
+                break
+            j += 1
+        if j >= len(s):
+            break
+        out.append(" " * (j - i + 1))
+        i = j + 1
+        continue
+    out.append(c)
+    i += 1
+sys.stdout.write("".join(out))
+')"
+  fi
+  cmd="$(printf '%s' "$cmd" | sed -E '
+    s/&>>/ \&>> /g
+    s/&>/ \&> /g
+    s/2>>/ 2>> /g
+    s/2>/ 2> /g
+    s/>>/ >> /g
+    s/(^|[^>&2])>(([^>])|$)/\1 > \2/g
+    s/\|/ | /g
+    s/&&/ \&\& /g
+    s/\|\|/ || /g
+    s/;/ ; /g
+  ')"
+
+  printf '%s' "$cmd" | awk '
+    BEGIN {
+      # Tokens that indicate the NEXT token is a write target.
+      split(">  >>  &>  &>>  2>  2>>  tee  cp  mv  mkdir  touch  rm  rmdir  install  ln  chmod  chown  -o  --output  --out  --out-dir  --path  --file  -f  --out-path  --output-path  --dest  --destination  --target", w, /  +/)
+      for (i in w) write_pre[w[i]] = 1
+      # Tokens that indicate the NEXT-NEXT token is a write target if intermediate is a flag.
+      cmd_takes_dest["cp"] = 1; cmd_takes_dest["mv"] = 1; cmd_takes_dest["ln"] = 1
+    }
+    {
+      n = split($0, t, /[[:space:]]+/)
+      prev = ""
+      prev2 = ""
+      for (i = 1; i <= n; i++) {
+        tok = t[i]
+        if (tok == "") { continue }
+        # Equals-form flags: --output=/tmp/foo
+        if (tok ~ /^(--?(output|out|out-dir|path|file|f|out-path|output-path|dest|destination|target|o))=/) {
+          eq = index(tok, "=")
+          val = substr(tok, eq + 1)
+          if (val ~ /^\/?(private\/)?tmp\//) {
+            sub(/[";,)]+$/, "", val)
+            print val
+          }
+        }
+        if (tok ~ /^\/?(private\/)?tmp\//) {
+          # Strip trailing punctuation
+          cleaned = tok
+          sub(/[";,)]+$/, "", cleaned)
+          if (write_pre[prev]) {
+            print cleaned
+          } else if (prev == "-a" && prev2 == "tee") {
+            print cleaned
+          } else if (prev == "-p" && prev2 == "mkdir") {
+            print cleaned
+          } else if (prev == "-f" && prev2 == "rm") {
+            print cleaned
+          } else if (prev == "-rf" || prev == "-fr") {
+            # rm -rf /tmp/foo (rm already in write_pre, but include this just in case)
+            print cleaned
+          }
+        }
+        prev2 = prev
+        prev = tok
+      }
+    }
+  '
+}
+
+case "$TOOL_NAME" in
+  Write|Edit)
+    TARGETS=("$(printf '%s' "$INPUT" | jq -r '.tool_input.file_path // empty')")
+    ;;
+  Bash)
+    CMD="$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty')"
+    mapfile -t TARGETS < <(extract_write_targets "$CMD")
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+
+UNSANCTIONED=()
+for TARGET in "${TARGETS[@]}"; do
+  [ -z "${TARGET}" ] && continue
+  TARGET="$(printf '%s' "$TARGET" | sed -E 's/[\"'\'';,)]+$//')"
+  [ -z "${TARGET}" ] && continue
+  # For Bash, only block /tmp/* paths (extract_write_targets already filters).
+  # For Write/Edit, only block /tmp/* paths too.
+  case "$TARGET" in
+    /tmp/*|/private/tmp/*) ;;
+    *) continue ;;
+  esac
+  if ! "${BIN}" check-path "${TARGET}" --quiet >/dev/null 2>&1; then
+    UNSANCTIONED+=("${TARGET}")
+  fi
+done
+
+if [ "${#UNSANCTIONED[@]}" -eq 0 ]; then
+  exit 0
+fi
+
+TARGET_LIST="$(printf '  %s\n' "${UNSANCTIONED[@]}")"
+jq -n \
+  --arg targets "${TARGET_LIST}" \
+  --arg bin "${BIN}" \
+  '{
+    decision: "block",
+    reason: (
+      "agent-fs: path(s) below are outside the sanctioned scratch root:\n" + $targets + "\n" +
+      "Use one of:\n" +
+      "  " + $bin + " scratch <name>                       (disposable computation)\n" +
+      "  " + $bin + " evidence --issue <ID> <name>         (review artifacts)\n" +
+      "  " + $bin + " session                              (long-lived run state)\n\n" +
+      "If this is a system path that should bypass the hook, add it to the allowlist at\n" +
+      "  ~/.agent-scratch/_meta/allowlist.json\n" +
+      "and rerun `agent-fs doctor` to verify."
+    )
+  }'
+
+exit 0

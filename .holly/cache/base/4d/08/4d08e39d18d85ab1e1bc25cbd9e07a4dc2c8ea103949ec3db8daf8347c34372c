@@ -1,0 +1,68 @@
+// agent-fs path <category> — print the root of a category. Read-only; no registry event.
+// agent-fs path worktree --issue <ID> — resolve a pcli-managed worktree path.
+
+import { callPcliJson } from '../pcli.mjs';
+import { CATEGORIES, categoryPath, normalizeIssueId, ISSUE_ID_RULE } from '../paths.mjs';
+
+const ALL_CATEGORIES = [...CATEGORIES, 'worktree'];
+
+function resolveWorktree(args) {
+  if (!args.issue) {
+    process.stderr.write('error: path worktree requires --issue <ID>\n');
+    process.exit(65);
+  }
+  const issue = normalizeIssueId(args.issue);
+  if (!issue) {
+    process.stderr.write(`error: invalid issue id "${args.issue}" — ${ISSUE_ID_RULE}\n`);
+    process.exit(65);
+  }
+  const result = callPcliJson(['worktree', 'list']);
+  if (!result.ok) {
+    process.stderr.write(`error: pcli worktree list failed: ${result.error}\n`);
+    process.stderr.write('hint: ensure pcli is installed and primed (`pcli prime --company <prefix>`).\n');
+    process.exit(70);
+  }
+  const list = Array.isArray(result.data) ? result.data : [];
+  const issueLower = issue.toLowerCase();
+  const match = list.find((w) => (w.issue_id || '').toLowerCase() === issueLower);
+  if (!match) {
+    process.stderr.write(`error: no worktree for ${issue} in pcli's worktree list.\n`);
+    process.stderr.write('hint: create one with `pcli worktree ' + issue + '`.\n');
+    process.exit(69);
+  }
+  if (args.json) {
+    process.stdout.write(
+      JSON.stringify({
+        category: 'worktree',
+        issue,
+        path: match.path,
+        branch: match.branch,
+        head: match.head,
+        status: match.status,
+      }) + '\n',
+    );
+  } else {
+    process.stdout.write(match.path + '\n');
+  }
+}
+
+export function pathVerb(args, ctx) {
+  const category = args._[0];
+  if (!category) {
+    process.stderr.write(`error: path requires a category (one of: ${ALL_CATEGORIES.join(', ')})\n`);
+    process.exit(65);
+  }
+  if (category === 'worktree') {
+    return resolveWorktree(args);
+  }
+  const p = categoryPath(ctx.layout, category);
+  if (!p) {
+    process.stderr.write(`error: unknown category "${category}" (one of: ${ALL_CATEGORIES.join(', ')})\n`);
+    process.exit(65);
+  }
+  if (args.json) {
+    process.stdout.write(JSON.stringify({ category, path: p }) + '\n');
+  } else {
+    process.stdout.write(p + '\n');
+  }
+}

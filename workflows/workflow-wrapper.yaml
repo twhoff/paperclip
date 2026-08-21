@@ -1,0 +1,117 @@
+# yaml-language-server: $schema=../schemas/workflow.schema.json
+
+# Workflow Wrapper
+# ================
+# This wrapper defines universal pre-flight and post-flight steps that apply
+# to ALL workflows. When a workflow is executed:
+#
+#   1. wrapper preflight  (this file)
+#   2. workflow preflight  (the wrapped workflow)
+#   3. workflow hooks.beforeAll (if defined)
+#   4. for each main step:
+#        a. workflow hooks.beforeEach (if defined)
+#        b. the step itself
+#        c. workflow hooks.afterEach (if defined)
+#   5. workflow hooks.afterAll (if defined)
+#   6. workflow postflight (the wrapped workflow)
+#   7. wrapper postflight  (this file)
+
+name: Workflow Wrapper
+description: >-
+  Minimal universal pre-flight applied to wrapped workflows. Keep this wrapper
+  cheap: workflow-specific research, status transitions, quality gates, commits,
+  pushes, teardown, visual verification, and memory capture belong to the
+  wrapped workflow that actually needs them.
+
+preflight:
+  - prompt: >-
+      Check your inherited Holly session context before running any Holly
+      command:
+        test -n "${HOLLY_SESSION_ID:-}" || { echo "HOLLY_SESSION_ID is missing; stop and restart from a Holly-managed session."; exit 1; }
+      HOLLY_SESSION_ID is shell/runtime-owned and read-only. Do not export,
+      generate, overwrite, or bootstrap it with `holly session get`.
+      If you route any `holly ...` command through context-mode, prefix it as
+      `HOLLY_SESSION_ID=$HOLLY_SESSION_ID holly ...`; do not trust the
+      context-mode sandbox env by itself. If that expands empty inside
+      context-mode, pass the existing parent-shell value explicitly.
+
+  - prompt: >-
+      Set the current task and intent for your session. Determine the task
+      description and intent from the user's request and run:
+        eval "$(holly task start --intent '<what you plan to do>')"
+      This registers the task in .agent-sessions.json so other agents and
+      the user can see what you are working on. The --intent flag describes
+      your specific plan of action.
+
+      Then inspect the active task state:
+        holly task status
+      The PreToolUse hook blocks write operations until intent is verified.
+      After each new user prompt, verification can reset; refresh it with
+      `holly task start --intent "<what you plan to do>"` when needed.
+
+      If you already have a current_task set (check the UserPromptSubmit
+      hook output), verify it matches the user's intent. If the intent has
+      changed, running task set again will automatically archive the old task.
+      This step is MANDATORY — do not skip it.
+
+  - prompt: >-
+      Read AGENTS.md to load project rules and conventions. Confirm you
+      understand the critical rules before proceeding.
+
+  - prompt: >-
+      Check memories for relevant context. Use the second-brain skill if available.
+
+  - prompt: >-
+      Verify workspace isolation. If this task will involve file modifications
+      and no active task workspace exists, start one through Holly before
+      proceeding:
+        eval "$(holly task start --id <issue-id> --intent '<agent-intent>')"
+      The PreToolUse hook and task guards enforce this: file-modifying tools and
+      common shell mutation commands are blocked on the main checkout. Read-only
+      operations are allowed.
+    condition: The task will produce file changes that need committing.
+
+  - prompt: >-
+      Verify the Holly tracker adapter is usable for this project. Run
+      `holly tracker ready`. If Beads is not initialised for the current project,
+      STOP and ask the user to run the required tracker setup (`holly tracker info`
+      or the repo's documented bootstrap step) before continuing.
+    requires:
+      - Holly tracker CLI
+
+  - prompt: >-
+      Verify Beads issue tracking for this task. If the user provided an
+      issue or epic ID, run `holly tracker show <id>` to confirm it exists. If the
+      task has no associated Beads issue yet and will involve file changes
+      that need committing, create one now with `holly tracker create`. Record the
+      issue ID for use in commit messages. The commit-msg hook requires
+      a Beads issue ID (<issue-id>) in every commit -- establishing tracking
+      early prevents commit failures later.
+    requires:
+      - Holly tracker CLI
+    condition: The task will produce changes that need committing.
+
+steps:
+  - prompt: >-
+      Execute the wrapped workflow. Run its preflight steps, then its main
+      steps (with any hooks: beforeAll, beforeEach/afterEach per step,
+      afterAll), then its postflight steps. Track all steps using
+      manage_todo_list. When a step has no delegate defined, the primary
+      agent decides whether to execute it directly or delegate to an
+      appropriate worker sub-agent.
+
+postflight:
+  - prompt: >-
+      Wrapper postflight is intentionally minimal. Do not change issue status,
+      push, end the session, create follow-up issues, run quality gates, or
+      write memories here. Those actions are owned by explicit workflows such
+      as `commit` and `end-session`, or by the wrapped workflow's own
+      postflight when it has a specific reason.
+
+hooks:
+  beforeEach:
+    prompt: >-
+      For frontend steps, apply any already-loaded design-system and AX
+      constraints silently. Load additional frontend reference material only if
+      the current step cannot be completed safely from existing context.
+    condition: The step focuses on files in the `<frontend>/` directory.

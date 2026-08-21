@@ -1,0 +1,198 @@
+---
+name: holly-bug-bash
+description: >-
+  Orchestrate a live bug-bash / dogfooding session where a human tester reports
+  issues in real time and you, the orchestrator, capture each one, track it on
+  the board, and dispatch a bounded background worker to fix it — without ever
+  blocking on the workers. Use when the user says they are testing an app "as a
+  real user", running a bug bash, beta dogfooding, or "I'll report issues as I
+  hit them, you track and fix them". Covers the report-intake contract, pushing
+  back on thin reports, triage (new issue vs fold-in vs split), composing a
+  self-sufficient ("fat") issue, the thin worker-launch prompt, dispatch-and-
+  don't-block discipline, cross-agent coordination, and completion/retro.
+---
+
+# Holly Bug-Bash Orchestration
+
+You are the **orchestrator**, not the implementer. A human is testing a running
+app and will feed you bug reports as they hit them. Your job:
+
+1. Capture each report against a contract; push back when it is too thin.
+2. Triage it — new issue, fold into an existing one, or split into several.
+3. Write a **self-sufficient issue** on the board (the worker's source of truth).
+4. Dispatch **one bounded background worker** with a **thin** bootstrap prompt.
+5. **Never block** on a worker — keep helping the tester immediately.
+6. Verify completion and report back / post a retro.
+
+The governing principle: **thin prompt, fat issue.** The worker bootstraps itself
+from its role and reads the issue; you put all the substance *in the issue*, not
+in the dispatch prompt.
+
+## 1. Set Up the Session
+
+Before intake, establish orchestrator identity and confirm the board is reachable:
+
+- Affirm your Holly task intent (e.g. "Assist <tester> during a bug-bash:
+  intake, track, and dispatch fixes without blocking").
+- Prime/assume your orchestrator role on the tracker so you can create issues and
+  comment. Use the active adapter's tracker commands (see the `issue-tracker`
+  skill and its adapter addendum for the exact role/identity verbs), then confirm
+  your identity.
+- Confirm connectivity (the tracker API must actually be up — a dogfooding
+  session usually means the app *and* the control plane are running locally).
+
+Run tracker/chat/lifecycle commands in the **real shell**, not the context-mode
+sandbox: the sandbox does not inherit `HOLLY_SESSION_ID` and cannot reach a
+`127.0.0.1` control plane. Use the sandbox only for file/code analysis. If you
+must run a Holly command through the sandbox, pass the **explicit** session id
+(`HOLLY_SESSION_ID=<actual-id> ...`); the bare `$HOLLY_SESSION_ID` can expand
+empty there.
+
+## 2. The Report-Intake Contract
+
+Expect every report to carry — and ask the tester up front to provide:
+
+- **View / route** (e.g. `/dashboard`)
+- **Section** and **component**, if known
+- **Type**: frontend, API, backend, tooling, docs, workflow
+- **Expected** behaviour
+- **Actual** behaviour
+- **Repro** steps / what they clicked or typed
+- **Severity** / whether it blocks their test flow
+- **Screenshot or visible state**, when useful
+
+If a report is rich enough to write a good issue, proceed. If it is too thin,
+**push back with the single smallest specific question** needed — never hand the
+tester a long form to fill out. Tell them what you still need and keep going on
+anything you *can* act on.
+
+## 3. Triage Before You Track
+
+Do not reflexively create one issue per report. Decide:
+
+- **New issue** — a distinct, independent defect.
+- **Fold in as evidence** — same root-cause family as an existing issue. Add a
+  comment with the new reproduction instead of a duplicate. A second symptom that
+  *narrows* a known bug is evidence, not a new ticket.
+- **Split** — one report that conflates separate failures becomes multiple
+  issues (e.g. "login bounces back" *and* an unrelated API 500 surfaced in the
+  same session are two tickets).
+
+Do a quick local read to ground the triage (find the suspect component, an
+existing migration, the likely root-cause file) — but timebox it; you are
+triaging, not fixing.
+
+## 4. Compose a Self-Sufficient ("Fat") Issue
+
+The issue is the worker's only briefing. Every issue you create includes:
+
+```markdown
+## Worker Bootstrap
+
+Assigned agent: `<agent-handle>`
+
+Prompt:
+> Load the holly skills and prime on <PREFIX> as agent <agent-handle>. Once you
+> have successfully primed and assumed your role, complete the task <ISSUE-ID>.
+
+## Required Skills
+
+- <baseline skills — see below>
+- <task-specific skills>
+```
+
+Plus the substance: problem, expected vs actual, repro, acceptance criteria,
+verification requirements, and any triage notes / suspected root cause you found.
+
+### Baseline required skills (always present)
+
+- **Tracker skills — depends on the loaded Holly adapter.** Load the
+  `issue-tracker` skill plus the matching adapter addendum; the active adapter
+  ships its own operator CLI and tracker skill. Load the ones for the active
+  adapter, not all of them.
+- **`ui-visual-capture`** — captures all viewports at once via Playwright, and
+  builds contact sheets from screen recordings. The contact sheets are what make
+  AI-powered animation analysis and UX review possible, so this is required for
+  any UI-visible work, not just static-layout checks.
+- **`agent-fs` — CRITICAL, and the one workers most often forget.** It explains
+  how an agent should use the filesystem: it grants a scratch folder with full
+  write access for temporary files, evidence, and experiments, and keeps the
+  agent from polluting the project tree with junk. Always list it; call it out
+  explicitly so the worker actually loads it.
+- **A design guide and/or design-system skill** — generalize this per project.
+  State the *goal*, not a fixed skill name: "Load the project's design guide
+  and/or design-system skill(s) so you know the design-token catalogue, the
+  UI/UX patterns, and the project's design approach and language." Name the
+  concrete skill when the project has one; otherwise point at whatever encodes
+  that project's tokens, patterns, and design language.
+- The Holly floor the worker needs to operate: `holly`, `agent-sessions`,
+  `agent-lifecycle`, `issue-tracker`, `use-workflow`, `ax-commandments`.
+
+### Task-specific skills (add as relevant)
+
+- Bugs / test failures: `systematic-debugging`, `test-driven-development`
+- UI / component work: the project's atomic-design + Storybook + CSS-framework
+  skills
+- Type-heavy work: the project's advanced-typing skill
+- Backend / scripting: the relevant language + testing skills
+
+## 5. Dispatch a Bounded Worker (Thin Prompt)
+
+Spawn **one bounded background worker per issue**. The launch prompt is the fixed
+one-liner — nothing more is needed because the issue carries the rest:
+
+```text
+Load the holly skills and prime on <PREFIX> as agent <agent-handle>. Once you
+have successfully primed and assumed your role, complete the task <ISSUE-ID>.
+```
+
+Optionally append a short reminder ("Read the issue fully first; it lists the
+required skills; don't ask the user unless truly blocked; return a final report
+with status, files, verification, evidence, risks"). Do **not** re-inline the
+issue body, scope, or workflow into the prompt — that is what the fat issue is
+for.
+
+Use bounded background workers (e.g. `spawn_agent`), not persistent chat agents.
+
+## 6. Don't Block — Keep the Tester Moving
+
+The instant a worker is dispatched, return to the tester. Your priority is
+**intake and investigation**, not babysitting workers. Only wait on a worker when
+its answer is needed for the tester's very next step.
+
+While a worker runs you can keep doing useful local analysis (grounding the next
+triage, checking related code) — just never gate the tester on a worker.
+
+## 7. Coordinate With Workers
+
+- Nudge or hand off to workers by posting to the shared chat channel
+  (`holly chat post --channel all-agents`), **not** a direct per-agent channel —
+  any Holly-aware worker watches all-agents.
+- Attribution caveat: if a worker reuses your `HOLLY_SESSION_ID`, its chat posts
+  may be attributed to you rather than its assumed role. Don't fight it
+  mid-session; note it and move on.
+- Local CLI role state (e.g. an adapter "prime"/role-assume command) may not
+  persist into every tool shell; re-affirm your orchestrator role before tracker
+  writes if needed.
+- Know the active adapter's handoff semantics before interpreting issue state.
+  Some adapters intentionally return a released issue to an unassigned/`todo`
+  state as the next-agent pickup signal. Do **not** "repair" that state by
+  reassigning or changing status unless the issue comment or adapter workflow
+  explicitly says to. Always post the canonical next-owner mention before
+  release so wake-up routing has already happened.
+
+## 8. Verify Completion and Report
+
+When a worker reports done, verify before trusting it:
+
+- Tracker state / final comments
+- The landed commit (confirm the SHA), branch, and worktree cleanup
+- Required visual evidence is attached for UI-visible work
+- Adapter handoff state is expected (for example, a release may leave the issue
+  unassigned/`todo` after a successful worker handoff)
+- The handoff used the **canonical** mention format for the next owner (QA/
+  review), not a plain `@Name` that may not wake the agent
+
+Then give the tester a short verdict (smooth vs bumpy, any process/skill gaps),
+and — when the session warrants it — post a concise retro to `all-agents` so the
+friction and learnings are captured for the next run.

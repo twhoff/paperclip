@@ -1,0 +1,249 @@
+/**
+ * dev-server-daemon end-to-end tests.
+ *
+ * These tests spawn the real daemon as a detached child process, give it a real
+ * long-lived target PID (`sleep ...`), and assert that:
+ *   - the daemon survives parent exit,
+ *   - it writes its own pid file at startup and removes it at exit,
+ *   - it fires SIGTERM when idle elapses,
+ *   - it clears metadata + the sidecar pid file after a successful kill,
+ *   - it escalates to SIGKILL when the target ignores SIGTERM,
+ *   - it does NOT clear metadata when the target survives both signals.
+ *
+ * Each test uses a fresh tmpdir as the registry and a fresh ephemeral port number.
+ */
+
+import { test, beforeEach, afterEach } from 'node:test';
+import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import { fileURLToPath } from 'node:url';
+
+import {
+  saveServerMetadata,
+  loadServerMetadata,
+  DEFAULT_REGISTRY_DIR,
+} from '../scripts/lib/dev-server.mjs';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const DAEMON_PATH = path.resolve(__dirname, '..', 'scripts', 'lib', 'dev-server-daemon.mjs');
+
+let registryDir;
+let spawnedTargets = [];
+let spawnedDaemons = [];
+
+beforeEach(() => {
+  registryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pws-daemon-test-'));
+  spawnedTargets = [];
+  spawnedDaemons = [];
+});
+
+afterEach(() => {
+  for (const pid of [...spawnedTargets, ...spawnedDaemons]) {
+    try { process.kill(pid, 'SIGKILL'); } catch { /* already dead */ }
+  }
+  fs.rmSync(registryDir, { recursive: true, force: true });
+});
+
+function pickPort() {
+  // Use a fresh ephemeral number per test — registry is also isolated per test.
+  return 50000 + Math.floor(Math.random() * 9000);
+}
+
+function spawnTarget(extraArgs = []) {
+  // A `sleep` process is a clean long-lived target: it never catches signals,
+  // never spawns children, never logs. Ideal stand-in for a dev server we trust
+  // to respond to SIGTERM.
+  const child = spawn('sleep', ['120', ...extraArgs], { stdio: 'ignore', detached: false });
+  spawnedTargets.push(child.pid);
+  return child.pid;
+}
+
+function spawnTargetIgnoringSIGTERM() {
+  // A node process that ignores SIGTERM — used to verify SIGKILL escalation.
+  const code = `
+    process.on('SIGTERM', () => { /* swallow */ });
+    setInterval(() => {}, 60_000);
+  `;
+  const child = spawn(process.execPath, ['-e', code], { stdio: 'ignore', detached: false });
+  spawnedTargets.push(child.pid);
+  return child.pid;
+}
+
+function spawnDaemon(port, { idleMs = 1000, debug = false } = {}) {
+  /** @type {Record<string, string>} */
+  const env = {
+    ...process.env,
+    UI_VISUAL_CAPTURE_IDLE_MS: String(idleMs),
+  };
+  if (debug) env.UI_VISUAL_CAPTURE_DEBUG = '1';
+  const child = spawn(process.execPath, [DAEMON_PATH, String(port), registryDir], {
+    detached: true,
+    stdio: 'ignore',
+    env,
+  });
+  child.unref();
+  spawnedDaemons.push(child.pid);
+  return child.pid;
+}
+
+function isAlive(pid) {
+  try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+async function waitFor(predicate, { timeoutMs = 5000, intervalMs = 100 } = {}) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (await predicate()) return true;
+    await sleep(intervalMs);
+  }
+  return false;
+}
+
+// ─── tests ──────────────────────────────────────────────────────────────────
+
+test('daemon survives parent exit and writes its own pid file', async () => {
+  const port = pickPort();
+  const targetPid = spawnTarget();
+  const now = Date.now();
+  saveServerMetadata(port, {
+    port,
+    pid: targetPid,
+    worktreeRoot: '/fake',
+    packageDir: '/fake/frontend',
+    command: 'sleep 120',
+    logPath: path.join(registryDir, `${port}.log`),
+    startedAt: now,
+    lastUsedAt: now,
+    expiresAt: now + 60_000,
+  }, registryDir);
+
+  const daemonPid = spawnDaemon(port, { idleMs: 60_000 });
+  // Give the daemon a tick to come up and write its pid file.
+  const wroteFile = await waitFor(() => fs.existsSync(path.join(registryDir, `${port}.daemon.pid`)));
+  assert.equal(wroteFile, true, 'daemon should write its pid file at startup');
+
+  const pidFromFile = parseInt(fs.readFileSync(path.join(registryDir, `${port}.daemon.pid`), 'utf8'), 10);
+  assert.equal(pidFromFile, daemonPid, 'daemon pid file contents match spawn pid');
+
+  assert.equal(isAlive(daemonPid), true, 'daemon process should still be alive after parent exits');
+
+  // Teardown happens in afterEach; metadata test ends here.
+});
+
+test('daemon fires SIGTERM after idle elapses, clears metadata and pid sidecar', async () => {
+  const port = pickPort();
+  const targetPid = spawnTarget();
+  const now = Date.now();
+  saveServerMetadata(port, {
+    port,
+    pid: targetPid,
+    worktreeRoot: '/fake',
+    packageDir: '/fake/frontend',
+    command: 'sleep 120',
+    logPath: path.join(registryDir, `${port}.log`),
+    startedAt: now,
+    lastUsedAt: now,
+    expiresAt: now + 1000,
+  }, registryDir);
+
+  // sidecar pid file written by saveServerMetadata
+  const pidSidecar = path.join(registryDir, `${port}.pid`);
+  assert.equal(fs.existsSync(pidSidecar), true, 'sidecar pid file written at metadata save');
+
+  spawnDaemon(port, { idleMs: 1000 });
+
+  // After idle window + 2s kill grace, the target should be gone.
+  const targetDied = await waitFor(() => !isAlive(targetPid), { timeoutMs: 8000 });
+  assert.equal(targetDied, true, `target pid ${targetPid} should be killed by daemon after idle`);
+
+  // Daemon clears metadata on successful kill.
+  const metaCleared = await waitFor(() => loadServerMetadata(port, registryDir) === null);
+  assert.equal(metaCleared, true, 'metadata json removed after successful kill');
+
+  const pidSidecarCleared = await waitFor(() => !fs.existsSync(pidSidecar));
+  assert.equal(pidSidecarCleared, true, 'pid sidecar removed after successful kill');
+});
+
+test('daemon escalates to SIGKILL when target ignores SIGTERM', async () => {
+  const port = pickPort();
+  const targetPid = spawnTargetIgnoringSIGTERM();
+  const now = Date.now();
+  saveServerMetadata(port, {
+    port,
+    pid: targetPid,
+    worktreeRoot: '/fake',
+    packageDir: '/fake/frontend',
+    command: 'node -e ignore-sigterm',
+    logPath: path.join(registryDir, `${port}.log`),
+    startedAt: now,
+    lastUsedAt: now,
+    expiresAt: now + 500,
+  }, registryDir);
+
+  spawnDaemon(port, { idleMs: 500 });
+
+  const targetDied = await waitFor(() => !isAlive(targetPid), { timeoutMs: 8000 });
+  assert.equal(targetDied, true, `SIGTERM-ignoring target pid ${targetPid} should still be killed by SIGKILL escalation`);
+});
+
+test('daemon clears its own pid file on exit', async () => {
+  const port = pickPort();
+  const targetPid = spawnTarget();
+  const now = Date.now();
+  saveServerMetadata(port, {
+    port,
+    pid: targetPid,
+    worktreeRoot: '/fake',
+    packageDir: '/fake/frontend',
+    command: 'sleep 120',
+    logPath: path.join(registryDir, `${port}.log`),
+    startedAt: now,
+    lastUsedAt: now,
+    expiresAt: now + 500,
+  }, registryDir);
+
+  const daemonPid = spawnDaemon(port, { idleMs: 500 });
+  const daemonPidFile = path.join(registryDir, `${port}.daemon.pid`);
+  await waitFor(() => fs.existsSync(daemonPidFile));
+
+  // Wait for daemon to do its idle-kill-then-exit dance.
+  await waitFor(() => !isAlive(daemonPid), { timeoutMs: 8000 });
+  assert.equal(isAlive(daemonPid), false, 'daemon should exit after killing the target');
+
+  const sidecarCleared = await waitFor(() => !fs.existsSync(daemonPidFile));
+  assert.equal(sidecarCleared, true, 'daemon pid file removed on exit');
+});
+
+test('saveServerMetadata writes the .pid sidecar; clearServerMetadata removes it', async () => {
+  const { clearServerMetadata } = await import('../scripts/lib/dev-server.mjs');
+  const port = pickPort();
+  saveServerMetadata(port, {
+    port,
+    pid: 99999,
+    worktreeRoot: '/fake',
+    packageDir: '/fake',
+    command: 'fake',
+    logPath: path.join(registryDir, `${port}.log`),
+    startedAt: Date.now(),
+    lastUsedAt: Date.now(),
+    expiresAt: Date.now() + 1000,
+  }, registryDir);
+
+  const pidFile = path.join(registryDir, `${port}.pid`);
+  assert.equal(fs.existsSync(pidFile), true);
+  assert.equal(fs.readFileSync(pidFile, 'utf8').trim(), '99999');
+
+  clearServerMetadata(port, registryDir);
+  assert.equal(fs.existsSync(pidFile), false, 'sidecar removed by clearServerMetadata');
+});
+
+test('DEFAULT_REGISTRY_DIR is the expected `/tmp/ui-visual-capture/servers` path', () => {
+  assert.equal(DEFAULT_REGISTRY_DIR, path.join('/tmp', 'ui-visual-capture', 'servers'));
+});

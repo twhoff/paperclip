@@ -1,0 +1,138 @@
+---
+name: holly-project-release
+description: Manage Holly project releases, stable rescue baselines, release branches, hotfixes, and accidental pre-release ref corrections. Use when cutting or verifying Holly release tags such as v1.0.0, creating release branches such as release/1.0, preparing a hotfix tag, recovering from a bad Holly mainline change, or distinguishing Holly source, installed Holly tooling, and projects that use Holly.
+---
+
+# Holly Project Release
+
+Use this skill for release work in the **Holly project**. Read the governing ADR
+first:
+
+- `docs/ADRs/2026-06-30-holly-project-release-procedure.md`
+
+Keep three surfaces distinct:
+
+- **Holly project**: the source repo, release refs, `pyproject.toml`, tests, and
+  packaged code.
+- **Holly installation**: the active installed `holly` CLI, hooks, package data,
+  skills, workflows, and adapters.
+- **Projects that use Holly**: consumer repos that execute the installed Holly
+  toolchain. The Holly project is itself one of these projects, but source code
+  and installation are still separate surfaces.
+
+## Operating Rules
+
+1. Work through Holly lifecycle: tracker issue, task intent, worktree, commit,
+   finish, tracker sync.
+2. Treat released tags as immutable. Use patch tags for fixes.
+3. Use release branches as moving maintenance lines.
+4. Use SemVer for versions, pins, release lines, and hotfixes.
+5. Verify installed Holly, not only source tests.
+6. Register downstream projects and plan sync through `holly release ...`.
+7. Announce and record accidental pre-release ref corrections before deleting or
+   recreating refs.
+8. In agent contexts, run Git commands through
+   `holly task exec_in_current_task_worktree -- git ...`.
+
+## Tooling
+
+Use `holly release ...` for the project registry and SemVer planning:
+
+```bash
+holly release projects register /path/to/project --version '>=1.0,<1.1'
+holly release projects list
+holly release resolve --spec '>=1.0,<1.1' --available 1.0.0 --available 1.0.1
+holly release plan-sync /path/to/project --available 1.0.0 --available 1.0.1
+```
+
+Exact pins such as `1.0.0` do not float. Ranges such as `>=1.0,<1.1` resolve to
+the highest available SemVer version inside the boundary.
+
+Use `scripts/holly_release_refs.py` for deterministic ref work. It defaults to
+dry-run for mutating operations.
+
+```bash
+python3 .agents/skills/holly-project-release/scripts/holly_release_refs.py preflight \
+  --commit <sha> --tag v1.0.0 --branch release/1.0
+```
+
+```bash
+python3 .agents/skills/holly-project-release/scripts/holly_release_refs.py create \
+  --commit <sha> --tag v1.0.0 --branch release/1.0 \
+  --message "Holly v1.0.0 stable baseline"
+```
+
+Add `--yes --push` only after the dry-run output is correct.
+
+```bash
+python3 .agents/skills/holly-project-release/scripts/holly_release_refs.py verify \
+  --commit <sha> --tag v1.0.0 --branch release/1.0
+```
+
+For accidental pre-release refs only:
+
+```bash
+python3 .agents/skills/holly-project-release/scripts/holly_release_refs.py delete-accidental \
+  --tag v1.0.0 --branch release/1.0
+```
+
+Add `--yes --push` only when the operator has confirmed the refs are accidental
+and unreleased.
+
+## Recipes
+
+### Cut a First Stable Release
+
+1. Confirm the candidate commit and intended package version.
+2. Run source gates:
+   - `uv run --extra dev pytest -q`
+   - `uv run --extra dev ruff check src tests packages`
+   - `uv run --extra dev mypy src/holly`
+3. Reinstall the active Holly CLI and adapters from the candidate source.
+4. Run `holly doctor`.
+5. Smoke-test changed lifecycle, hook, session, tracker, or install behavior.
+6. Register affected consumer projects with `holly release projects register`.
+7. Run `holly release plan-sync` for at least one relevant consumer project.
+8. Run `holly_release_refs.py preflight`.
+9. Dry-run `holly_release_refs.py create`.
+10. Run `create --yes --push`.
+11. Run `verify`.
+12. Record the release in tracker and agent chat.
+
+### Correct Accidental Pre-release Refs
+
+Use only before the refs have been treated as a real release.
+
+1. Stop release work.
+2. Announce the correction in agent chat.
+3. Record the correction on the tracker issue.
+4. Dry-run `delete-accidental`.
+5. Run `delete-accidental --yes --push`.
+6. Fix and verify the baseline.
+7. Recreate refs only after verification passes.
+
+### Hotfix a Release Line
+
+1. Start from the release branch, for example `release/1.0`.
+2. Apply the smallest fix.
+3. Run focused tests plus release gates.
+4. Reinstall from the release branch and run `holly doctor`.
+5. Push the release branch.
+6. Tag the hotfix, for example `v1.0.1`.
+7. Run `holly release plan-sync` for affected projects.
+8. Decide whether to merge or cherry-pick the fix back to `main`.
+
+## Troubleshooting
+
+- **Source fixed, installed behavior old**: reinstall Holly and adapters, then
+  run `holly doctor`.
+- **Project version does not match installed Holly**: run
+  `holly release plan-sync <project> --available <versions...>` and switch the
+  installed Holly toolchain before syncing assets.
+- **Consumer project still broken**: diagnose the consumer project separately;
+  check `.holly/config.toml`, generated integration docs, hook config, active
+  session, and task state.
+- **Tag points at the wrong commit**: if unreleased, delete/recreate as an
+  accidental pre-release correction. If released, cut a patch tag.
+- **Release branch points at the wrong commit**: if unreleased, delete/recreate.
+  If used by others, move forward by commits, cherry-picks, merges, or reverts.

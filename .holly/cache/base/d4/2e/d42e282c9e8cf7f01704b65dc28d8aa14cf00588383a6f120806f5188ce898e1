@@ -1,0 +1,174 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { parseArgs } from '../scripts/lib/args.mjs';
+
+test('parses minimal positional URL', () => {
+  const opts = parseArgs(['http://localhost:3000']);
+  assert.equal(opts.url, 'http://localhost:3000');
+  assert.equal(opts.outputPath, undefined);
+});
+
+test('parses URL and output path positionals', () => {
+  const opts = parseArgs(['http://localhost:3000', '/tmp/out']);
+  assert.equal(opts.url, 'http://localhost:3000');
+  assert.equal(opts.outputPath, '/tmp/out');
+});
+
+test('--help short-circuits without requiring URL', () => {
+  const opts = parseArgs(['--help']);
+  assert.equal(opts.help, true);
+});
+
+test('-h is alias for --help', () => {
+  const opts = parseArgs(['-h']);
+  assert.equal(opts.help, true);
+});
+
+test('errors when URL is missing and not --help', () => {
+  assert.throws(() => parseArgs([]), /url is required/i);
+});
+
+test('--theme=dark sets theme', () => {
+  assert.equal(parseArgs(['http://x', '--theme=dark']).theme, 'dark');
+});
+
+test('--theme dark (space form) sets theme', () => {
+  assert.equal(parseArgs(['http://x', '--theme', 'dark']).theme, 'dark');
+});
+
+test('default theme is system', () => {
+  assert.equal(parseArgs(['http://x']).theme, 'system');
+});
+
+test('--theme rejects invalid values', () => {
+  assert.throws(() => parseArgs(['http://x', '--theme=fancy']), /invalid theme/i);
+});
+
+test('--viewport-only is a boolean flag', () => {
+  assert.equal(parseArgs(['http://x', '--viewport-only']).viewportOnly, true);
+  assert.equal(parseArgs(['http://x']).viewportOnly, false);
+});
+
+test('--scroll-y parses integer', () => {
+  assert.equal(parseArgs(['http://x', '--scroll-y=500']).scrollY, 500);
+  assert.equal(parseArgs(['http://x', '--scroll-y', '300']).scrollY, 300);
+});
+
+test('--scroll-y rejects non-integers', () => {
+  assert.throws(() => parseArgs(['http://x', '--scroll-y=abc']), /scroll-y/i);
+});
+
+test('--scroll-to captures selector', () => {
+  assert.equal(
+    parseArgs(['http://x', '--scroll-to=[data-testid="x"]']).scrollTo,
+    '[data-testid="x"]',
+  );
+});
+
+test('--clip-to captures selector for component crop; defaults undefined', () => {
+  assert.equal(parseArgs(['http://x']).clipTo, undefined);
+  assert.equal(
+    parseArgs(['http://x', '--clip-to=[data-testid="card"]']).clipTo,
+    '[data-testid="card"]',
+  );
+  assert.equal(parseArgs(['http://x', '--clip-to', '.panel']).clipTo, '.panel');
+});
+
+test('--scroll-y and --scroll-to are mutually exclusive', () => {
+  assert.throws(
+    () => parseArgs(['http://x', '--scroll-y=100', '--scroll-to=.x']),
+    /mutually exclusive/i,
+  );
+});
+
+test('--script captures path', () => {
+  assert.equal(parseArgs(['http://x', '--script', './a.mjs']).scriptPath, './a.mjs');
+});
+
+test('--auth-token captures token', () => {
+  assert.equal(parseArgs(['http://x', '--auth-token=xyz']).authToken, 'xyz');
+});
+
+test('--storage-state captures path', () => {
+  assert.equal(
+    parseArgs(['http://x', '--storage-state=/tmp/state.json']).storageState,
+    '/tmp/state.json',
+  );
+});
+
+test('--header is repeatable and split on first =', () => {
+  const opts = parseArgs([
+    'http://x',
+    '--header=X-A=one',
+    '--header',
+    'X-B=two=three',
+  ]);
+  assert.deepEqual(opts.headers, [
+    { key: 'X-A', value: 'one' },
+    { key: 'X-B', value: 'two=three' },
+  ]);
+});
+
+test('--header rejects malformed entries (no =)', () => {
+  assert.throws(() => parseArgs(['http://x', '--header=NoEquals']), /header/i);
+});
+
+test('--stable-timeout parses integer with default 10000', () => {
+  assert.equal(parseArgs(['http://x']).stableTimeout, 10000);
+  assert.equal(parseArgs(['http://x', '--stable-timeout=2000']).stableTimeout, 2000);
+});
+
+test('--wait-until accepts Playwright navigation readiness states', () => {
+  assert.equal(parseArgs(['http://x']).waitUntil, 'networkidle');
+  assert.equal(parseArgs(['http://x', '--wait-until=domcontentloaded']).waitUntil, 'domcontentloaded');
+  assert.throws(() => parseArgs(['http://x', '--wait-until=idleish']), /wait-until/i);
+});
+
+test('--resolution accepts low/medium/high/native; default native', () => {
+  assert.equal(parseArgs(['http://x']).resolution, 'native');
+  assert.equal(parseArgs(['http://x', '--resolution=low']).resolution, 'low');
+  assert.throws(() => parseArgs(['http://x', '--resolution=ultra']), /resolution/i);
+});
+
+test('--no-video sets video=false', () => {
+  assert.equal(parseArgs(['http://x', '--no-video']).noVideo, true);
+  assert.equal(parseArgs(['http://x']).noVideo, false);
+});
+
+test('--video-fps and contact sheet layout flags parse with defaults', () => {
+  const defaults = parseArgs(['http://x']);
+  assert.equal(defaults.videoFps, 2);
+  assert.equal(defaults.contactSheetColumns, 4);
+  assert.equal(defaults.contactSheetThumbWidth, 0);
+
+  const opts = parseArgs([
+    'http://x',
+    '--video-fps=60',
+    '--contact-sheet-columns=10',
+    '--contact-sheet-thumb-width=390',
+  ]);
+  assert.equal(opts.videoFps, 60);
+  assert.equal(opts.contactSheetColumns, 10);
+  assert.equal(opts.contactSheetThumbWidth, 390);
+  assert.throws(() => parseArgs(['http://x', '--video-fps=0']), /video-fps/i);
+});
+
+test('--viewports captures spec string', () => {
+  assert.equal(parseArgs(['http://x', '--viewports=mobile,desktop']).viewports, 'mobile,desktop');
+});
+
+test('--attach-existing is a boolean flag defaulting to false', () => {
+  assert.equal(parseArgs(['http://x']).attachExisting, false);
+  assert.equal(parseArgs(['http://x', '--attach-existing']).attachExisting, true);
+});
+
+test('errors on unknown flag', () => {
+  assert.throws(() => parseArgs(['http://x', '--frobnicate']), /unknown.*frobnicate/i);
+});
+
+test('=value form for boolean flags is rejected', () => {
+  assert.throws(
+    () => parseArgs(['http://x', '--viewport-only=yes']),
+    /viewport-only.*does not take a value/i,
+  );
+});

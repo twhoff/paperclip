@@ -1,0 +1,237 @@
+#!/usr/bin/env python3
+"""Manage Holly release refs with dry-run defaults.
+
+This helper intentionally wraps only the ref operations from
+docs/ADRs/2026-06-30-holly-project-release-procedure.md. It does not replace
+source tests, reinstall checks, `holly doctor`, or operator approval.
+"""
+
+from __future__ import annotations
+
+import argparse
+import subprocess
+import sys
+from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
+from typing import cast
+
+
+@dataclass(frozen=True)
+class RefState:
+    local_target: str | None
+    remote_target: str | None
+
+
+def run_git(args: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", *args],
+        check=check,
+        text=True,
+        capture_output=True,
+    )
+
+
+def git_stdout(args: list[str], *, check: bool = True) -> str:
+    return run_git(args, check=check).stdout.strip()
+
+
+def repo_root() -> Path:
+    root = git_stdout(["rev-parse", "--show-toplevel"])
+    return Path(root)
+
+
+def resolve_commit(commit: str) -> str:
+    return git_stdout(["rev-parse", f"{commit}^{{commit}}"])
+
+
+def local_tag_target(tag: str) -> str | None:
+    proc = run_git(["rev-parse", f"{tag}^{{}}"], check=False)
+    return proc.stdout.strip() if proc.returncode == 0 else None
+
+
+def local_branch_target(branch: str) -> str | None:
+    proc = run_git(["rev-parse", f"{branch}^{{commit}}"], check=False)
+    return proc.stdout.strip() if proc.returncode == 0 else None
+
+
+def remote_target(remote: str, ref: str) -> str | None:
+    proc = run_git(["ls-remote", remote, ref], check=False)
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return None
+    return proc.stdout.split()[0]
+
+
+def tag_state(tag: str, remote: str) -> RefState:
+    return RefState(
+        local_target=local_tag_target(tag),
+        remote_target=remote_target(remote, f"refs/tags/{tag}^{{}}"),
+    )
+
+
+def branch_state(branch: str, remote: str) -> RefState:
+    return RefState(
+        local_target=local_branch_target(branch),
+        remote_target=remote_target(remote, f"refs/heads/{branch}"),
+    )
+
+
+def print_state(kind: str, name: str, state: RefState) -> None:
+    print(f"{kind} {name}")
+    print(f"  local:  {state.local_target or 'absent'}")
+    print(f"  remote: {state.remote_target or 'absent'}")
+
+
+def ensure_absent_for_create(tag: str, branch: str, remote: str) -> None:
+    t = tag_state(tag, remote)
+    b = branch_state(branch, remote)
+    errors: list[str] = []
+    if t.local_target:
+        errors.append(f"local tag {tag} already exists at {t.local_target}")
+    if t.remote_target:
+        errors.append(f"remote tag {tag} already exists at {t.remote_target}")
+    if b.local_target:
+        errors.append(f"local branch {branch} already exists at {b.local_target}")
+    if b.remote_target:
+        errors.append(f"remote branch {branch} already exists at {b.remote_target}")
+    if errors:
+        raise SystemExit("Ref creation blocked:\n- " + "\n- ".join(errors))
+
+
+def cmd_preflight(args: argparse.Namespace) -> int:
+    root = repo_root()
+    commit = resolve_commit(args.commit)
+    print(f"repo:    {root}")
+    print(f"commit:  {commit}")
+    print(f"tag:     {args.tag}")
+    print(f"branch:  {args.branch}")
+    print_state("tag", args.tag, tag_state(args.tag, args.remote))
+    print_state("branch", args.branch, branch_state(args.branch, args.remote))
+    return 0
+
+
+def cmd_verify(args: argparse.Namespace) -> int:
+    commit = resolve_commit(args.commit)
+    states = {
+        f"local tag {args.tag}": local_tag_target(args.tag),
+        f"remote tag {args.tag}": remote_target(args.remote, f"refs/tags/{args.tag}^{{}}"),
+        f"local branch {args.branch}": local_branch_target(args.branch),
+        f"remote branch {args.branch}": remote_target(args.remote, f"refs/heads/{args.branch}"),
+    }
+    ok = True
+    for label, target in states.items():
+        status = "OK" if target == commit else "BAD"
+        print(f"{status}: {label}: {target or 'absent'}")
+        ok = ok and target == commit
+    if not ok:
+        print(f"expected: {commit}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_create(args: argparse.Namespace) -> int:
+    commit = resolve_commit(args.commit)
+    ensure_absent_for_create(args.tag, args.branch, args.remote)
+    commands = [
+        ["tag", "-a", args.tag, commit, "-m", args.message],
+        ["branch", args.branch, commit],
+    ]
+    if args.push:
+        commands.append(["push", args.remote, args.tag, args.branch])
+    if not args.yes:
+        print("dry-run: would create release refs")
+        for command in commands:
+            print("  git " + " ".join(command))
+        print("add --yes to execute; add --push to push created refs")
+        return 0
+    for command in commands:
+        proc = run_git(command)
+        if proc.stdout.strip():
+            print(proc.stdout.strip())
+        if proc.stderr.strip():
+            print(proc.stderr.strip(), file=sys.stderr)
+    return 0
+
+
+def cmd_delete_accidental(args: argparse.Namespace) -> int:
+    commands: list[list[str]] = []
+    if local_tag_target(args.tag):
+        commands.append(["tag", "-d", args.tag])
+    if local_branch_target(args.branch):
+        commands.append(["branch", "-D", args.branch])
+    if args.push:
+        if remote_target(args.remote, f"refs/tags/{args.tag}^{{}}"):
+            commands.append(["push", args.remote, f":refs/tags/{args.tag}"])
+        if remote_target(args.remote, f"refs/heads/{args.branch}"):
+            commands.append(["push", args.remote, f":refs/heads/{args.branch}"])
+    if not commands:
+        print("no matching local refs found; add --push to check/delete remote refs")
+        return 0
+    if not args.yes:
+        print("dry-run: would delete accidental pre-release refs")
+        for command in commands:
+            print("  git " + " ".join(command))
+        print("add --yes to execute; add --push to delete remote refs")
+        return 0
+    for command in commands:
+        proc = run_git(command)
+        if proc.stdout.strip():
+            print(proc.stdout.strip())
+        if proc.stderr.strip():
+            print(proc.stderr.strip(), file=sys.stderr)
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--remote", default="origin")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    preflight = sub.add_parser("preflight", help="show candidate commit and ref state")
+    preflight.add_argument("--commit", required=True)
+    preflight.add_argument("--tag", required=True)
+    preflight.add_argument("--branch", required=True)
+    preflight.set_defaults(func=cmd_preflight)
+
+    verify = sub.add_parser("verify", help="verify tag and branch point at commit")
+    verify.add_argument("--commit", required=True)
+    verify.add_argument("--tag", required=True)
+    verify.add_argument("--branch", required=True)
+    verify.set_defaults(func=cmd_verify)
+
+    create = sub.add_parser("create", help="create annotated tag and release branch")
+    create.add_argument("--commit", required=True)
+    create.add_argument("--tag", required=True)
+    create.add_argument("--branch", required=True)
+    create.add_argument("--message", required=True)
+    create.add_argument("--push", action="store_true")
+    create.add_argument("--yes", action="store_true")
+    create.set_defaults(func=cmd_create)
+
+    delete = sub.add_parser(
+        "delete-accidental", help="delete accidental pre-release tag and branch"
+    )
+    delete.add_argument("--tag", required=True)
+    delete.add_argument("--branch", required=True)
+    delete.add_argument("--push", action="store_true")
+    delete.add_argument("--yes", action="store_true")
+    delete.set_defaults(func=cmd_delete_accidental)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    func = cast(Callable[[argparse.Namespace], int], args.func)
+    try:
+        return func(args)
+    except subprocess.CalledProcessError as exc:
+        if exc.stdout:
+            print(exc.stdout, end="")
+        if exc.stderr:
+            print(exc.stderr, file=sys.stderr, end="")
+        return exc.returncode
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

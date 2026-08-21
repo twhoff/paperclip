@@ -1,0 +1,38 @@
+# Holly Release Checklist
+
+Use this checklist with `docs/ADRs/2026-06-30-holly-project-release-procedure.md`.
+
+## Before refs
+
+- [ ] Tracker issue exists for the release or hotfix.
+- [ ] Holly task is active in a worktree.
+- [ ] Candidate commit is identified.
+- [ ] `pyproject.toml` has the intended package version.
+- [ ] Source gates pass:
+  - [ ] `uv run --extra dev pytest -q`
+  - [ ] `uv run --extra dev ruff check src tests packages`
+  - [ ] `uv run --extra dev mypy src/holly`
+- [ ] Holly CLI and adapters are reinstalled from the candidate source.
+- [ ] `holly doctor` passes after reinstall.
+- [ ] Hook/session/lifecycle smoke tests pass when relevant.
+- [ ] At least one consumer project is checked when install behavior changed.
+- [ ] Relevant consumer projects are registered with `holly release projects register`.
+- [ ] Project SemVer pins/ranges are read from `.holly/config.toml` or supplied explicitly.
+- [ ] `holly release plan-sync` confirms whether the installed Holly can sync each project.
+
+## Ref work
+
+- [ ] `holly_release_refs.py preflight` reviewed.
+- [ ] `holly_release_refs.py create` dry-run reviewed.
+- [ ] `create --yes --push` executed only after operator approval.
+- [ ] `holly_release_refs.py verify` confirms local and remote refs.
+- [ ] Tracker issue and agent chat record the release.
+
+## Accidental pre-release correction
+
+- [ ] Operator confirms refs are accidental and unreleased.
+- [ ] Correction is posted in agent chat.
+- [ ] Correction is recorded on the tracker issue.
+- [ ] `delete-accidental` dry-run reviewed.
+- [ ] `delete-accidental --yes --push` executed.
+- [ ] Corrected baseline is fixed, verified, and re-created only after gates pass.

@@ -1,0 +1,457 @@
+---
+name: agent-sessions
+description: >-
+  Quick-reference for session bootstrap, UUID claiming, task intent
+  management, and PreToolUse hook restrictions. Covers the exact command
+  sequence to get from a fresh chat window to an unblocked working state.
+  Use when starting a new agent session, when tools are blocked by hooks,
+  or when debugging session/task gate failures.
+  Use when the user invokes the holly skill without any further instruction
+  or when the user invokes the holly skill with words like bootstrap, prepare,
+  load and so forth.
+---
+
+# Agent Sessions
+
+Practical guide to bootstrapping and maintaining a session in this
+workspace. If the PreToolUse hook is blocking your tools, this is the
+skill you need.
+
+See also: `agent-lifecycle` skill for the full lifecycle model
+(phases, chat integration, shutdown protocol).
+
+---
+
+## The Bootstrap Sequence
+
+Every primary agent in a fresh VS Code chat window starts from a top-level
+shell that already has `HOLLY_SESSION_ID`. Treat it as always available in that
+top-level shell:
+
+```bash
+holly doctor              # run directly, not through context-mode
+eval "$(holly task start --id <issue-id> --intent '<agent-intent>')"
+# Each user prompt re-arms intent. To continue the same work, re-affirm with
+# `eval "$(holly task resume)"`; to switch, re-run start with a new intent.
+```
+
+The `SessionStart` hook performs the boring bootstrap first: it resolves the
+existing Holly session, initializes `agent-fs`, and, when no task is active,
+posts an intent-only `<agent name> <session id> online and ready.` task. Treat
+that as startup readiness only; switch to a real issue/worktree task before
+editing files.
+
+`HOLLY_SESSION_ID` is read-only identity. Holly commands may validate it, record
+task state for it, and refresh activity; they do not create, export, repair, or
+backfill it. `holly task start` requires the existing ID, records task ID and/or
+intent, and changes to the project root or worktree when eval'd. `holly task
+start --intent "<agent-intent>"` is the single intent-setter: it records the
+task, posts intent to `all-agents`, and unblocks gated tools in one step.
+
+Interactive shell startup may assign a terminal-local `HOLLY_SESSION_ID` so
+concurrent VS Code/Codex terminals do not share one identity. Re-sourcing the
+shell profile inside the same terminal should keep the existing value.
+
+If Holly did not pick up the top-level shell's `HOLLY_SESSION_ID`
+automatically, run:
+
+```bash
+holly session get
+```
+
+That's the recovery path. Do not inspect this through context-mode first; the
+context-mode sandbox may not inherit the top-level shell environment.
+
+When using context-mode, every `holly ...` command passed to `ctx_execute` or
+`ctx_batch_execute` MUST start with the parent-shell prefix:
+`HOLLY_SESSION_ID=$HOLLY_SESSION_ID holly ...`. The sandbox may not inherit
+`HOLLY_SESSION_ID`; do not inspect only the sandbox env and report
+`HOLLY_SESSION_ID is not set` until the same Holly command has been retried
+with that prefix. If the prefix expands empty inside context-mode, resolve the
+existing value in the real shell and pass it explicitly as
+`HOLLY_SESSION_ID=agent-<existing-parent-shell-value> holly ...`.
+
+If the hook reports an unclaimed VS Code UUID, run the exact `holly session ...`
+command it prints. Do not call the private `session` shim directly.
+
+After `HOLLY_SESSION_ID` is present and task/intent verification succeeds, gated
+tools are unblocked. Tool visibility checks come after this bootstrap: do not
+diagnose missing MCP or deferred tools until the session ID and task intent are
+valid.
+
+### VS Code Multi-root Workspaces
+
+When VS Code opens multiple git repositories in one workspace, bootstrap
+an **origin session** first, then add repo-local sessions only when you
+need them. Non-repo folders borrow the origin session; they do not get
+their own `.agent-sessions.json` file.
+
+Default lazy bootstrap:
+
+```bash
+holly session workspace bootstrap \
+  --name 'YourAgentName' \
+  --uuid <your-vscode-uuid> \
+  --task 'Description of what you are doing' \
+  --intent 'Specific plan for this work'
+```
+
+That creates/claims the origin repo session only. If a later tool targets
+another repo in the same VS Code workspace, the hook blocks with a repo
+bootstrap hint. Run the targeted form:
+
+```bash
+holly session workspace bootstrap \
+  --name 'YourAgentName' \
+  --uuid <your-vscode-uuid> \
+  --repo /path/to/target-repo \
+  --task 'Description of what you are doing' \
+  --intent 'Specific plan for this work'
+```
+
+If you know you will work across every repo in the workspace, use eager
+bootstrap:
+
+```bash
+holly session workspace bootstrap \
+  --name 'YourAgentName' \
+  --uuid <your-vscode-uuid> \
+  --all-repos \
+  --task 'Description of what you are doing' \
+  --intent 'Specific plan for this work'
+```
+
+Routing order for hook checks is target repo first, then origin repo,
+then other workspace repos. A path inside a non-repo workspace folder
+uses the origin session.
+
+### Common Mistakes That Cause Deadlock
+
+- Calling the private `session` shim directly instead of Holly lifecycle commands
+- Treating Holly lifecycle commands as identity bootstrap; missing
+  `HOLLY_SESSION_ID` is a blocker
+- In a multi-root workspace, claiming the UUID in one shell/session store
+  and then running tools from another; use `holly session workspace bootstrap`
+  so each repo gets its own session store when needed
+- Trying `read_file` or `grep_search` before claiming the UUID —
+  these ARE exempt and should work, but if they don't, the hook
+  may have a bug. Report it.
+
+### What Each Step Does
+
+| Step | Command                                                               | What It Does                                                        |
+| ---- | --------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| 0    | `echo "$HOLLY_SESSION_ID"`                                             | Confirms shell/runtime-owned identity is present                    |
+| 1    | `eval "$(holly task start --id <issue-id> --intent '<agent-intent>')"` | Records task ID / intent, posts intent to `all-agents`, unblocks tools |
+| 2    | `eval "$(holly task resume)"` only if intent-sensitive tooling blocks or you need to re-enter the worktree | Re-affirms intent (`intent_posted=true`), re-enters your worktree, broadcasts pickup |
+| 3    | `holly session claim-vscode-uuid <uuid>` if the hook asks                         | Maps your VS Code chat window's internal UUID to your Holly session |
+
+---
+
+## PreToolUse Hook -- What Gets Blocked and Why
+
+The `hook_pre_tool_use.py` script runs before every tool call. It
+enforces a three-tier gate:
+
+```text
+  Tier 1: Is the VS Code UUID claimed?
+    NO  --> BLOCKED (run the holly session command printed by the hook)
+    YES --> continue
+
+  Tier 2: Does an active session exist for HOLLY_SESSION_ID?
+    NO  --> BLOCKED (fix shell/runtime bootstrap; missing ID is not recoverable here)
+    YES --> continue
+
+  Tier 3: Is a task set with posted intent?
+    NO task        --> BLOCKED (run: eval "$(holly task start --id <issue-id> --intent '<agent-intent>')")
+    Task but       --> BLOCKED (re-run: holly task start --intent "<agent-intent>")
+     intent not posted
+    Posted         --> ALLOWED
+```
+
+`holly task abort`, `holly task status`, and `holly task resume` are exempt
+from the Tier 3 intent gate, so recovery, inspect, and exit commands always
+pass even when intent is stale.
+
+### What Is Never Blocked
+
+The following are always exempt from **all three tiers**, including
+the UUID gate:
+
+- **Read-only tools**: `read_file`, `grep_search`, `semantic_search`,
+  `file_search`, `list_dir`, `get_errors`, `manage_todo_list`,
+  `tool_search_tool`, `search_subagent`, `runSubagent`, `Agent`,
+  `get_terminal_output`.
+  These are exempt so agents can read code and debug bootstrap
+  issues without being locked out.
+- **Holly bootstrap CLI commands** in the terminal: `holly task ...`,
+  `holly session ...`, `holly chat ...`, and `holly tracker ...`. This lets
+  you run the bootstrap sequence even before claiming UUIDs.
+- **Worktree isolation blocks** are separate from session blocks --
+  even with a valid session, you cannot write files on the main
+  checkout. Use the worktree command shown by the block message.
+
+### The UUID Problem
+
+VS Code assigns each chat window an internal UUID (like
+`fe4ad96d-cf5c-4e98-936f-9464c39b48e3`). This is NOT a session ID.
+The hooks need to know which session owns which chat window, so you
+must claim the UUID.
+
+**How to find your UUID:** Try any non-exempt tool call (e.g.
+`run_in_terminal` with a non-bootstrap command). If the UUID is
+unclaimed, the BLOCKED message will contain it:
+
+```
+BLOCKED: Unclaimed VS Code UUID: fe4ad96d-cf5c-4e98-936f-9464c39b48e3
+Run this command NOW to associate it with your session:
+  holly session claim-vscode-uuid fe4ad96d-cf5c-4e98-936f-9464c39b48e3
+```
+
+Copy the UUID from that message and run the claim command.
+
+### Multi-root workspace recovery
+
+If `holly session claim-vscode-uuid` succeeds but a later tool still says the UUID is
+unclaimed, the current tool probably targets a different repo's session
+store. Use the block message. If it names a repo, bootstrap that repo:
+
+```bash
+holly session workspace bootstrap \
+  --name 'YourName' \
+  --uuid <uuid-from-the-latest-block-message> \
+  --repo /path/from/the/block-message \
+  --task 'Current task' \
+  --intent 'Current intent'
+```
+
+If the target is a non-repo workspace folder, do not create a session
+there. Re-bootstrap the origin repo instead:
+
+```bash
+holly session workspace bootstrap \
+  --name 'YourName' \
+  --uuid <uuid-from-the-latest-block-message> \
+  --task 'Current task' \
+  --intent 'Current intent'
+```
+
+If the task changed, restart with `eval "$(holly task start {--id <issue-id> | --intent <agent-intent>})"`;
+that single command records the task and posts the new intent.
+
+---
+
+## Task Intent Management
+
+After each new user prompt, the `UserPromptSubmit` hook classifies the prompt
+with OpenAI (`gpt-5-nano`) against the current session intent. If the prompt
+continues the same intent, the hook stays silent. If the prompt starts a new
+intent, the hook updates `current_task.intent` automatically and keeps
+`intent_posted=true`. If classification fails, the hook emits a warning but does
+not reset intent.
+
+Manual commands are now recovery/debug paths, not the normal per-turn loop:
+
+### Commands
+
+```bash
+# Re-enter your active worktree or recover if intent-sensitive tooling blocks.
+# Also broadcasts a "picked back up" notice to all-agents:
+eval "$(holly task resume)"
+
+# Switching to DIFFERENT work — post a new intent (add --id only if you will
+# write to disk, which gives you a worktree):
+holly task start --intent "<agent-intent>"
+eval "$(holly task start --id <issue-id> --intent '<agent-intent>')"
+
+# Debug-only low-level task state
+holly task abort
+```
+
+### When to Re-affirm
+
+- When you need to re-enter the active worktree after a shell reset
+- If you see a BLOCKED message about intent not affirmed
+- If the hook warns that automatic intent classification failed and a later
+  intent-sensitive command blocks
+
+### Quick Re-affirm Pattern
+
+If you get blocked but your work hasn't changed, run `eval "$(holly task
+resume)"`. It re-affirms intent, re-enters your worktree (if you have one), and
+broadcasts a "picked back up" notice. Re-running `holly task start --id
+<same-id>` also works and is idempotent — it re-posts intent and re-enters the
+worktree without re-claiming the issue:
+
+```bash
+# Intent-only task (no worktree):
+holly task start --intent "<agent-intent>"
+# Worktree task (has an issue id):
+eval "$(holly task start --id <issue-id> --intent '<agent-intent>')"
+```
+
+That's it whether or not the task changed — the same command records the task
+ID and intent and posts intent in one step.
+
+---
+
+## Common Problems and Fixes
+
+### "BLOCKED: No active session"
+
+`HOLLY_SESSION_ID` is expected to be available in the top-level shell. Confirm
+that directly:
+
+```bash
+holly doctor
+```
+
+Do not route this check through context-mode; the sandbox may not inherit the
+top-level shell environment.
+
+If Holly did not pick up the existing `HOLLY_SESSION_ID` automatically, run:
+
+```bash
+holly session get
+```
+
+Then refresh the task state for that existing identity:
+
+```bash
+eval "$(holly task start {--id <issue-id> | --intent <agent-intent>})"
+```
+
+### "BLOCKED: Unclaimed VS Code UUID"
+
+You haven't linked your chat window to your session yet.
+
+```bash
+holly session claim-vscode-uuid <uuid-from-error-message>
+```
+
+**Important:** `$HOLLY_SESSION_ID` must be set before claiming. If it is
+missing, stop and fix shell/runtime bootstrap first.
+
+### "BLOCKED: No current_task set"
+
+You need to declare what you're working on.
+
+```bash
+eval "$(holly task start {--id <issue-id> | --intent <agent-intent>})"
+```
+
+### "BLOCKED: Intent not affirmed for this turn"
+
+The UserPromptSubmit hook re-armed your intent for the new turn. Re-affirm it:
+
+```bash
+# Continuing the same work — re-affirm + re-enter worktree (broadcasts pickup):
+eval "$(holly task resume)"
+# Switching work — post a new intent (add --id only if you write to disk):
+eval "$(holly task start --intent '<agent-intent>' [--id <issue-id>])"
+```
+
+### "holly session claim-vscode-uuid" exits with code 1
+
+Three possible causes:
+
+1. **`$HOLLY_SESSION_ID` not set** -- stop and fix shell/runtime bootstrap first
+2. **UUID already claimed by another session** -- check with
+   `holly session list` to see who owns it
+3. **UUID expired** -- pending UUIDs expire after 10 minutes.
+   Try any tool call to re-register the UUID, then claim again.
+
+### Tools blocked even after a successful claim
+
+This usually means one of two things:
+
+1. The current shell lost `$HOLLY_SESSION_ID`
+2. A new user prompt re-armed task intent
+
+If the current shell lost `$HOLLY_SESSION_ID`, stop. If the ID is still present,
+re-affirm intent:
+
+```bash
+eval "$(holly task resume)"
+holly session claim-vscode-uuid <uuid-from-the-latest-block-message>
+```
+
+For long terminal commands after a user prompt, re-affirm intent by running
+`eval "$(holly task resume)"` (or re-run `holly task start --id <issue-id>
+--intent '<agent-intent>'` to switch work); both are idempotent for your
+active task.
+
+### Tools blocked even after full bootstrap
+
+Check for **worktree isolation** blocks (separate from session
+blocks):
+
+```
+BLOCKED: Editing files on the main checkout is not allowed.
+```
+
+Fix: create a worktree first with the command shown in the block
+message.
+
+---
+
+## Full Session CLI Reference
+
+| Command                                                                       | Purpose                                                                  |
+| ----------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `eval "$(holly task start --id <issue-id> --intent '<agent-intent>')"`         | Public bootstrap: record task ID, post intent, and unblock tools for existing `HOLLY_SESSION_ID` (idempotent re-entry for your active task) |
+| `holly task start --intent "<agent-intent>"`                                  | Single intent-setter: record task, post intent to `all-agents`, mark `intent_posted=true` |
+| `holly session claim-vscode-uuid <uuid>`                                                  | Map VS Code UUID to current session                                      |
+| `holly session workspace bootstrap --name "Name" --uuid <uuid>`               | Create origin workspace session and claim UUID                           |
+| `holly session workspace bootstrap --name "Name" --uuid <uuid> --repo <path>` | Add a repo-local session for a target repo                               |
+| `holly session workspace bootstrap --name "Name" --uuid <uuid> --all-repos`   | Eagerly bootstrap every git repo in the VS Code workspace                |
+| `holly session status`                                                        | Show current session details                                             |
+| `holly session list`                                                          | List all sessions                                                        |
+| `holly session activity`                                                      | Refresh activity timestamp                                               |
+| `holly task start --intent "<agent-intent>"`                                    | Debug: record intent-only task and post intent                           |
+| `holly task status`                                                   | Debug: confirm intent, unblock tools                                     |
+| `holly task abort`                                                    | Archive current task                                                     |
+| `holly session end`                                                           | End current session                                                      |
+| `holly session sweep`                                                         | End expired idle sessions (cron)                                         |
+| `holly session prune`                                                         | Remove stale entries from sessions file                                  |
+| `holly session subagent register <name> [--task "..."]`                       | Register a subagent entry on the current session                         |
+| `holly session subagent complete [target] [--status <status>]`                | Mark a registered subagent completed/failed                              |
+| `holly session subagent active`                                               | List status-active subagents on the current session                      |
+
+All commands accept `--json` for machine-readable output.
+
+---
+
+## Session States
+
+| State    | Meaning                                           | Transitions To                                         |
+| -------- | ------------------------------------------------- | ------------------------------------------------------ |
+| `active` | Agent is working (tools firing, prompts arriving) | `idle` (Stop hook)                                     |
+| `idle`   | Chat window closed/stopped; session still warm    | `ended` (60 min sweep) or `active` (resume)            |
+| `ended`  | Expired; no activity for 60+ minutes              | `active` when the same shell/runtime-owned ID is observed again |
+
+The `PostToolUse` hook automatically calls `update_activity()` on
+every tool call, keeping `last_activity` fresh. You don't need to
+manage this manually.
+
+---
+
+## Subagent Sessions
+
+How `$HOLLY_SESSION_ID` reaches a subagent depends on the runtime's dispatch tool:
+
+- **VS Code (`runSubagent`)** — you inherit `$HOLLY_SESSION_ID` from the parent
+  agent automatically. If it is missing, stop.
+- **Claude Code (`Agent`)** — `$HOLLY_SESSION_ID` is **NOT** auto-wired into the
+  spawned subagent's shell. The parent (orchestrator) must pre-register each
+  worker with `holly session subagent register <issue-id>` and pass
+  `HOLLY_SESSION_ID=...` explicitly in the dispatched prompt. If it is missing,
+  stop.
+
+In every case, if you are a subagent do NOT:
+
+- Call `holly session get` or `holly session claim-vscode-uuid`
+- Call `holly session end`
+- Modify session state in any way
+
+Just do your work and return. The parent manages session lifecycle.

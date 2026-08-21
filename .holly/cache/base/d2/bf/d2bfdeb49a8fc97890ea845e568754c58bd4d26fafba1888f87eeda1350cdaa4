@@ -1,0 +1,322 @@
+// agent-fs clean — sweep stale scratch/evidence/session dirs.
+//
+// Flags:
+//   --dry-run            preview only (default: actually delete)
+//   --older-than X       override age cutoff (e.g. 30m, 24h, 7d). Applied to all categories.
+//   --type T             scope to one category: scratch | evidence | session
+//   --uploaded           only delete evidence captures with an upload-receipt.json
+//   --no-keep-pinned     opt out of pin protection (default: pinned paths are protected)
+//   --json               machine-readable output
+//
+// Safety invariants:
+//   - never touches the current session's directory
+//   - never touches paths outside AGENT_FS_ROOT
+//   - never touches _meta/
+//   - pinned paths are skipped (unless --no-keep-pinned)
+
+import fs from 'node:fs';
+import path from 'node:path';
+import { VERBS } from '../registry.mjs';
+import { isPinned } from './pin.mjs';
+
+function ageMs(p) {
+  try {
+    return Date.now() - fs.statSync(p).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
+
+function fmtAge(ms) {
+  const days = ms / 86_400_000;
+  if (days >= 1) return `${days.toFixed(1)}d`;
+  const hours = ms / 3_600_000;
+  if (hours >= 1) return `${hours.toFixed(1)}h`;
+  return `${Math.floor(ms / 60_000)}m`;
+}
+
+function fmtBytes(n) {
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let v = n;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  return `${v.toFixed(v < 10 && i > 0 ? 1 : 0)} ${units[i]}`;
+}
+
+function dirSize(p) {
+  let total = 0;
+  let stack = [p];
+  while (stack.length > 0) {
+    const cur = stack.pop();
+    let entries;
+    try {
+      entries = fs.readdirSync(cur, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const full = path.join(cur, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(full);
+      } else {
+        try {
+          total += fs.statSync(full).size;
+        } catch {
+          // ignore
+        }
+      }
+    }
+  }
+  return total;
+}
+
+function parseDuration(s) {
+  if (typeof s !== 'string') return null;
+  const m = s.match(/^(\d+)([hdms])?$/);
+  if (!m) return null;
+  const n = Number(m[1]);
+  const unit = m[2] ?? 's';
+  switch (unit) {
+    case 's':
+      return n * 1000;
+    case 'm':
+      return n * 60_000;
+    case 'h':
+      return n * 3_600_000;
+    case 'd':
+      return n * 86_400_000;
+    default:
+      return null;
+  }
+}
+
+function safeDelete(target, ctx) {
+  // Hard safety rails: never delete outside the scratch root.
+  const root = ctx.config.root;
+  const rel = path.relative(root, target);
+  if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) {
+    throw new Error(`refused to delete outside root: ${target}`);
+  }
+  // Never delete the meta dir.
+  if (target === ctx.layout.meta || target.startsWith(ctx.layout.meta + path.sep)) {
+    throw new Error(`refused to delete _meta: ${target}`);
+  }
+  // Never delete the current session's directory.
+  if (target === ctx.layout.session) {
+    throw new Error(`refused to delete current session dir: ${target}`);
+  }
+  fs.rmSync(target, { recursive: true, force: true });
+}
+
+function listEvidenceCaptures(ctx) {
+  // Walk evidence/<ISSUE>/<NAME>/ two levels deep.
+  const captures = [];
+  let issues;
+  try {
+    issues = fs.readdirSync(ctx.layout.evidence, { withFileTypes: true });
+  } catch {
+    return captures;
+  }
+  for (const issueEntry of issues) {
+    if (!issueEntry.isDirectory()) continue;
+    const issueDir = path.join(ctx.layout.evidence, issueEntry.name);
+    let captureEntries;
+    try {
+      captureEntries = fs.readdirSync(issueDir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const capEntry of captureEntries) {
+      if (!capEntry.isDirectory()) continue;
+      const capDir = path.join(issueDir, capEntry.name);
+      captures.push({ issue: issueEntry.name, name: capEntry.name, path: capDir });
+    }
+  }
+  return captures;
+}
+
+function listScratchDirs(ctx) {
+  const out = [];
+  let entries;
+  try {
+    entries = fs.readdirSync(ctx.layout.scratch, { withFileTypes: true });
+  } catch {
+    return out;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    out.push(path.join(ctx.layout.scratch, entry.name));
+  }
+  return out;
+}
+
+function listSiblingSessions(ctx) {
+  const out = [];
+  let entries;
+  try {
+    entries = fs.readdirSync(ctx.config.root, { withFileTypes: true });
+  } catch {
+    return out;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !entry.name.startsWith('sess-')) continue;
+    const full = path.join(ctx.config.root, entry.name);
+    if (full === ctx.layout.session) continue;
+    out.push(full);
+  }
+  return out;
+}
+
+export function cleanVerb(args, ctx) {
+  const dryRun = Boolean(args['dry-run']);
+  const keepPinned = args['no-keep-pinned'] !== true;
+  const onlyUploaded = Boolean(args.uploaded);
+  const typeFilter = args.type ? String(args.type) : null;
+  if (typeFilter && !['scratch', 'evidence', 'session'].includes(typeFilter)) {
+    process.stderr.write(`error: --type must be one of scratch, evidence, session (got "${typeFilter}")\n`);
+    process.exit(65);
+  }
+
+  const override = parseDuration(args['older-than']);
+  const scratchMaxAge = override ?? ctx.config.cleanup.scratch_max_age_hours * 3_600_000;
+  const evidenceMaxAge = override ?? ctx.config.cleanup.evidence_max_age_days * 86_400_000;
+  const sessionMaxAge = override ?? ctx.config.cleanup.session_max_age_days * 86_400_000;
+
+  const candidates = { scratch: [], evidence: [], sessions: [] };
+  const skipped = { pinned: [], notUploaded: [], tooYoung: [] };
+
+  if (!typeFilter || typeFilter === 'scratch') {
+    for (const p of listScratchDirs(ctx)) {
+      const age = ageMs(p);
+      if (age <= scratchMaxAge) {
+        skipped.tooYoung.push({ path: p, age });
+        continue;
+      }
+      if (keepPinned && isPinned(p, ctx.config.root)) {
+        skipped.pinned.push(p);
+        continue;
+      }
+      candidates.scratch.push({ path: p, age, size: dirSize(p) });
+    }
+  }
+
+  if (!typeFilter || typeFilter === 'evidence') {
+    for (const cap of listEvidenceCaptures(ctx)) {
+      const age = ageMs(cap.path);
+      if (age <= evidenceMaxAge && !(onlyUploaded && fs.existsSync(path.join(cap.path, 'upload-receipt.json')))) {
+        skipped.tooYoung.push({ path: cap.path, age });
+        continue;
+      }
+      if (onlyUploaded && !fs.existsSync(path.join(cap.path, 'upload-receipt.json'))) {
+        skipped.notUploaded.push(cap.path);
+        continue;
+      }
+      if (keepPinned && isPinned(cap.path, ctx.config.root)) {
+        skipped.pinned.push(cap.path);
+        continue;
+      }
+      candidates.evidence.push({ path: cap.path, age, size: dirSize(cap.path), issue: cap.issue });
+    }
+  }
+
+  if (!typeFilter || typeFilter === 'session') {
+    for (const p of listSiblingSessions(ctx)) {
+      const age = ageMs(p);
+      if (age <= sessionMaxAge) {
+        skipped.tooYoung.push({ path: p, age });
+        continue;
+      }
+      if (keepPinned && isPinned(p, ctx.config.root)) {
+        skipped.pinned.push(p);
+        continue;
+      }
+      candidates.sessions.push({ path: p, age, size: dirSize(p) });
+    }
+  }
+
+  // Execution.
+  const deleted = [];
+  const failed = [];
+  if (!dryRun) {
+    for (const group of ['scratch', 'evidence', 'sessions']) {
+      for (const c of candidates[group]) {
+        try {
+          safeDelete(c.path, ctx);
+          deleted.push({ ...c, group });
+          ctx.registry.append({
+            verb: VERBS.CLEAN,
+            path: c.path,
+            issue: c.issue ?? null,
+            agent: ctx.agent,
+            runtime: ctx.runtime,
+            meta: { group, size: c.size, age: c.age },
+          });
+        } catch (err) {
+          failed.push({ path: c.path, error: String(err.message ?? err) });
+        }
+      }
+    }
+  }
+
+  const totalCandidates = candidates.scratch.length + candidates.evidence.length + candidates.sessions.length;
+  const totalSize = [
+    ...candidates.scratch,
+    ...candidates.evidence,
+    ...candidates.sessions,
+  ].reduce((acc, c) => acc + c.size, 0);
+
+  if (args.json) {
+    process.stdout.write(
+      JSON.stringify(
+        { dryRun, candidates, deleted, failed, skipped, totalCandidates, totalSize },
+        null,
+        2,
+      ) + '\n',
+    );
+    return;
+  }
+
+  if (totalCandidates === 0) {
+    process.stdout.write('nothing to clean.\n');
+    if (skipped.pinned.length || skipped.notUploaded.length) {
+      if (skipped.pinned.length) {
+        process.stdout.write(`  (${skipped.pinned.length} pinned path(s) skipped)\n`);
+      }
+      if (skipped.notUploaded.length) {
+        process.stdout.write(`  (${skipped.notUploaded.length} not-uploaded evidence skipped)\n`);
+      }
+    }
+    return;
+  }
+
+  const verb = dryRun ? 'would delete' : 'deleted';
+  process.stdout.write(`${dryRun ? 'clean --dry-run' : 'clean'}: ${totalCandidates} candidate(s), ${fmtBytes(totalSize)}\n\n`);
+  for (const group of ['scratch', 'evidence', 'sessions']) {
+    if (!candidates[group].length) continue;
+    process.stdout.write(`  ${group}:\n`);
+    for (const c of candidates[group]) {
+      process.stdout.write(`    ${verb}  ${fmtAge(c.age).padStart(6)}  ${fmtBytes(c.size).padStart(8)}  ${c.path}\n`);
+    }
+  }
+  if (skipped.pinned.length) {
+    process.stdout.write(`\n  pinned (skipped):\n`);
+    for (const p of skipped.pinned) {
+      process.stdout.write(`    ${p}\n`);
+    }
+  }
+  if (skipped.notUploaded.length && onlyUploaded) {
+    process.stdout.write(`\n  not-uploaded (skipped via --uploaded):\n`);
+    for (const p of skipped.notUploaded) {
+      process.stdout.write(`    ${p}\n`);
+    }
+  }
+  if (failed.length) {
+    process.stdout.write(`\n  failed:\n`);
+    for (const f of failed) {
+      process.stdout.write(`    ${f.path}  (${f.error})\n`);
+    }
+  }
+}

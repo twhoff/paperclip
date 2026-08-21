@@ -1,0 +1,511 @@
+# yaml-language-server: $schema=../schemas/workflow.schema.json
+
+name: Orchestrate
+description: >-
+  Parallel delivery workflow for epics with multiple agents. The Orchestrator
+  acts as project manager: analysing work, resourcing delivery agents,
+  assigning work by agent-path, tracking progress, reviewing output, and
+  closing the epic once all children are done.
+
+  Execution model: the Orchestrator runs in one chat window. The user opens
+  additional chat windows for each delivery agent, assigns the requested
+  model, and pastes the onboarding prompt. Agents join the epic session,
+  register presence, and wait for assignments. Once all agents are present
+  the Orchestrator kicks off work. All idle agents use `chat wait` to
+  monitor for new messages.
+
+  Prerequisites: the epic MUST exist in Beads with child issues. If it has
+  not been analysed for dependency wiring and DAG labelling (wave-N,
+  agent-N), the Orchestrator handles that before delivery begins.
+
+  The workflow is complete when the epic is closed.
+
+  Composable with the workflow wrapper for universal pre/postflight.
+
+preflight:
+  # Preflight 1: Load epic and verify type
+  - prompt: >-
+      Load the epic and verify it is the correct bead type:
+
+      1. The user MUST provide an epic ID. If not, ask for one.
+      2. Run `bd show <epic-id> --json` to load the epic.
+      3. Verify the bead is type `epic`. If not, STOP and explain
+         that orchestrate requires an epic -- suggest using /track
+         to create one first.
+      4. Record: epic_id, epic_title from the output.
+
+      This step MUST complete before any subsequent preflight step.
+    category: discovery
+
+  # Preflight 2: Load children and verify non-zero
+  - prompt: >-
+      Load all children of the epic:
+
+      1. Run `bd list --parent <epic-id> --json`
+      2. If the epic has ZERO children, STOP and explain that
+         the epic needs decomposition first -- suggest using /track.
+      3. Record: child_count, and the full child list with IDs,
+         titles, statuses, priorities, and dependencies.
+    category: discovery
+    requires:
+      - epic_id from preflight 1
+
+  # Preflight 3: Check formula catalogue
+  - prompt: >-
+      Check whether a matching formula exists in the catalogue:
+
+      1. Run `bd formula list`
+      2. Record formula_list_checked: true
+      3. If a formula matches the epic's domain, record
+         matching_formula: <name>. Otherwise record
+         matching_formula: none.
+
+      This check MUST be recorded before preflight step 4.
+    category: discovery
+
+  # Preflight 4: Check molecule metadata
+  - prompt: >-
+      Check whether the epic is a formula molecule:
+
+      1. Run `bd mol show <epic-id>`
+      2. If this returns molecule metadata, record:
+         - molecule_checked: true
+         - molecule_metadata_present: true
+         Wave and agent labels are already computed by the
+         formula. Note molecule=true for DAG analysis gating.
+      3. If this returns no metadata or an error, record:
+         - molecule_checked: true
+         - molecule_metadata_present: false
+
+      This check MUST be recorded. Do NOT proceed to preflight
+      step 5 until both formula_list_checked and molecule_checked
+      are true.
+    category: discovery
+    requires:
+      - formula_list_checked from preflight 3
+      - epic_id from preflight 1
+
+  # Preflight 5: Inspect dependency tree
+  - prompt: >-
+      Inspect the dependency graph of the epic's children:
+
+      1. Run `bd dep tree <epic-id>`
+      2. If children have NO dependencies wired (every child is
+         independent), flag this because it likely means the epic
+         was not properly decomposed. Ask the user whether to
+         proceed as-is or wire dependencies first.
+      3. Record the dependency structure for later use.
+    category: discovery
+    requires:
+      - epic_id from preflight 1
+      - child list from preflight 2
+
+  # Preflight 6: Inspect existing labels
+  - prompt: >-
+      Check whether wave and agent labels already exist on
+      the epic's children:
+
+      1. Run `bd label list <child-id>` for each child.
+      2. Record:
+         - existing_wave_labels: true if ALL children have
+           wave-N labels, false otherwise
+         - existing_agent_labels: true if ALL children have
+           agent-N or agent-shared labels, false otherwise
+    category: discovery
+    requires:
+      - child list from preflight 2
+
+  # Preflight 7: Write orchestration preflight summary
+  - prompt: >-
+      Produce the orchestration preflight summary. This summary
+      is a MANDATORY artifact -- delivery steps MUST NOT proceed
+      without it.
+
+      The summary MUST contain ALL of the following fields:
+
+        epic_id: <id>
+        epic_title: <title>
+        child_count: <N>
+        formula_list_checked: true
+        matching_formula: none | <name>
+        molecule_checked: true
+        molecule_metadata_present: true | false
+        existing_wave_labels: true | false
+        existing_agent_labels: true | false
+        dag_analysis_required: true | false
+        reason_for_dag_decision: <text>
+
+      Decision logic for dag_analysis_required:
+
+      - If existing_wave_labels is true AND existing_agent_labels
+        is true, then dag_analysis_required is false. Reason:
+        labels already present (from formula molecule, prior
+        /track run, or manual assignment).
+
+      - Otherwise dag_analysis_required is true. Reason: explain
+        which labels are missing and why manual analysis is needed.
+
+      HARD GATE: If formula_list_checked is not true or
+      molecule_checked is not true, STOP. Go back and complete
+      the missing preflight step before writing this summary.
+      Do NOT infer or assume the results of skipped checks.
+
+      Present this summary to the user for confirmation before
+      proceeding.
+    category: discovery
+    requires:
+      - formula_list_checked from preflight 3
+      - molecule_checked from preflight 4
+      - existing_wave_labels from preflight 6
+      - existing_agent_labels from preflight 6
+      - epic_id from preflight 1
+      - epic_title from preflight 1
+      - child_count from preflight 2
+
+  # Preflight 8: DAG analysis (gated on preflight summary)
+  - prompt: >-
+      Analyse the dependency graph and assign orchestration labels.
+
+      PRECONDITION: The preflight summary from step 7 MUST exist
+      and dag_analysis_required MUST be true. If dag_analysis_required
+      is false, skip this step entirely.
+
+      FORMULA-FIRST GATE: Do NOT perform manual DAG analysis until
+      both bd formula list and bd mol show <epic-id> have been run
+      and recorded in the preflight summary. If either check has not
+      been performed, STOP and complete the missing check first.
+
+      1. Run `bd swarm validate <epic-id>` to analyse the DAG.
+         This computes wave structure (topological layering),
+         maximum parallelism per wave, swarmability assessment,
+         and agent path partitioning. Parse the output to
+         determine the label assignments.
+
+      2. Apply labels based on swarm validate output:
+         - `bd label add <child-id> wave-N` for each child
+         - `bd label add <child-id> agent-N` for path assignment
+         - `bd label add <child-id> agent-shared` for merge points
+
+      3. Verify: every child MUST have exactly one wave-N label
+         and one agent-N (or agent-shared) label. Re-run
+         `bd swarm validate <epic-id>` to confirm clean output.
+    category: discovery
+    condition: dag_analysis_required == true (from preflight summary step 7)
+    requires:
+      - preflight summary from preflight 7
+      - formula_list_checked from preflight 3
+      - molecule_checked from preflight 4
+
+steps:
+  # Step 1: Resource planning
+  - prompt: >-
+      Determine the delivery team based on the DAG analysis:
+
+      1. COUNT AGENT PATHS: Read the agent-N labels to determine
+         how many delivery agents are needed. Each agent-N path
+         maps to one delivery agent.
+
+      2. ASSIGN MODELS: For each agent, recommend the appropriate
+         model based on the work complexity. If the epic is a formula
+         molecule, run `bd mol show <epic-id>` to read step metadata
+         (type, priority, complexity) as hints for model assignment:
+         - Simple/mechanical work (renaming, config, dead code removal)
+           → Sonnet Worker model
+         - Standard implementation (features, APIs, tests, refactoring)
+           → Sonnet Worker model
+         - Complex/architectural work (cross-cutting, design decisions)
+           → Opus Worker model
+         Default to Sonnet Worker unless the work clearly requires
+         deeper reasoning.
+
+      3. ESTIMATE SCOPE: For each agent path, summarise:
+         - Which children they will work on (IDs and titles)
+         - Wave progression (which order within their path)
+         - Dependencies on other agents' work (cross-path blocks)
+         - Estimated complexity (S/M/L per child, total per path)
+
+      4. IDENTIFY SHARED WORK: Any agent-shared children need
+         special handling. Decide which agent will take each
+         shared child — typically the agent whose path feeds
+         into it, or the agent who finishes their path first.
+         The Orchestrator assigns shared work dynamically during
+         delivery based on progress.
+
+      5. NAME THE AGENTS: Assign identifiers (Agent 1, Agent 2,
+         etc.) matching the agent-N labels. These names are used
+         in all subsequent communication.
+    category: discovery
+
+  # Step 2: Generate onboarding prompts
+  - prompt: >-
+      Generate the onboarding prompts the user will paste into
+      each agent's chat window:
+
+      For EACH delivery agent, produce a self-contained prompt
+      that includes:
+
+      1. IDENTITY AND ROLE:
+         - Agent identifier (e.g. "You are Agent 1")
+         - Epic ID and title
+
+      2. SETUP INSTRUCTIONS:
+         - Read the epic channel for context:
+           `chat read --channel <epic-id>`
+         - Announce presence:
+           `chat post --channel <epic-id>
+           --message "Agent N online. Standing by for assignments."`
+
+      3. ASSIGNED WORK:
+         - Full list of children assigned to this agent path
+           (IDs, titles, wave numbers, dependencies)
+         - Order of execution (wave-1 first, then wave-2, etc.)
+         - Cross-path dependencies to watch for
+
+      4. WORK PROTOCOL:
+         - Do NOT start work until the Orchestrator sends a
+           "BEGIN" message on the epic channel
+         - For each child: claim it (`bd update <id> --claim`),
+           implement using TDD (tests first, implementation,
+           refactor), commit with issue ID in message, then
+           post completion to the epic channel
+         - After completing a child, run
+           `chat wait --channel <epic-id>
+           --timeout 0` to wait for the next assignment or
+           the Orchestrator's review feedback
+         - If blocked by another agent's work, post the blocker
+           to the epic channel and wait
+
+      5. COMPLETION PROTOCOL:
+         - After all assigned children are done, post a summary
+           to the epic channel
+         - Wait for the Orchestrator to confirm and assign any
+           remaining shared work, or issue the SIGN-OFF command
+         - On SIGN-OFF: push all work and post final status
+
+      6. CHAT DISCIPLINE:
+         - ALL idle time MUST use `chat wait
+           --channel <epic-id> --timeout 0` (wait forever)
+         - Never poll manually -- the wait command handles it
+         - Post status after every child completion
+         - Post blockers immediately when encountered
+
+      7. PRE-ASSIGNMENT RESEARCH (while blocked/idle):
+         - While waiting for upstream dependencies or between
+           assignments, agents SHOULD do read-only research on
+           their next assigned task: read source files, understand
+           existing code structure, identify selectors/APIs, and
+           plan their approach.
+         - Do NOT write code, create files, or make commits
+           during research -- read-only operations only.
+         - This reduces implementation time once unblocked.
+
+      8. CLAIM VERIFICATION:
+         - Before starting ANY newly-assigned or reassigned work,
+           run `bd show <child-id> --json` to confirm the task is
+           not already claimed or completed by another agent.
+         - Read the epic channel for recent messages about the
+           task before beginning implementation.
+
+      PRESENTATION: Present all prompts to the user clearly
+      labelled (Agent 1, Agent 2, etc.) with the recommended
+      model for each. The user will copy-paste each prompt into
+      a new chat window.
+
+      Also present a brief summary for the user:
+      - How many agents are needed
+      - What model each should use
+      - What work each agent will do
+      - Expected execution order across waves
+
+      Wait for the user to confirm they have opened all agent
+      windows and pasted the prompts before proceeding.
+    category: delivery
+
+  # Step 3: Wait for all agents to register
+  - prompt: >-
+      Wait for all delivery agents to announce their presence
+      on the epic channel:
+
+      1. Read the epic channel:
+         `chat read --channel <epic-id>`
+         Check for "Agent N online" messages.
+
+      2. Track which agents have registered. Maintain a checklist.
+
+      3. If not all agents are present, wait:
+         `chat wait --channel <epic-id>
+         --timeout 300 --interval 10`
+         After each wait cycle, re-read and check the roster.
+
+      4. If an agent has not appeared after 5 minutes, ask the
+         user to check that agent's chat window.
+
+      5. Once ALL agents have registered, post the kick-off:
+         Use create_file to write the BEGIN message to a temp
+         file, then post it:
+         `chat post --channel <epic-id>
+         --file /tmp/chat_<epic-id>_begin.txt`
+
+         The BEGIN message MUST include:
+         - Confirmation that all agents are present
+         - Reminder of each agent's first assignment
+         - "BEGIN: All agents start your wave-1 work now."
+    category: delivery
+
+  # Step 4: Monitor progress and manage delivery
+  - prompt: >-
+      Actively manage delivery until all work is complete. This
+      step runs as a continuous loop:
+
+      MONITORING LOOP:
+
+      1. Wait for messages on the epic channel:
+         `chat wait --channel <epic-id>
+         --timeout 0`
+
+      2. When a message arrives, read the channel:
+         `chat read --channel <epic-id>`
+
+      3. DISPATCH based on message type:
+
+         COMPLETION REPORT from an agent:
+         a. Verify the child was actually completed:
+            `bd show <child-id> --json`
+         b. Review the work — check that tests pass, code is
+            committed, and the child can be closed
+         c. If satisfactory: close the child
+            `bd close <child-id> --reason "Completed by Agent N"`
+         d. If issues found: post feedback to the epic channel
+            requesting fixes. The agent will pick this up via
+            their `chat wait`
+         e. Check if the completion unblocks any cross-path
+            dependencies. If so, notify the waiting agent:
+            "Agent M: <child-id> is now unblocked. Proceed."
+         f. Assign the agent's next child (next wave item on
+            their path), or assign agent-shared work if their
+            path is done
+
+         BLOCKER REPORT from an agent:
+         a. Assess the blocker — is it a cross-path dependency
+            (expected) or an unexpected issue?
+         b. For cross-path blocks: acknowledge and tell the agent
+            to wait. Track which agent they are blocked on.
+         c. For unexpected issues: investigate, provide guidance,
+            or reassign the work to another agent if needed
+
+         QUESTION from an agent:
+         a. Answer directly if possible
+         b. If the question requires user input, escalate to the
+            user and relay the answer back
+
+      4. PROGRESS TRACKING: After each event, update the running
+         status:
+         - Children completed vs total
+         - Children in progress (by which agent)
+         - Children blocked (by what)
+         - Estimated remaining work
+         Post a progress summary to the epic channel every 3
+         completions or when a wave transition occurs.
+
+      5. WAVE TRANSITIONS: When all children in a wave are
+         complete, announce the wave transition:
+         "Wave N complete. Wave N+1 work is now unblocked."
+
+      6. EXIT CONDITION: The loop ends when ALL children are
+         either closed or confirmed as out-of-scope (deferred
+         to follow-up issues).
+
+      DYNAMIC REASSIGNMENT: If one agent finishes their path
+      well ahead of others, assign them agent-shared work or
+      help with another agent's remaining items. Post the new
+      assignment to the epic channel.
+
+      IDLE AGENT DETECTION: After processing each message,
+      check for idle agents. An agent is idle if:
+      - They posted a completion report and have no further
+        assigned work on their path
+      - They posted "standing by" or similar idle message
+      - Their last assigned child was completed more than
+        2 messages ago with no new assignment given
+      When an idle agent is detected, IMMEDIATELY either:
+      a. Assign them agent-shared work, OR
+      b. Reassign unstarted work from a busier agent's path, OR
+      c. If no work remains, instruct them to begin read-only
+         research on potential follow-up issues
+      Do NOT wait for the user to notice idle agents.
+    category: delivery
+
+  # Step 5: Final review and sign-off
+  - prompt: >-
+      Conduct final review and close out the epic:
+
+      1. VERIFY COMPLETION: Run `bd children <epic-id>` and
+         confirm every child is closed (or has a follow-up
+         issue filed for deferred work).
+
+      2. INTEGRATION CHECK: If the epic involved multiple areas
+         of the codebase, verify that all changes work together:
+         - Run the full test suite
+         - Check for merge conflicts or inconsistencies
+         - Run schema validation:
+           `# project-specific schema validation`
+
+      3. INSTRUCT AGENTS TO SIGN OFF: Post to the epic channel:
+         "SIGN-OFF: All work complete. Push your changes."
+         Each agent should:
+         - `git pull --rebase && git push`
+         - Post final confirmation to the epic channel
+
+      4. WAIT FOR SIGN-OFFS: Wait for each agent to confirm:
+         `chat wait --channel <epic-id>
+         --timeout 300 --interval 10`
+         Track sign-offs on the roster.
+
+      5. CLOSE THE EPIC: Once all agents have signed off and
+         all children are closed:
+         `bd close <epic-id> --reason "All children completed.
+         Delivered by N agents across M waves."`
+
+      6. POST COMPLETION SUMMARY to the all-agents channel with:
+         - Epic ID and title
+         - Total children delivered
+         - Agents involved and their contributions
+         - Any follow-up issues filed
+         - Total wall-clock time from BEGIN to SIGN-OFF
+    category: delivery
+
+postflight:
+  # Final sync and summary.
+  # NOTE: The Orchestrator runs from the main checkout where git add,
+  # git commit, and git push are blocked by the PreToolUse hook (Level 1)
+  # and git wrapper (Level 2). Implementation agents push from their own
+  # worktrees at sign-off. The Orchestrator's only persistent side-effect
+  # is tracker state, which syncs via `bd dolt pull && bd dolt push`.
+  - prompt: >-
+      Finalise the orchestration:
+
+      1. Sync Beads state: `bd dolt pull && bd dolt push`
+      2. Post a final summary to the all-agents channel confirming
+         the epic is fully closed and all agents have pushed.
+    requires:
+      - bd CLI
+
+hooks:
+  beforeEach:
+    prompt: >-
+      Before each main step:
+      1. Read the epic channel for any new messages:
+         `chat read --channel <epic-id>`
+      2. Read the all-agents channel for broadcast messages:
+         `chat read --channel all-agents`
+      3. Respond to any messages that require acknowledgement.
+    category: quality
+
+  afterEach:
+    prompt: >-
+      After each main step:
+      1. Post a status update to the epic channel summarising
+         what was accomplished in this step.
+      2. Post to the all-agents channel if the status affects
+         other non-epic agents.
+    category: quality

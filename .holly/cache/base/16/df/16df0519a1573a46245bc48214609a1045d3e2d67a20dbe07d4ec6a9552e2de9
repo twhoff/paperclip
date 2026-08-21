@@ -1,0 +1,136 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import {
+  buildContextOptions,
+  waitForStableDom,
+  loadInteractionScript,
+} from '../scripts/lib/capture.mjs';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// buildContextOptions
+const VP = { name: 'mobile', width: 390, height: 844 };
+const RES = { deviceScaleFactor: 2, type: 'png' };
+
+test('buildContextOptions: minimal opts -> bare options object', () => {
+  const o = buildContextOptions(VP, {}, RES);
+  assert.deepEqual(o.viewport, { width: 390, height: 844 });
+  assert.equal(o.deviceScaleFactor, 2);
+  assert.equal(o.recordVideo, undefined);
+  assert.equal(o.storageState, undefined);
+});
+
+test('buildContextOptions: theme=light maps to colorScheme light', () => {
+  assert.equal(buildContextOptions(VP, { theme: 'light' }, RES).colorScheme, 'light');
+});
+
+test('buildContextOptions: theme=dark maps to colorScheme dark', () => {
+  assert.equal(buildContextOptions(VP, { theme: 'dark' }, RES).colorScheme, 'dark');
+});
+
+test('buildContextOptions: theme=system omits colorScheme (Playwright default)', () => {
+  assert.equal(buildContextOptions(VP, { theme: 'system' }, RES).colorScheme, undefined);
+});
+
+test('buildContextOptions: storageState passed through', () => {
+  const o = buildContextOptions(VP, { storageState: '/tmp/state.json' }, RES);
+  assert.equal(o.storageState, '/tmp/state.json');
+});
+
+test('buildContextOptions: auth-token + headers merged into extraHTTPHeaders', () => {
+  const o = buildContextOptions(
+    VP,
+    {
+      authToken: 'abc',
+      headers: [{ key: 'X-Run', value: 'r1' }, { key: 'X-Other', value: 'o' }],
+    },
+    RES,
+  );
+  assert.equal(o.extraHTTPHeaders['Authorization'], 'Bearer abc');
+  assert.equal(o.extraHTTPHeaders['X-Run'], 'r1');
+  assert.equal(o.extraHTTPHeaders['X-Other'], 'o');
+});
+
+test('buildContextOptions: no auth, no headers -> no extraHTTPHeaders key', () => {
+  const o = buildContextOptions(VP, {}, RES);
+  assert.equal(o.extraHTTPHeaders, undefined);
+});
+
+test('buildContextOptions: --script enables recordVideo at viewport size', () => {
+  const o = buildContextOptions(VP, { scriptPath: './x.mjs' }, RES, '/tmp/videos');
+  assert.deepEqual(o.recordVideo, {
+    dir: '/tmp/videos',
+    size: { width: 390, height: 844 },
+  });
+});
+
+test('buildContextOptions: --script + --no-video disables video', () => {
+  const o = buildContextOptions(VP, { scriptPath: './x.mjs', noVideo: true }, RES, '/tmp/videos');
+  assert.equal(o.recordVideo, undefined);
+});
+
+test('buildContextOptions: no script -> no video even without --no-video', () => {
+  const o = buildContextOptions(VP, {}, RES, '/tmp/videos');
+  assert.equal(o.recordVideo, undefined);
+});
+
+// waitForStableDom — uses a fake page
+function fakePage(htmlSequence) {
+  let i = 0;
+  return {
+    async evaluate() {
+      const v = htmlSequence[Math.min(i, htmlSequence.length - 1)];
+      i++;
+      return v;
+    },
+  };
+}
+
+test('waitForStableDom resolves quickly when DOM is already stable', async () => {
+  const start = Date.now();
+  const page = fakePage(['hash:same', 'hash:same', 'hash:same', 'hash:same', 'hash:same']);
+  await waitForStableDom(page, { timeoutMs: 2000, stableMs: 50, intervalMs: 10 });
+  const elapsed = Date.now() - start;
+  assert.ok(elapsed >= 50, `elapsed should reach stableMs (got ${elapsed})`);
+  assert.ok(elapsed < 1000, `should resolve before timeout (got ${elapsed})`);
+});
+
+test('waitForStableDom returns timeout=true when DOM keeps changing', async () => {
+  const seq = Array.from({ length: 100 }, (_, i) => `hash:${i}`);
+  const page = fakePage(seq);
+  const result = await waitForStableDom(page, { timeoutMs: 200, stableMs: 50, intervalMs: 10 });
+  assert.equal(result.timedOut, true);
+});
+
+test('waitForStableDom returns timedOut=false when stable in time', async () => {
+  // first few unique then repeats
+  const page = fakePage(['a', 'b', 'c', 'c', 'c', 'c', 'c']);
+  const result = await waitForStableDom(page, { timeoutMs: 1000, stableMs: 30, intervalMs: 10 });
+  assert.equal(result.timedOut, false);
+});
+
+// loadInteractionScript
+test('loadInteractionScript loads a fixture and returns the default export', async () => {
+  const fnPath = path.join(__dirname, 'fixtures', 'noop-script.mjs');
+  const fn = await loadInteractionScript(fnPath);
+  assert.equal(typeof fn, 'function');
+  const result = await fn({ page: null, viewport: { name: 'mobile' }, context: null });
+  assert.equal(result, 'noop-mobile');
+});
+
+test('loadInteractionScript throws when default export is not a function', async () => {
+  const fnPath = path.join(__dirname, 'fixtures', 'bad-script.mjs');
+  await assert.rejects(
+    loadInteractionScript(fnPath),
+    /default export must be a function/i,
+  );
+});
+
+test('loadInteractionScript throws on missing file', async () => {
+  await assert.rejects(
+    loadInteractionScript('/nonexistent/path.mjs'),
+    /failed to load interaction script/i,
+  );
+});

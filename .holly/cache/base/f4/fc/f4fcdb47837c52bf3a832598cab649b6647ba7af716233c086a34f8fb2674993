@@ -1,0 +1,113 @@
+# Beads Addendum — Holly Tracker Backend
+
+This file is the adapter-specific reference for the **Beads** issue tracker
+(`tracker = "beads"` in `.holly/config.toml`). Read alongside the universal
+issue-tracker protocol in `src/holly/skills/issue-tracker/SKILL.md` (installed
+as `.agents/skills/issue-tracker/SKILL.md`).
+
+Beads provides persistent, dependency-aware task memory. Holly provides the
+agent-facing command surface.
+
+## Agent Rule
+
+Agents use Holly for everything:
+
+```bash
+holly tracker ...
+holly task ...
+holly memory ...
+holly chat ...
+```
+
+Do not call backend tracker, session, chat, memory, or process tools directly
+for ordinary agent work. Holly wraps the adapter and owns lifecycle sequencing.
+
+## Adapter Check
+
+Run:
+
+```bash
+holly status
+holly validate
+```
+
+This addendum applies when Holly reports `Adapter beads` or the project config
+sets `adapter = "beads"`.
+
+## Session Protocol
+
+Find or create the work item:
+
+```bash
+holly tracker ready --limit 10
+holly tracker show <issue-id>
+holly tracker create "<title>" --type task --priority 2 --description "<context>"
+```
+
+Start the task:
+
+```bash
+eval "$(holly task start --id <issue-id> --intent '<agent-intent>')"
+# read-only/non-implementation:
+eval "$(holly task start --intent '<agent-intent>')"
+```
+
+The start command uses the inherited Holly session context, records the issue
+ID or intent, and posts/verifies intent. With `--id`, it claims the issue,
+creates or reuses the adapter worktree, and `cd`s there when eval'd. Without
+`--id`, it records read-only intent and stays on the project root.
+`HOLLY_SESSION_ID` is shell/runtime-owned and read-only; do not export,
+generate, or overwrite it.
+
+Record durable context:
+
+```bash
+holly tracker comment <issue-id> --message "<note>"
+holly memory propose --text "<candidate memory>"
+```
+
+Finish the task:
+
+```bash
+eval "$(holly task finish)"
+```
+
+The finish command verifies committed work, lands it on the integration branch,
+pushes it, closes the issue through the adapter, syncs tracker state, removes
+the worktree, and clears task state.
+
+## Issue Operations
+
+Use these Holly commands:
+
+```bash
+holly tracker create "<title>" --type bug --priority 1 --description "<details>"
+holly tracker update <issue-id> --status blocked
+holly tracker comment <issue-id> --message "<context>"
+holly tracker close <issue-id> --reason "Completed"
+```
+
+Use `--json` when another tool or script needs structured output.
+
+## Recovery
+
+Resume from Holly state:
+
+```bash
+holly task status
+holly task resume
+holly tracker show <issue-id>
+```
+
+If the hook blocks a write on the main checkout, run the exact Holly command it
+prints. The expected start command is:
+
+```bash
+eval "$(holly task start {--id <issue-id> | --intent <agent-intent>})"
+```
+
+## Human / Adapter Notes
+
+The Beads backend and Dolt sync are implementation details below the Holly CLI.
+Humans maintaining the adapter may inspect backend tools for diagnosis, but
+agent-facing guidance stays Holly-only.

@@ -1,0 +1,85 @@
+// Session ID resolution chain.
+// Order matters: env vars first (zero process spawn), then last-resort pcli state read.
+
+import { spawnSync } from 'node:child_process';
+import crypto from 'node:crypto';
+import path from 'node:path';
+
+function fromEnv() {
+  if (process.env.AGENT_FS_SESSION_ID) {
+    return { id: process.env.AGENT_FS_SESSION_ID, source: 'env:AGENT_FS_SESSION_ID' };
+  }
+  if (process.env.PAPERCLIP_RUN_ID) {
+    return { id: process.env.PAPERCLIP_RUN_ID, source: 'env:PAPERCLIP_RUN_ID' };
+  }
+  // Claude Code exports CLAUDE_CODE_SESSION_ID (a UUID stable across the
+  // entire conversation). This is the canonical anchor for Claude Code agents.
+  if (process.env.CLAUDE_CODE_SESSION_ID) {
+    return { id: process.env.CLAUDE_CODE_SESSION_ID, source: 'env:CLAUDE_CODE_SESSION_ID' };
+  }
+  if (process.env.CODEX_SESSION_ID) {
+    return { id: process.env.CODEX_SESSION_ID, source: 'env:CODEX_SESSION_ID' };
+  }
+  if (process.env.COPILOT_CLI_SESSION_ID) {
+    return { id: process.env.COPILOT_CLI_SESSION_ID, source: 'env:COPILOT_CLI_SESSION_ID' };
+  }
+  if (process.env.WARP_SESSION_ID) {
+    return { id: process.env.WARP_SESSION_ID, source: 'env:WARP_SESSION_ID' };
+  }
+  return null;
+}
+
+function fromPcli() {
+  // Last-resort: read-only state query. Allowed by paperclip-holly skill — not a lifecycle command.
+  // Only invoked when no env var resolved; bounded by AGENT_FS_DISABLE_PCLI for defensive use.
+  if (process.env.AGENT_FS_DISABLE_PCLI === '1') return null;
+  try {
+    const result = spawnSync('pcli', ['--json', 'me'], {
+      encoding: 'utf8',
+      timeout: 2000,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    if (result.status !== 0 || !result.stdout) return null;
+    const parsed = JSON.parse(result.stdout);
+    const emulationRunId = parsed?.agentEmulationRunId;
+    if (typeof emulationRunId === 'string' && emulationRunId.length > 0) {
+      return { id: emulationRunId, source: 'pcli:agentEmulationRunId' };
+    }
+  } catch {
+    // pcli not installed or not primed — fall through.
+  }
+  return null;
+}
+
+function fromGitFallback() {
+  // Deterministic per-checkout fallback. Same shell + same repo → same session.
+  let repoHash = 'norepo';
+  try {
+    const result = spawnSync('git', ['rev-parse', '--show-toplevel'], {
+      encoding: 'utf8',
+      timeout: 1000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    if (result.status === 0 && result.stdout) {
+      const root = result.stdout.trim();
+      repoHash = crypto.createHash('sha1').update(root).digest('hex').slice(0, 8);
+    }
+  } catch {
+    // ignore
+  }
+  // ppid keeps separate shells distinct; falls back to pid if ppid not available.
+  const pid = process.ppid || process.pid;
+  return { id: `git-${repoHash}-${pid}`, source: 'fallback:git-ppid' };
+}
+
+let cached = null;
+
+export function resolveSessionId() {
+  if (cached) return cached;
+  cached = fromEnv() ?? fromPcli() ?? fromGitFallback();
+  return cached;
+}
+
+export function sessionDir(root, sessionId) {
+  return path.join(root, `sess-${sessionId}`);
+}

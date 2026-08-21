@@ -1,0 +1,266 @@
+---
+name: agent-lifecycle
+description: >-
+  How a Holly agent starts, stays coordinated, and shuts down — centred on the
+  swarm delivery model: a single-window Orchestrator that owns its session and
+  dispatches bounded workers, and stateless workers that do one assigned task
+  and exit. Covers session boot / activity / idle / end via the SessionStart,
+  PostToolUse, and Stop hooks, worktree isolation, and clean shutdown. Use at
+  the start of any agent session or when lifecycle behaviour (stale sessions,
+  orphaned state, missed handoffs) is unreliable.
+---
+
+# Agent Lifecycle
+
+Governs how an agent starts up, stays coordinated during work, and shuts down
+cleanly.
+
+Holly's delivery model is the **swarm**. One long-lived **Orchestrator** runs in
+a single window, owns a session, and dispatches **bounded workers** via
+`runSubagent` (VS Code) / `Agent` (Claude Code). Each worker does exactly one
+assigned task, returns a structured report, and exits. There are **no persistent
+worker windows, no chat-channel onboarding, no BEGIN / SIGN-OFF handshake, and no
+`holly chat wait` coordination loop.** Coordination is the Orchestrator dispatching and
+collecting reports — not agents talking to each other over chat.
+
+## When to Use
+
+- At the start of any agent session (automatically via the `SessionStart` hook, or manually).
+- To understand how the session hooks (boot / activity / idle) fit the swarm model.
+- When debugging lifecycle issues (stale sessions, missed handoffs, orphaned state).
+- When onboarding a new agent type.
+
+## Decision: which lifecycle applies to you?
+
+```text
+Were you invoked as a bounded worker (runSubagent / Agent)?
+  YES --> "Bounded Worker" — inherit context, do ONE task, return a report, exit.
+  NO  --> "Orchestrator / Primary" — you own a session for the whole delivery.
+```
+
+---
+
+## Orchestrator / Primary lifecycle
+
+A primary agent owns its session from boot to shutdown. This is the Orchestrator
+that plans an epic and dispatches workers, or any agent running directly in a
+chat window.
+
+### Phase 1 — Boot
+
+The shell/runtime owns `HOLLY_SESSION_ID`. Holly hooks and CLI commands treat it
+as read-only identity: they may validate it, record session metadata for it, and
+refresh activity, but they do not mint, export, repair, or backfill it.
+
+| Scenario                                          | What happens                                      |
+| ------------------------------------------------- | ------------------------------------------------- |
+| Fresh chat window, no `$HOLLY_SESSION_ID`         | BLOCKED: fix shell/runtime bootstrap first        |
+| `$HOLLY_SESSION_ID` set, session active + fresh   | Updates `last_activity` for the existing identity |
+| `$HOLLY_SESSION_ID` set, lifecycle ended or stale | Reactivates context for the same identity         |
+| `$HOLLY_SESSION_ID` set, not in file              | Records metadata for that existing identity       |
+
+When `SessionStart` sees a valid session with no active task, it also creates
+and affirms a lightweight intent-only task:
+`<agent name> <session id> online and ready.` This unblocks read-only startup
+tools without replacing a real issue/worktree task.
+
+Interactive shell startup may assign a terminal-local `HOLLY_SESSION_ID` so
+concurrent VS Code/Codex terminals do not all share one identity. Re-sourcing
+the shell profile inside the same terminal should keep the existing value.
+
+**After boot, you MUST have a valid `$HOLLY_SESSION_ID` in your environment.** Every subsequent tool call depends on it.
+
+```bash
+echo $HOLLY_SESSION_ID
+# Should print: agent-<uuid> (or an existing sess-XXXXXX)
+```
+
+If empty, stop immediately. Do not use Holly lifecycle commands or command
+substitution to manufacture an ID. Fix the shell/runtime bootstrap, then
+resume.
+
+If the check happens inside context-mode, the sandbox may not inherit the
+parent shell's environment. Every `holly ...` command sent through
+`ctx_execute` or `ctx_batch_execute` MUST be prefixed:
+`HOLLY_SESSION_ID=$HOLLY_SESSION_ID holly ...`. Do not report
+`HOLLY_SESSION_ID is not set` from a context-mode result until the exact command
+has been retried with that prefix. If the prefix expands empty inside
+context-mode, resolve the existing value in the real shell and pass it
+explicitly as `HOLLY_SESSION_ID=agent-<existing-parent-shell-value> holly ...`.
+
+In VS Code, booting the session is necessary but not sufficient for gated tools.
+To unblock writes and most terminal commands, finish the `agent-sessions`
+bootstrap as well: claim the VS Code UUID, then register task state and post
+intent with `holly task start --id <issue-id> --intent '<agent-intent>'` — that
+single command also unblocks the gated tools.
+
+### Phase 2 — Claim work and set the task
+
+List unblocked work via the active tracker adapter, then register task context
+and post intent in one step:
+
+```bash
+holly tracker ready --limit 10
+# Records the task, posts intent to all-agents, and unblocks gated tools.
+# Later prompts are classified automatically; use resume to re-enter/recover.
+eval "$(holly task start --id <issue-id> --intent '<agent-intent>')"
+```
+
+**Worktree isolation:** all implementation work happens in a dedicated worktree.
+The `pre_tool_use` hook BLOCKS file writes on the main checkout and prints the
+exact command to create one through the active adapter. `holly task start`
+records task/intent state; it does not itself create the worktree. See
+`docs/worktree-workflow.md` for the full lifecycle, or the `issue-tracker`
+skill for adapter-specific commands.
+
+### Phase 3 — Deliver (dispatch + integrate)
+
+The `PostToolUse` hook fires on **every** tool call and runs `update_activity()`,
+keeping `last_activity` fresh so staleness sweeps don't reap a live session. You
+do not need to do anything for this — it just works.
+
+For multi-agent epics, the Orchestrator decomposes the work and dispatches
+**bounded workers wave by wave** via `runSubagent` / `Agent`. It collects each
+worker's returned report, dispatches a reviewer per branch, and integrates
+approved branches in dependency order. **Only the Orchestrator integrates and
+closes issues.** See the `swarm-delivery` and `orchestration` skills for the
+dispatch contract and routing.
+
+**Human-visible status (optional).** When a human needs to follow progress, a
+primary / Orchestrator agent MAY post short ASCII status via the `agent-chat`
+skill. This is for humans, not for coordinating workers — swarm dispatch itself
+does not use chat. Keep messages ASCII-only and prefer the file-based protocol
+(write the body to an `agent-fs` scratch path, then `holly chat post --file`).
+
+### Phase 4 — Idle
+
+When you have no active work and are waiting for the next user prompt, the
+session simply goes quiet. The Stop hook marks it `idle` (see Phase 5); the same
+`$HOLLY_SESSION_ID` resumes on the next prompt — there is nothing to poll.
+
+> **Legacy note.** The pre-swarm model kept primary agents in a `chat monitor` /
+> `holly chat wait --timeout 0` polling loop waiting to be summoned over chat. The
+> swarm model does not: workers are dispatched directly by the Orchestrator, so
+> there is no standby polling loop to run.
+
+### Phase 5 — Shutdown
+
+The `Stop` hook fires automatically and runs:
+
+1. `idle_session()` — marks the session as `idle` in `.holly/agent-sessions.json`
+   (the session is NOT terminated; the same `$HOLLY_SESSION_ID` can be reactivated
+   by the next user prompt).
+2. The hook does NOT sync the issue tracker. If you want a sync on stop, use
+   the active adapter's policy. Adapter workflows may also add their own
+   postflight (see `workflows/end-session.yaml`).
+
+The distinction matters:
+
+- `idle` — set by the Stop hook; the window is quiet but the session is
+  preserved. Coming back in the same window resumes it.
+- `ended` — set explicitly by `holly session end`; the session is closed and
+  `ended_at` is stamped. Use this on intentional shutdown.
+
+**Before shutdown, you MUST:**
+
+1. Push all committed work (the feature branch push is mandatory — it is the only backup outside the throwaway worktree).
+2. File issues for remaining work via your tracker.
+3. Close completed work via your tracker.
+
+**Manual shutdown (if the hook won't fire or you want a hard end):**
+
+```bash
+HOLLY_SESSION_ID="$HOLLY_SESSION_ID" holly session end
+holly tracker sync  # only when your active adapter requires manual sync
+```
+
+---
+
+## Bounded Worker lifecycle
+
+Workers are dispatched by the Orchestrator via `runSubagent` / `Agent`. They are
+stateless and short-lived: **one task, one report, exit.**
+
+### Rules
+
+1. **Inherit context** — do not boot your own session or call `get_or_create_session()` / `session get`. You already have what you need from the dispatch.
+2. **Do not write `.holly/agent-sessions.json`** — the parent owns the session file.
+3. **Do not call `end_session()`** — the parent owns the session lifecycle.
+4. **Do not join chat, post BEGIN / SIGN-OFF, or run `holly chat wait`** — return everything in your final report, not over chat.
+5. **Stay inside the envelope** — do exactly the assigned task within its allowed files. If the scope is wrong, the work is blocked, or it sprawls beyond the assignment, STOP and report rather than expanding silently.
+6. **Write only in the assigned worktree** — the `pre_tool_use` hook blocks writes on the main checkout.
+7. **Never run `holly task start`/`finish` under the inherited parent id** — it overwrites the Orchestrator's `current_task`/`worktree_path` (the TIZA-873 regression). If you genuinely need your own worktree lifecycle, run it under the resolved CHILD session id, never the parent id. Claude Code and VS Code receive that id from `SubagentStart`; Codex re-resolves it from the worker's runtime-owned `CODEX_THREAD_ID` before every Holly mutation because separate tool calls use fresh shells. `holly task status --json` must show `session_id` different from `inherited_session_id` before a Codex worker manages a worktree. `holly task start` also refuses to rewrite a parent that is orchestrating active subagents. Subagent bookkeeping (`holly session subagent active`/`complete`) resolves to the parent automatically either way. See the `swarm-delivery` skill, "Parent/child session isolation".
+
+### What a worker returns
+
+A single structured final report: the branch it produced, what changed, which
+tests/checks ran and their result, and any residual risk or follow-up. The
+Orchestrator — not the worker — reviews, integrates, and closes the issue.
+
+---
+
+## Session State Reference
+
+Sessions are stored in `.holly/agent-sessions.json` (workspace root, gitignored).
+
+| Field           | Type                         | Description                                                |
+| --------------- | ---------------------------- | ---------------------------------------------------------- |
+| `agent_name`    | string                       | Display name (set via `--name`)                            |
+| `status`        | `active`, `idle`, or `ended` | Current state                                              |
+| `started_at`    | ISO 8601                     | Creation timestamp                                         |
+| `ended_at`      | ISO 8601 / null              | Completion timestamp                                       |
+| `last_activity` | ISO 8601                     | Most recent tool use (refreshed by the `PostToolUse` hook) |
+
+### Staleness
+
+A session is **stale** when `last_activity` is older than 30 minutes. Stale
+sessions can be reactivated by the same window (same `$HOLLY_SESSION_ID`); `holly session sweep`
+idles expired ones.
+
+### Session CLI Quick Reference
+
+```bash
+holly session status              # Show current session
+holly session activity            # Refresh last_activity
+holly session list                # List all sessions
+holly session end                 # End current session (status=ended)
+holly session --json <command>    # JSON output
+```
+
+See the `agent-sessions` skill for the full CLI surface (UUID claiming, task
+intent, `holly session subagent` registration, workspace bootstrap).
+
+---
+
+## Chat: optional, human-visible only
+
+Chat is **not** part of swarm dispatch. Primary / Orchestrator agents MAY use the
+`agent-chat` skill to post human-visible status; bounded workers do not use chat
+at all. See the `agent-chat` skill for the full CLI reference. The only worker
+exception: if you discover something that genuinely affects other agents' work,
+surface it in your report so the Orchestrator can act on it.
+
+---
+
+## Troubleshooting
+
+| Symptom                                  | Cause                                            | Fix                                                                                      |
+| ---------------------------------------- | ------------------------------------------------ | ---------------------------------------------------------------------------------------- |
+| `HOLLY_SESSION_ID not set` errors        | Shell/runtime did not provide identity           | Stop; fix shell/runtime bootstrap. Do not backfill from Holly commands                   |
+| Gated tools stay blocked                 | UUID / task bootstrap incomplete                 | Run the `holly session ...` command printed by the hook, then re-run `holly task start --id <issue-id> --intent '<agent-intent>'` if task state is missing |
+| Session shows as stale                   | No `PostToolUse` hook running                    | Check hook config in `.vscode/settings.json`                                             |
+| A worker tried to manage its own session | Worker booted a session / wrote the session file | Workers inherit context — see the Bounded Worker rules                                   |
+| Old session won't reactivate             | `$HOLLY_SESSION_ID` doesn't match                | Check `holly session list --json` for the correct ID                                     |
+
+---
+
+## Related
+
+- Session skill: `agent-sessions` — bootstrap, UUID claiming, task intent, subagent registration
+- Swarm delivery: `swarm-delivery` — the bounded dispatch contract and per-worker skill floor
+- Orchestration: `orchestration` — decomposition, routing, integration
+- Chat skill: `agent-chat` — full chat CLI reference (optional, human-visible status)
+- Issue tracker skill: `issue-tracker` — adapter-agnostic task management
+- Worktree docs: `docs/worktree-workflow.md` — full worktree lifecycle
+- Hook scripts: `hooks/session_start.py`, `hooks/session_end.py`, `hooks/post_tool_use.py`
+- Workflows: `workflows/begin-session.yaml` (task discovery), `workflows/end-session.yaml` (teardown), `workflows/workflow-wrapper.yaml`

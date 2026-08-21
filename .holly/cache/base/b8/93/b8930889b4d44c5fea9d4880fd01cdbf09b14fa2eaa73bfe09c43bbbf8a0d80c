@@ -1,0 +1,47 @@
+// Runtime detection. Identifies which environment is invoking agent-fs.
+// Used for logging, doctor checks, and per-runtime install behaviour.
+
+// Order matters: more-specific agents are tested before their terminal hosts.
+// A Claude Code agent running inside Warp must detect as "claude-code", not "warp".
+const RUNTIMES = [
+  { name: 'paperclip', test: () => Boolean(process.env.PAPERCLIP_RUN_ID) },
+  {
+    name: 'claude-code',
+    test: () =>
+      Boolean(process.env.CLAUDE_CODE_SESSION_ID) ||
+      process.env.CLAUDECODE === '1' ||
+      Boolean(process.env.CLAUDE_CODE_ENTRYPOINT) ||
+      (typeof process.env.AI_AGENT === 'string' && process.env.AI_AGENT.startsWith('claude-code')),
+  },
+  {
+    name: 'codex',
+    test: () =>
+      Boolean(process.env.CODEX_SESSION_ID) ||
+      Boolean(process.env.CODEX_CLI) ||
+      (typeof process.env.AI_AGENT === 'string' && process.env.AI_AGENT.startsWith('codex')),
+  },
+  {
+    name: 'copilot',
+    test: () =>
+      Boolean(process.env.COPILOT_CLI_SESSION_ID) ||
+      (typeof process.env.AI_AGENT === 'string' && process.env.AI_AGENT.startsWith('copilot')),
+  },
+  // Terminal hosts come last — they're the catch-all when an agent layer is not detected.
+  { name: 'warp', test: () => Boolean(process.env.WARP_SESSION_ID) || Boolean(process.env.WARP_IS_LOCAL_SHELL_SESSION) },
+  { name: 'vscode', test: () => Boolean(process.env.VSCODE_PID) || Boolean(process.env.VSCODE_IPC_HOOK_CLI) },
+];
+
+export function detectRuntime() {
+  for (const r of RUNTIMES) {
+    if (r.test()) return r.name;
+  }
+  return 'shell';
+}
+
+export function detectAgentLabel() {
+  // Prefer the most informative identity available.
+  if (process.env.AGENT_FS_AGENT_LABEL) return process.env.AGENT_FS_AGENT_LABEL;
+  if (process.env.PAPERCLIP_AGENT_ID) return `paperclip:${process.env.PAPERCLIP_AGENT_ID}`;
+  if (process.env.AI_AGENT) return process.env.AI_AGENT;
+  return null;
+}

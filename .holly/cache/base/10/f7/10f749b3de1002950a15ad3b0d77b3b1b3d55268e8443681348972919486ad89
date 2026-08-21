@@ -1,0 +1,205 @@
+# Model capability + projection table for the swarm system.
+#
+# This is the single, bidirectional source of truth that binds Holly's
+# platform-agnostic taxonomy to concrete per-runtime values. It is consumed in
+# two directions:
+#
+#   FORWARD (projection + dispatch): given a Holly capability tier, resolve the
+#   concrete model, reasoning effort, and platform tool names for a runtime.
+#   `platform_projection.py` writes the model into projected frontmatter for
+#   runtimes that read it (claude-code, vscode-copilot); the Orchestrator uses
+#   `reasoning` at dispatch time; codex consumes both model + reasoning as
+#   spawn_agent parameters (its frontmatter is never translated).
+#
+#   REVERSE (routing / can-satisfy): given a runtime + the model it is actually
+#   running, resolve Holly's strength level, to decide whether that runtime meets
+#   an agent's `minimum_model_strength` before dispatch.
+#
+# The agnostic agent defs (src/holly/agents/*.agent.md) carry ONLY the
+# Holly-native `capability_tier`; they never name a platform model. No platform
+# is the "base" — every platform (.claude, .github, .codex) is a projection
+# resolved from this table. Swapping a platform model is a one-block edit here.
+#
+# PROJECTION IS TIER-KEYED. `projection` maps a capability_tier directly to a
+# concrete model + reasoning effort, so two tiers at the same strength can use
+# DIFFERENT models — e.g. reviewers stay on GPT for cross-model review diversity
+# while same-strength implementation runs on Claude. `tier_strength` (below) is
+# kept ONLY for the reverse routing/can-satisfy check, not for projection.
+#
+# Reasoning effort ladder (ascending): low < medium < high < xhigh < max < ultracode
+# `max` and `ultracode` are NEVER baked as projection defaults; they are opted
+# into per-dispatch when a task explicitly warrants the extra deliberation.
+#
+# Routing rule (reverse direction):
+#   - Resolve the current runtime and model, look up its strength here.
+#   - If strength >= the agent's minimum_model_strength, dispatch is allowed.
+#   - If strength < the requirement and fallback_allowed is true, the
+#     Orchestrator may dispatch on the strongest available model that still
+#     meets the minimum, and the agent must report fallback_used: true.
+#   - If no available model meets the minimum and fallback_allowed is false
+#     (senior_review), the Orchestrator MUST escalate and MUST NOT dispatch.
+#
+# If a runtime or model is not listed, its strength defaults to `tiny`. An
+# agent that requires `standard`, `senior`, or `principal` on an unlisted
+# runtime/model must escalate rather than silently run on an under-powered model.
+#
+# The `principal` strength (above `senior`) is the top rung, reserved for work
+# that needs reasoning beyond Opus 4.8: highly-complex, long-running,
+# large-context tasks (deep convention-based refactors, cross-legislation legal
+# analysis). Only Claude Fable 5 satisfies it, and only on the claude-code
+# runtime — GPT-native runtimes (Copilot, Codex) have no principal-strength
+# model, so a `principal_*` tier there falls back (implementation) or escalates
+# (review) per the manifest, never silently running principal work on a
+# senior-or-below model.
+
+strength_order:
+  - tiny
+  - standard
+  - senior
+  - principal
+
+# Holly capability tier -> the strength floor it needs (the MINIMUM acceptable
+# model strength for routing, NOT the projected default). Mirrors each swarm
+# agent's `minimum_model_strength` in swarm-agents.manifest.yaml (the manifest's
+# `any` floor for the tiny tier is `tiny` here). `orchestrator` is the top-level
+# planner role; it is not a bounded swarm tier and is not in the manifest. A
+# projection test asserts the swarm entries stay aligned with the manifest.
+tier_strength:
+  tiny_implementation: tiny
+  standard_implementation: standard
+  senior_implementation: senior
+  ui_browser_implementation: standard
+  standard_review: standard
+  senior_review: senior
+  principal_implementation: principal
+  principal_review: principal
+  orchestrator: senior
+
+runtimes:
+  claude-code:
+    # Claude Code reads a `model:` alias in projected frontmatter, so
+    # frontmatter_model is true (the model is injected). `reasoning` is
+    # table-owned and consumed at DISPATCH time (the Agent tool's effort
+    # option); it is NOT written into frontmatter (Claude Code has no per-agent
+    # effort frontmatter key). Claude Code has no GPT, so its reviewers stay on
+    # Claude models.
+    frontmatter_model: true
+    projection:
+      tiny_implementation: {model: sonnet, reasoning: medium}
+      standard_implementation: {model: sonnet, reasoning: high}
+      ui_browser_implementation: {model: sonnet, reasoning: high}
+      senior_implementation: {model: opus, reasoning: high}
+      standard_review: {model: sonnet, reasoning: high}
+      senior_review: {model: opus, reasoning: high}
+      # Principal tiers run on Claude Fable 5 — the only model that satisfies the
+      # `principal` strength. `fable` is a Claude Code model alias (like
+      # sonnet/opus), so the frontmatter model tracks the latest Fable release.
+      # Default effort xhigh (the highest bakeable rung); max/ultracode stay
+      # per-dispatch opt-ins.
+      principal_implementation: {model: fable, reasoning: xhigh}
+      principal_review: {model: fable, reasoning: xhigh}
+      orchestrator: {model: opus, reasoning: high}
+    # Holly tool token -> Claude Code built-in tool(s). `browser` maps to nothing
+    # (no CC built-in browser tool; the playwright MCP name varies per project),
+    # which is consistent with the swarm bodies' browser-unavailable fallback.
+    tool_map:
+      execute: [Bash]
+      read: [Read]
+      edit: [Edit, Write]
+      search: [Grep, Glob]
+      web: [WebFetch, WebSearch]
+      agent: [Agent, Task]
+      todo: [TodoWrite]
+      browser: []
+    # Built-ins every translated subagent receives regardless of its tool list.
+    # ToolSearch is the loader for deferred MCP-backed tools (context-mode ctx_*,
+    # qmd, ...); without it a bounded subagent cannot reach context-mode at all.
+    always_tools: [ToolSearch]
+    # Claude Code Agent-tool subagents have no Holly session of their own, so the
+    # VS Code orchestration session-bootstrap block is excised from the body.
+    strip_session_bootstrap: true
+    # REVERSE lookup: the model id the runtime reports -> Holly strength.
+    models:
+      claude-haiku-4-5: tiny
+      claude-sonnet-5: standard
+      claude-opus-4-8: senior
+      claude-fable-5: principal
+    unknown_model: tiny
+
+  vscode-copilot:
+    # Copilot reads a literal model string in frontmatter, so frontmatter_model
+    # is true and the projection injects it verbatim. Reviewers stay on GPT for
+    # cross-model review diversity (Claude implements, GPT reviews). `reasoning`
+    # is table-owned/dispatch-consumed, never written to frontmatter.
+    frontmatter_model: true
+    projection:
+      tiny_implementation: {model: "Claude Sonnet 5 (copilot)", reasoning: medium}
+      standard_implementation: {model: "Claude Sonnet 5 (copilot)", reasoning: high}
+      ui_browser_implementation: {model: "Claude Sonnet 5 (copilot)", reasoning: high}
+      senior_implementation: {model: "Claude Opus 4.8 (copilot)", reasoning: high}
+      standard_review: {model: "GPT-5.5 (copilot)", reasoning: high}
+      senior_review: {model: "GPT-5.5 (copilot)", reasoning: xhigh}
+      # Copilot has no Fable 5, so it cannot truly satisfy `principal`. These are
+      # BEST-EFFORT projections (strongest available family: Claude for impl, GPT
+      # for review) used only when the manifest permits a fallback. Because the
+      # reverse `models` map lists no principal-strength model here, routing flags
+      # fallback_used (implementation) or escalates (review, no fallback).
+      principal_implementation: {model: "Claude Opus 4.8 (copilot)", reasoning: xhigh}
+      principal_review: {model: "GPT-5.5 (copilot)", reasoning: xhigh}
+      orchestrator: {model: "Claude Opus 4.8 (copilot)", reasoning: high}
+    # Copilot speaks Holly's tool taxonomy natively, so tools are passed through
+    # unchanged. `identity` means "do not translate the tools list".
+    tool_map: identity
+    # Copilot subagents run the full orchestration session procedure.
+    strip_session_bootstrap: false
+    # REVERSE lookup.
+    models:
+      gpt-4o-mini: tiny
+      gpt-4o: standard
+      gpt-5-4: standard
+      gpt-5-5: senior
+      o3-mini: standard
+      o3: senior
+      claude-haiku-4-5: tiny
+      claude-sonnet-5: standard
+      claude-opus-4-8: senior
+      gemini-flash: standard
+      gemini-pro: standard
+    unknown_model: tiny
+
+  codex:
+    # Codex is GPT-native. It takes model + reasoning as spawn_agent PARAMETERS,
+    # not frontmatter, so frontmatter_model is false: its agent frontmatter is
+    # projected as a SYMLINK of the Holly-native base (no invented format, per
+    # holly-2z94) while the `projection` block below supplies the model + effort
+    # the Orchestrator passes to spawn_agent at DISPATCH time. Reviewers route to
+    # GPT-5.5, mirroring Copilot's cross-model review posture.
+    frontmatter_model: false
+    projection:
+      tiny_implementation: {model: gpt-5.4-mini, reasoning: medium}
+      standard_implementation: {model: gpt-5.4, reasoning: high}
+      ui_browser_implementation: {model: gpt-5.4, reasoning: high}
+      senior_implementation: {model: gpt-5.5, reasoning: high}
+      standard_review: {model: gpt-5.5, reasoning: high}
+      senior_review: {model: gpt-5.5, reasoning: xhigh}
+      # Codex is GPT-native with no Fable 5, so it cannot satisfy `principal`.
+      # BEST-EFFORT dispatch on gpt-5.5; the reverse map lists no principal-strength
+      # model, so routing flags fallback (impl) or escalates (review).
+      principal_implementation: {model: gpt-5.5, reasoning: xhigh}
+      principal_review: {model: gpt-5.5, reasoning: xhigh}
+      orchestrator: {model: gpt-5.5, reasoning: high}
+    tool_map: identity
+    strip_session_bootstrap: false
+    # REVERSE lookup. Exact model override strings accepted by Codex spawn_agent.
+    # Spark is a cheap/light worker target: tiny only.
+    models:
+      gpt-5.3-codex-spark: tiny
+      gpt-5.4-mini: tiny
+      gpt-5.4: standard
+      gpt-5.5: senior
+    unknown_model: tiny
+
+  unknown_runtime:
+    # Hard floor: never assume an unknown runtime can do standard or senior
+    # work. Only tiny tasks may run; anything stronger must escalate.
+    unknown_model: tiny

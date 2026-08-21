@@ -1,0 +1,63 @@
+// Shared pcli helpers. Used by evidence upload, path worktree, and
+// future verbs that delegate to the pcli CLI.
+
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+export function findPcli() {
+  if (process.env.PCLI_BIN && fs.existsSync(process.env.PCLI_BIN)) {
+    return process.env.PCLI_BIN;
+  }
+  const which = spawnSync('which', ['pcli'], { encoding: 'utf8' });
+  if (which.status === 0 && which.stdout.trim()) {
+    return which.stdout.trim();
+  }
+  const candidates = [
+    path.join(os.homedir(), '.local', 'bin', 'pcli'),
+    '/usr/local/bin/pcli',
+    '/opt/homebrew/bin/pcli',
+  ];
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
+export function callPcliJson(args, { timeoutMs = 15000 } = {}) {
+  const bin = findPcli();
+  if (!bin) return { ok: false, error: 'pcli not found on PATH or PCLI_BIN env' };
+  const result = spawnSync(bin, ['--json', ...args], { encoding: 'utf8', timeout: timeoutMs });
+  if (result.status !== 0) {
+    return {
+      ok: false,
+      error: (result.stderr || result.stdout || `pcli exit ${result.status}`).trim().slice(0, 500),
+    };
+  }
+  try {
+    return { ok: true, data: JSON.parse(result.stdout) };
+  } catch (err) {
+    return { ok: false, error: `pcli json parse failed: ${err.message}` };
+  }
+}
+
+/**
+ * Call pcli without --json (some pcli commands emit plain text confirmation,
+ * e.g. `pcli comment` which says "✓ Comment added to GRO-...").
+ * Returns {ok, stdout, stderr} based on exit code.
+ */
+export function callPcli(args, { timeoutMs = 15000 } = {}) {
+  const bin = findPcli();
+  if (!bin) return { ok: false, error: 'pcli not found on PATH or PCLI_BIN env' };
+  const result = spawnSync(bin, args, { encoding: 'utf8', timeout: timeoutMs });
+  if (result.status !== 0) {
+    return {
+      ok: false,
+      stdout: result.stdout ?? '',
+      stderr: result.stderr ?? '',
+      error: (result.stderr || result.stdout || `pcli exit ${result.status}`).trim().slice(0, 500),
+    };
+  }
+  return { ok: true, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
+}

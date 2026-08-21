@@ -1,0 +1,31 @@
+// Uploader registry. Each adapter exports a uniform interface so `agent-fs
+// evidence upload --target <name>` can route to any of them.
+//
+// Adapter contract:
+//   name: string
+//   probe(): {available: bool, reason?: string}     — preflight check
+//   upload({issue, files, commentId, ctx}):         — returns receipt block
+//     {
+//       attachments: [
+//         {name, attachmentId, contentPath, byteSize, sha256, contentType,
+//          originalFilename, uploadedAt}
+//       ],
+//       failures: [{name, error}],
+//     }
+//
+// Files arrive as [{name, path}]; the adapter uploads each, captures the
+// server's response, normalises it to the receipt schema.
+
+import { paperclipUploader } from './paperclip.mjs';
+
+const UPLOADERS = {
+  paperclip: paperclipUploader,
+};
+
+export function getUploader(target) {
+  return UPLOADERS[target] ?? null;
+}
+
+export function listUploaders() {
+  return Object.keys(UPLOADERS);
+}

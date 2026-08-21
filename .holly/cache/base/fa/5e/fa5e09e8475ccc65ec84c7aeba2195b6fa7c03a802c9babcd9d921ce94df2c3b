@@ -1,0 +1,494 @@
+# yaml-language-server: $schema=../schemas/workflow.schema.json
+
+name: Orchestrate Swarm
+description: >-
+  Parallel delivery workflow for Beads epics using bounded runSubagent /
+  spawn_agent calls instead of persistent live agent chat windows. The
+  Orchestrator analyses the epic DAG, selects implementation and reviewer
+  agents, dispatches independent work by wave, validates returned results,
+  integrates approved branches, and closes the epic when all children are done.
+
+  Execution model: the Orchestrator remains in the primary chat window and
+  invokes implementation/reviewer agents with the runtime subagent dispatcher:
+  `runSubagent` on VS Code, `Agent` on Claude Code, or
+  `multi_agent_v1.spawn_agent` on Codex. Subagents inherit explicit
+  session context from the Orchestrator/runtime, verify their assigned issue identity through
+  `holly session subagent active --json`, perform one bounded assignment, return a
+  structured final report, and exit. There are no separate user-opened chat
+  windows, no epic-channel roster, no BEGIN message, and no `holly chat wait` loop.
+
+  Swarm agents and their capability tiers (see swarm-agents.manifest.yaml):
+    - swarm-tiny-implementation       tiny_implementation       (<=2 files / <=120 lines)
+    - swarm-standard-implementation   standard_implementation   (<=4 files / <=250 lines)
+    - swarm-senior-implementation     senior_implementation     (<=8 files / <=600 lines; architecture/cross-cutting, needs senior model)
+    - swarm-ui-browser-implementation ui_browser_implementation (frontend / browser-verifiable)
+    - swarm-principal-implementation  principal_implementation  (<=12 files / <=900 lines; hardest large-context work, needs Claude Fable 5)
+    - swarm-reviewer                  standard_review           (normal review gate)
+    - swarm-senior-reviewer           senior_review             (architecture / security / disputes)
+    - swarm-principal-reviewer        principal_review          (highest-stakes / senior-reviewer escalations, needs Claude Fable 5)
+
+  Use this workflow only when the epic has child issues that can be described
+  completely up front, have clear dependencies, are granular enough for the
+  selected implementation agents, and can run in parallel with low file overlap.
+  If the work needs persistent negotiation, ongoing reassignment through chat, or
+  agents sharing evolving context during implementation, stop and propose a
+  lighter alternative such as finer decomposition or sequential `/implement`.
+
+  Composable with the workflow wrapper for universal pre/postflight.
+
+preflight:
+  - prompt: >-
+      Mode gate — single-agent vs multi-agent.
+
+      Swarm delivery requires `multi-agent` mode. Run `holly mode` (or read it
+      from `holly status`). If it reports `single-agent`, STOP: do NOT dispatch
+      any swarm workers — the PreToolUse hook hard-blocks
+      `Agent`/`Task`/`runSubagent` and the run will fail. Either deliver the epic
+      directly in the Orchestrator session, or ask the user to switch with
+      `holly mode multi` (this session) or `holly mode multi --default` (project
+      default). Only continue this workflow when the mode is `multi-agent`.
+    category: discovery
+
+  - prompt: >-
+      Load and verify the epic:
+
+      1. The user MUST provide a Beads epic ID. If not, ask for one.
+      2. Run `holly tracker show <epic-id> --json` and verify the bead is type `epic`.
+         If it is not an epic, STOP and explain that orchestrate-swarm requires
+         a pre-existing epic with child issues.
+      3. Run `holly tracker exec -- list --parent <epic-id> --json` and record every child ID,
+         title, status, priority, dependency, label, and parent relationship.
+      4. If the epic has zero children, STOP and suggest `/track <description>`
+         or `/track <epic-id>` to decompose the work first.
+      5. Record: epic_id, epic_title, child_count, and child_list.
+    category: discovery
+
+  - prompt: >-
+      Run the formula and molecule gates before any manual DAG reasoning:
+
+      1. Run `holly tracker exec -- formula list` and record formula_list_checked: true.
+      2. Run `holly tracker exec -- mol show <epic-id>` and record molecule_checked: true.
+      3. If molecule metadata exists, record molecule_metadata_present: true
+         and use any stored wave, agent-path, complexity, and file-scope
+         metadata as the primary planning input.
+      4. If no molecule metadata exists, record molecule_metadata_present:
+         false and continue to explicit DAG validation.
+      5. Do not infer missing formula or molecule results.
+    category: discovery
+    requires:
+      - epic_id from preflight step 1
+
+  - prompt: >-
+      Validate the dependency DAG and swarmability:
+
+      1. Run `holly tracker exec -- dep tree <epic-id>` to inspect child dependencies.
+      2. Run `holly tracker exec -- swarm validate <epic-id>` if available. If unavailable, fall
+         back to manual topological sorting from the child dependency graph.
+      3. Determine wave labels, agent-path labels, merge points, blocked
+         children, and maximum useful parallelism.
+      4. If child issues lack wave-N or agent-N labels, apply them with
+         `holly tracker exec -- label add <child-id> wave-N` and `holly tracker exec -- label add <child-id> agent-N`
+         or `holly tracker exec -- label add <child-id> agent-shared` as appropriate. Add one
+         label per command.
+      5. Re-check that every child has exactly one wave-N label and exactly one
+         agent-N or agent-shared label before proceeding.
+    category: discovery
+    requires:
+      - child_list from preflight step 1
+      - formula_list_checked from preflight step 2
+      - molecule_checked from preflight step 2
+
+  - prompt: >-
+      Decide whether runtime subagent swarm delivery is suitable:
+
+      1. Inspect each agent path for file overlap, shared contracts, data
+         migrations, schema/API boundary changes, authentication or permission
+         changes, and user-facing UI risk.
+      2. Confirm each launchable child has explicit acceptance criteria,
+         allowed files or expected file areas, verification commands, and a
+         clear branch/worktree ownership model.
+      3. STOP if the work needs persistent chat coordination, live negotiation
+         between agents, unresolved cross-track contracts, or continuous idle
+         reassignment. Present lighter alternatives instead: split the work more
+         finely, run sequential `/implement` delivery, or ask the user whether
+         to defer.
+      4. Proceed only if each wave can be dispatched as bounded assignments
+         where subagents return final reports instead of waiting in chat.
+      5. Record a suitability decision with: suitable true/false, reasons,
+         max_parallelism, file-overlap risks, and any forced sequential gates.
+    category: discovery
+    requires:
+      - swarmability assessment from preflight step 3
+
+  - prompt: >-
+      Resolve the runtime dispatch surface before launch planning:
+
+      1. If running in VS Code, use bounded `runSubagent` calls.
+      2. If running in Claude Code, use bounded `Agent` calls.
+      3. If running in Codex, use `multi_agent_v1.spawn_agent` with
+         `agent_type: "worker"`. Codex workers do not automatically load Holly
+         `.agent.md` personas, so every Codex worker prompt must include the
+         selected swarm role, issue ID, worktree/session expectations, allowed
+         files or file areas, required skills, verification commands, and the
+         rules that workers must not close issues, merge branches, or revert
+         unrelated changes.
+      4. For Codex model overrides use exact tool names:
+         `gpt-5.3-codex-spark` for tiny/light envelopes, `gpt-5.4` for
+         standard envelopes, and `gpt-5.5` for senior envelopes. Treat
+         `holly:track:model-spark` and `holly:track:model-gpt-5-5` labels as
+         routing hints; still run the granularity gate.
+      5. Record: runtime_dispatcher, model_override_available true/false, and
+         model_identity_audit. For Codex, the accepted spawn call proves only
+         the requested model override; workers cannot independently report an
+         `actual_model`.
+    category: discovery
+    requires:
+      - suitability decision from preflight step 4
+
+  - prompt: >-
+      Run the granularity gate before any subagent launch planning:
+
+      1. Inspect every open child issue and classify the smallest safe
+         implementation agent it can be assigned to:
+         - `swarm-tiny-implementation`: one tiny mechanical change, one clear
+           behaviour or cleanup, usually 1-2 files, no cross-module contracts,
+           no user-facing judgement, one focused verification command.
+         - `swarm-standard-implementation`: one focused bug fix or
+           implementation slice, usually 1-4 files, clear acceptance criteria,
+           no architecture, migration, auth, security, broad refactor, or
+           ambiguous product judgement.
+         - `swarm-senior-implementation`: one coherent architecture-bearing
+           change with explicit scope — cross-cutting refactor, migration,
+           concurrency, or security-sensitive work the cheaper tiers must
+           reject. Up to ~8 files / 600 lines, still one issue. Requires a
+           senior model; escalate if none is available.
+         - `swarm-ui-browser-implementation`: one scoped UI/browser-flow slice
+           with a known route/component, expected states, accessibility
+           expectations, and browser-verifiable acceptance criteria; no broad
+           redesign or design-system architecture.
+         - direct orchestration: anything that is not one coherent issue even
+           at the senior tier — unsettled cross-track contracts, ambiguous
+           product decisions, or work that must be split before delivery.
+
+      2. For each child, verify all of these dispatch prerequisites exist:
+         - acceptance criteria specific enough to test,
+         - expected file areas or allowed files,
+         - forbidden files or explicit scope boundaries,
+         - dependency status and required base branch,
+         - verification commands or visual evidence requirements,
+         - clear rollback or follow-up handling for out-of-scope discoveries.
+
+      3. Mark a child oversized if any of the following are true:
+         - it contains multiple independent behaviours,
+         - it spans unrelated subsystems,
+         - expected edits exceed the selected agent envelope
+           (tiny: ~2 files/120 lines; standard and ui-browser: ~4 files/250 lines),
+         - verification requires multiple unrelated suites or manual judgement,
+         - dependencies are unclear or cross-track contracts are unsettled,
+         - success cannot be checked from a bounded final report.
+
+      4. For every oversized child, propose a split into smaller replacement
+         children under the same parent epic. Each proposed child MUST have a
+         concise action title, one deliverable behaviour, acceptance criteria,
+         expected allowed and forbidden files, dependencies, wave-N and
+         agent-N/agent-shared label recommendations, the cheapest suitable
+         implementation agent, a reviewer recommendation, and a verification
+         command or evidence requirement.
+
+      5. Present the split plan to the user and wait for explicit approval
+         before changing Beads. Do NOT silently rewrite the epic.
+
+      6. If the user approves splitting, create the replacement children with
+         `holly tracker create`, wire dependencies with stable adapter commands, apply one
+         label per command, mark the oversized original as superseded or
+         deferred with a reason that lists the replacement child IDs, then
+         reload the child list and rerun DAG validation.
+
+      7. If the user declines splitting, do not dispatch the oversized child to a
+         cheap implementation agent. Route it to direct Orchestrator handling, a
+         stronger one-shot agent, sequential `/implement` delivery, or defer it.
+
+      8. Record: granularity_checked: true, granularity_ready: true | false,
+         oversized_children, split_plan_required: true | false, agent_envelope
+         decisions, and any children forced out of cheap-agent dispatch.
+    category: discovery
+    requires:
+      - suitability decision from preflight step 4
+      - runtime dispatch surface from preflight step 5
+
+  - prompt: >-
+      Present the swarm preflight report and wait for user confirmation before
+      launching implementation subagents.
+
+      PRECONDITION: The granularity gate from preflight step 6 MUST have been
+      completed. If granularity_checked is not true, STOP and complete that gate
+      before presenting this report.
+
+      The report MUST include:
+
+        epic_id: <id>
+        epic_title: <title>
+        child_count: <N>
+        formula_list_checked: true
+        molecule_checked: true
+        molecule_metadata_present: true | false
+        granularity_checked: true
+        granularity_ready: true | false
+        oversized_children: <list or none>
+        split_plan_required: true | false
+        waves: <wave summary>
+        agent_paths: <agent path summary>
+        max_parallelism: <N>
+        runtime_dispatcher: runSubagent | Agent | spawn_agent
+        model_identity_audit: <what can and cannot be proven>
+        runtime_subagent_suitable: true | false
+        reason_for_suitability_decision: <text>
+        forced_sequential_gates: <list or none>
+        file_overlap_risks: <list or none>
+
+      If runtime_subagent_suitable is false or granularity_ready is false, STOP
+      after presenting the report. If split_plan_required is true, present the
+      split plan and wait for explicit user approval before creating or changing
+      any Beads issues.
+    category: discovery
+    requires:
+      - suitability decision from preflight step 4
+      - runtime dispatch surface from preflight step 5
+      - granularity gate from preflight step 6
+
+steps:
+  - prompt: >-
+      Build the wave-by-wave swarm delivery plan:
+
+      1. Confirm granularity_checked is true and granularity_ready is true. If
+         either is false, STOP and return to the granularity gate. Do not launch
+         cheap implementation agents with oversized work.
+      2. Group children by wave-N label. Within each wave, group by agent-N path
+         and identify any agent-shared integration/review children.
+      3. For every implementation child, choose the cheapest custom
+         implementation agent whose capability envelope fits the task:
+         - `swarm-tiny-implementation` for tiny, mechanical, low-risk edits.
+         - `swarm-standard-implementation` for focused small to medium impl.
+         - `swarm-senior-implementation` for architecture-bearing, cross-cutting,
+           migration, concurrency, or security-sensitive implementation with
+           explicit scope (requires a senior model; escalate if unavailable).
+         - `swarm-ui-browser-implementation` for frontend, browser-flow, UI,
+           accessibility, and browser-verifiable work.
+      4. For every review gate, choose:
+         - `swarm-reviewer` for normal scoped implementation review.
+         - `swarm-senior-reviewer` for high-risk, disputed, architectural,
+           security-sensitive, data-sensitive, migration, or cross-cutting work.
+      5. Keep useful parallelism conservative: do not dispatch two subagents
+         that are expected to edit the same file unless one is read-only review
+         or the dependency plan explicitly serialises integration.
+      6. Default reviewer capacity to ceil(worker_count / 2), minimum 1, when
+         multiple implementation workers will return in the same wave.
+      7. Present a launch plan with child ID, assigned custom agent, reviewer,
+         expected files, verification commands, base branch, and dependencies.
+    category: discovery
+    requires:
+      - confirmed swarm preflight report
+      - granularity gate from preflight step 6
+
+  - prompt: >-
+      Run the dispatch preflight gate, then prepare self-contained runtime
+      subagent prompts for the current wave.
+
+      DISPATCH PREFLIGHT GATE (model + tool routing) — for every child about to
+      be launched, determine and record BEFORE building its prompt:
+
+        1. requested_capability_tier: from the granularity classification and
+           swarm-agents.manifest.yaml.
+        2. available_runtime: the runtime the subagent will run in.
+        3. available_model_strength: resolve via model-capability-tiers.yaml.
+        4. required_tools: include whether the task needs the browser tool.
+        5. fallback_decision: if the preferred model is unavailable, choose the
+           strongest available model that still meets minimum_model_strength.
+           Record fallback_used true/false.
+        6. escalation_decision: if no available model meets the minimum tier,
+           DO NOT dispatch. For senior_review specifically (fallback_allowed is
+           false), escalate to the user. For a ui_browser child that needs
+           visual proof when no browser tool is available, escalate instead of
+           dispatching.
+
+      Do not dispatch any child whose required tier cannot be satisfied. Record
+      the per-child routing decision in the launch plan.
+
+      Each implementation prompt MUST include:
+
+      1. ASSIGNMENT HEADER: assigned issue ID, parent epic ID, assigned custom
+         agent name, wave number, dependency status.
+
+      2. SESSION BOOTSTRAP CONTRACT:
+         - This is a bounded runtime subagent invocation inside the explicit
+           session context inherited from the Orchestrator/runtime. In Codex this means
+           `multi_agent_v1.spawn_agent(agent_type="worker")`; in VS Code it is
+           `runSubagent`; in Claude Code it is `Agent`.
+         - Do NOT run `holly session get`, do NOT create a new session, and do
+           NOT manually call `holly session subagent register`.
+         - Stop if `HOLLY_SESSION_ID` is unset; it must be inherited from the
+           Orchestrator/runtime and treated as read-only.
+         - If any `holly ...` command is routed through context-mode, prefix it
+           as `HOLLY_SESSION_ID=$HOLLY_SESSION_ID holly ...` before deciding the
+           inherited session is missing. If that expands empty inside
+           context-mode, pass the existing parent-shell value explicitly.
+         - First run: `holly task status`.
+         - Then run: `holly session subagent active --json`.
+         - Find the active subagent entry for the assigned issue ID. Ignore
+           unrelated active subagents. If the assigned issue ID is missing,
+           STOP and report the bootstrap failure.
+         - On completion, run exactly:
+           `holly session subagent complete <ISSUE_ID> --status <status>`.
+         - PARENT/CHILD ISOLATION: NEVER run `holly task start` or
+           `holly task finish` under the inherited Orchestrator `HOLLY_SESSION_ID`
+           — it overwrites the Orchestrator's `current_task`/`worktree_path`
+           (TIZA-873 regression). The SubagentStart hook prints your own CHILD
+           session id (`export HOLLY_SESSION_ID=<child-id>`); any task lifecycle
+           you run uses THAT child id, never the parent id. `holly task start`
+           refuses to run on a session that parents active subagents, so a leaked
+           parent id is blocked before it can corrupt parent state.
+
+      3. WORKTREE AND GIT CONTRACT:
+         - The normal flow is push-and-stop: create your worktree, implement,
+           push the task branch, and STOP — the Orchestrator integrates and
+           closes. Do NOT run `holly task finish` and do NOT merge to main.
+         - If you create the worktree through the Holly task lifecycle, run it
+           under your CHILD session id, never the inherited parent id:
+           `export HOLLY_SESSION_ID=<child-id>` (the value SubagentStart printed)
+           then
+           `HOLLY_SESSION_ID=<child-id> holly task start --id <ISSUE_ID> --intent 'Implement <ISSUE_ID>'`.
+           If SubagentStart did not print a child id, do NOT run task start —
+           create the worktree via the adapter/`holly worktree create` and report.
+         - Work only inside that task worktree.
+         - Commit with the issue ID in the commit message.
+         - Push the task branch when implementation is ready for review.
+
+      4. SCOPE CONTRACT: issue description, acceptance criteria, allowed files or
+         expected file areas, forbidden files, dependency context, and exact
+         verification commands. Tell the subagent to reject or escalate if the
+         task is broader than its agent definition permits.
+
+      5. RETURN CONTRACT — the final answer is a handoff and MUST contain:
+         - status, issue_id, branch_name, worktree_path, the EXACT commit_sha
+           (full SHA, not a branch name), files_changed, the exact verification
+           commands run and their pass/fail results, the evidence path or URL
+           (screenshots/video/logs/uploaded attachments named explicitly), and the
+           release/handoff status (pushed? released? resulting issue state),
+         - reviewer recommendation (normal | senior), blockers, risks, follow-up
+           suggestions, AND the model+runtime report fields (runtime_used,
+           model_used, capability_tier_requested, capability_tier_satisfied,
+           fallback_used, fallback_limitations, escalation_required).
+         - EVIDENCE: a Storybook component capture is acceptable proof only for an
+           isolated component/styling change; when acceptance depends on the
+           component inside a real authenticated route, authenticated-route proof
+           is REQUIRED — state which you captured and why it satisfies the
+           acceptance criteria.
+
+      No implementation prompt may include `holly chat wait`, BEGIN/SIGN-OFF, or live
+      channel registration instructions.
+    category: delivery
+    requires:
+      - launch plan from step 1
+
+  - prompt: >-
+      Dispatch implementation subagents for the current wave:
+
+      1. Confirm all dependencies for the wave are closed, approved, or
+         explicitly deferred before launch.
+      2. For each independent child in the wave whose dispatch preflight gate
+         passed, call runSubagent with the selected custom implementation agent
+         and the prepared prompt. When tool support allows it, dispatch
+         independent calls in parallel in the same turn.
+      3. Do not launch children from later waves until all blocking children in
+         the current wave have returned, passed review, and been integrated or
+         explicitly deferred.
+      4. If a subagent returns blocked or failed, triage the blocker. Retry once
+         with clearer instructions if the issue is prompt/scoping ambiguity;
+         otherwise escalate to a stronger implementation agent or ask the user.
+      5. Record each returned branch, worktree path, commit SHA, verification
+         result, changed-file list, residual risk, and the model+runtime report.
+    category: delivery
+    requires:
+      - prepared runtime subagent prompts from step 2
+
+  - prompt: >-
+      Dispatch reviewer subagents for returned implementation work:
+
+      1. For each successful implementation return, prepare a reviewer prompt
+         with the child issue ID, parent epic ID, implementation branch,
+         worktree path, commit SHA, changed files, acceptance criteria, allowed
+         and forbidden scope, and verification evidence.
+      2. Include the same inherited-session bootstrap contract used for
+         implementation subagents. Reviewers also complete their active subagent
+         entry with targeted `holly session subagent complete <ISSUE_ID>`.
+      3. Run the reviewer dispatch preflight gate first. Call runSubagent with
+         `swarm-reviewer` for normal review or `swarm-senior-reviewer` for
+         senior review triggers. If senior review is required and no
+         senior-capable model is available, escalate to the user rather than
+         approving on an under-powered model.
+      4. Require reviewer output to contain: verdict approve | changes-requested
+         | blocked | escalate, blocking findings, non-blocking findings, tests
+         checked, scope assessment, closure recommendation, and the
+         model+runtime report fields.
+      5. If review requests changes, send one bounded fix prompt back to the
+         original implementation agent when safe. Escalate to senior review or
+         the user if the fix would change architecture, scope, or dependencies.
+    category: quality
+    requires:
+      - implementation returns from step 3
+
+  - prompt: >-
+      Integrate approved wave branches:
+
+      1. Use a dedicated integration worktree for the parent epic or the current
+         orchestration issue. Do not merge from the main checkout.
+      2. Pull the latest origin/main before each integration batch.
+      3. Merge approved branches one at a time in dependency order. If conflicts
+         occur, stop and resolve deliberately; do not let unrelated local edits
+         leak into the merge.
+      4. After each merge, run the verification commands relevant to the merged
+         child. After the full wave merge, run the wave-level quality gates.
+      5. Close each child only after its branch is merged, verification passes,
+         and the reviewer verdict is approve. Only the Orchestrator closes
+         issues; swarm agents never do.
+      6. Push the integrated branch or main branch according to the active repo
+         policy, then record the landed commit SHA for each child.
+    category: delivery
+    requires:
+      - approved reviewer verdicts from step 4
+
+  - prompt: >-
+      Advance waves until the epic is complete:
+
+      1. Recompute ready children after each integrated wave.
+      2. Repeat the dispatch preflight gate, prompt preparation, implementation
+         dispatch, review dispatch, and integration for the next unblocked wave.
+      3. Do not skip agent-shared integration children; run them after their
+         dependencies and before dependent waves.
+      4. If useful parallelism drops below 2 or the remaining work is a shared
+         integration path, execute directly or with a single subagent rather
+         than pretending it is still a swarm.
+      5. File follow-up Beads issues for out-of-scope discoveries before closing
+         the epic.
+    category: delivery
+    requires:
+      - integrated current wave from step 5
+
+postflight:
+  - prompt: >-
+      Finalise the swarm delivery:
+
+      1. Verify every child is closed, deferred with an explicit reason, or
+         captured as a follow-up issue.
+      2. Run final project quality gates appropriate to the changed files.
+      3. Close the parent epic only after all required children are closed or
+         explicitly deferred.
+      4. Sync tracker state according to the active adapter: run
+         `holly tracker sync` for Beads/Dolt projects; skip it for Paperclip
+         because Paperclip sync is a live-API no-op.
+      5. Use `eval "$(holly task finish)"` to land completed task work; verify
+         remaining task state with `holly task status`.
+      6. Clean up completed task workspaces when safe.
+      7. Record a short orchestration lesson if routing, bootstrap, review, or
+         integration behaviour should affect future swarm runs.
+    category: quality

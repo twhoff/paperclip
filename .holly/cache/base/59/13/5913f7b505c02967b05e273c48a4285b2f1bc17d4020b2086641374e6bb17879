@@ -1,0 +1,152 @@
+---
+name: holly-session-summary
+description: >-
+  Produce an accessible Holly session handoff. Use when the user asks for a
+  session summary, recap, handoff, status report, what happened in this Holly
+  session, what remains, issue tracking status, loose threads, or the next best
+  step after a Holly work session.
+---
+
+# Holly Session Summary
+
+Use this skill to summarize the current Holly session for fast human
+comprehension. First post a concise stand-up update to agent-chat. Then output
+the existing human-facing summary with three required parts: a spoken-language
+recap, a current-session issue tracking table, and one next best step. When
+priority loose ends from other active sessions are visible in `all-agents`, you
+may also include them in a clearly separate optional section; never mix them into
+the current-session table.
+
+## Gather Context
+
+1. Identify yourself from the runtime, active session, or Holly status. Use the
+   agent name when known. Include the Holly session ID only when it is useful.
+2. Reconstruct the session before writing. Search current context and
+   context-mode memory, including compacted context when available.
+3. Query at least these context-mode topics when the tool is available:
+   `summary`, `decision`, `blocker`, `follow-up`, `issue`, `untracked`,
+   `waiting on user`, and `next step`. Use `sort: "timeline"` for session
+   history and `source: "compaction"` for compacted context when needed.
+4. Inspect Holly state with the public Holly surface. Prefer
+   `holly task status --json`, `holly status`, and `holly tracker show <id>`
+   for issue IDs discovered in the session. Do not use raw tracker backends.
+5. Include relevant chat lifecycle events from the current session when they
+   clarify what landed, failed, or remains open.
+6. You may scan broader `all-agents` traffic for high-priority loose ends, but
+   treat it as cross-session signal only. Do not promote unrelated active work
+   into the current-session summary table simply because it appeared in chat.
+
+If context-mode or Holly state is unavailable, say what could not be checked in
+the issue table instead of guessing.
+
+## Agent-Chat Update
+
+Before replying to the user, post a stand-up format update to agent-chat using
+the public Holly chat surface.
+
+Use the current coordination channel when one is known. Otherwise post to
+`all-agents`.
+
+For multi-line updates, write the message to an `agent-fs` scratch file and
+post it with:
+
+```bash
+holly chat post --channel <channel> --file <path>
+```
+
+The chat update must be ASCII-only and use this format:
+
+```text
+STANDUP agent=<agent-name> task=<issue-id-or-untracked>
+Done:
+- <completed work, landed work, or verified result>
+Now:
+- <current state of the session>
+Blockers:
+- <blocker, waiting item, or None>
+Next:
+- <one next action>
+```
+
+Keep the stand-up factual and brief. Mention issue IDs, landing status, and
+blocking user input when relevant. Do not paste the full user-facing summary
+into chat.
+
+If agent-chat is unavailable, say that in the issue table and still output the
+human-facing summary below.
+
+## Output Format
+
+After the agent-chat update is posted, output the summary exactly as described
+in this section.
+
+Start with a short spoken-language recap. This part must sound natural when
+read aloud by a screenreader.
+
+For the spoken recap:
+
+- Use plain sentences and short paragraphs.
+- Identify yourself first.
+- Summarize what has been achieved in the current session, including recovered
+  compacted context.
+- Mention important decisions, completed work, blocked work, and user-facing
+  results.
+- Do not use tables, bullet lists, numbered lists, code fences, Markdown
+  headings, emojis, or decorative symbols.
+- Do not use single quotes, double quotes, or angle brackets.
+- Avoid raw command output, stack traces, commit hashes, and file paths unless
+  they are necessary for comprehension.
+
+After the spoken recap, output one Markdown table for THIS HOLLY SESSION ONLY
+with these columns:
+
+| Item | Tracking | Status | Next action |
+|------|----------|--------|-------------|
+
+Table rules:
+
+- Include every issue relevant to this session.
+- "This session" means work the summarizing agent directly performed, resumed,
+  dispatched, landed, verified, discussed with the user, or explicitly inherited
+  through recovered context for the same user-requested task.
+- Include follow-ups, loose threads, user-input waits, and items that have not
+  been tracked only when they belong to this session.
+- Do not include unrelated issues from other active agents or other sessions in
+  this table. `all-agents` traffic is evidence for coordination, not automatic
+  table scope.
+- Use `Tracked` with the issue ID when an item has an issue.
+- Use `Untracked` when no issue exists yet.
+- Use `Waiting on user` when progress depends on the user.
+- Use `Done` only when the work has landed, pushed, closed, synced, or otherwise
+  reached the completion standard for that item.
+- Use `Unknown` when status could not be verified.
+
+## Optional Cross-Session Signals
+
+If broader `all-agents` traffic reveals a priority loose end from another
+session, output a separate section after the current-session table and before
+the final next-step sentence.
+
+Use the heading:
+
+```markdown
+**Priority Cross-Session Signals**
+```
+
+Include this section only when all of the following are true:
+
+- The item is clearly from another session or another active agent.
+- It appears important enough to affect the user's immediate attention,
+  coordination, or next decision.
+- Its status is verifiable from Holly state or explicit chat lifecycle/status
+  messages.
+
+Keep this section short. Prefer one to three bullets. Each bullet must identify
+the issue or session, say why it matters now, and name the next action. If the
+signal is merely interesting, low-priority, stale, or unverifiable, omit it.
+Never let this optional section change the next best step for the current
+session unless the user explicitly asked for a broader project handoff.
+
+End with one plain sentence naming the next best step the user should take.
+Choose one action, not a menu of options. If everything is complete, say what
+the user can safely do next.

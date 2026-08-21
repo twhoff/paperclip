@@ -1,0 +1,211 @@
+// Tiny dependency-free argv parser + verb dispatch table.
+
+import { buildContext } from './context.mjs';
+
+import { initVerb } from './verbs/init.mjs';
+import { scratchVerb } from './verbs/scratch.mjs';
+import { evidenceVerb } from './verbs/evidence.mjs';
+import { sessionVerb } from './verbs/session.mjs';
+import { pathVerb } from './verbs/path.mjs';
+import { envVerb } from './verbs/env.mjs';
+import { checkPathVerb } from './verbs/check-path.mjs';
+import { blessVerb } from './verbs/bless.mjs';
+import { doctorVerb } from './verbs/doctor.mjs';
+import { statusVerb } from './verbs/status.mjs';
+import { orphansVerb } from './verbs/orphans.mjs';
+import { cleanVerb } from './verbs/clean.mjs';
+import { pinVerb, unpinVerb } from './verbs/pin.mjs';
+import { auditVerb } from './verbs/audit.mjs';
+
+const VERSION = '0.1.0';
+
+const VERBS = {
+  init: initVerb,
+  scratch: scratchVerb,
+  evidence: evidenceVerb,
+  session: sessionVerb,
+  path: pathVerb,
+  env: envVerb,
+  'check-path': checkPathVerb,
+  bless: blessVerb,
+  doctor: doctorVerb,
+  status: statusVerb,
+  orphans: orphansVerb,
+  clean: cleanVerb,
+  pin: pinVerb,
+  unpin: unpinVerb,
+  audit: auditVerb,
+};
+
+const BOOLEAN_FLAGS = new Set([
+  'json',
+  'dry-run',
+  'quiet',
+  'help',
+  'version',
+  'append-rc',
+  'adopt',
+  'with-hashes',
+  'force',
+  'skip-manifest',
+  'uploaded',
+  'no-keep-pinned',
+  'allow-empty-comment',
+  'schedule-orphan-report',
+  'no-schedule-orphan-report',
+]);
+
+function parseArgs(argv) {
+  const args = { _: [] };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--') {
+      // positional terminator: everything after is positional
+      args._.push(...argv.slice(i + 1));
+      break;
+    }
+    if (a.startsWith('--')) {
+      const eq = a.indexOf('=');
+      if (eq !== -1) {
+        const key = a.slice(2, eq);
+        const value = a.slice(eq + 1);
+        args[key] = value;
+      } else {
+        const key = a.slice(2);
+        if (key.startsWith('no-')) {
+          args[key.slice(3)] = false;
+        } else if (BOOLEAN_FLAGS.has(key)) {
+          args[key] = true;
+        } else {
+          // Look at next arg to decide.
+          const next = argv[i + 1];
+          if (next !== undefined && !next.startsWith('--')) {
+            args[key] = next;
+            i++;
+          } else {
+            args[key] = true;
+          }
+        }
+      }
+    } else if (a.startsWith('-') && a.length > 1) {
+      // Short flags (single char each).
+      for (const ch of a.slice(1)) {
+        args[ch] = true;
+      }
+    } else {
+      args._.push(a);
+    }
+  }
+  return args;
+}
+
+function renderHelp() {
+  return `agent-fs ${VERSION} — sanctioned filesystem paths for cross-runtime agents
+
+Usage:
+  agent-fs <verb> [args]
+
+Path-getters (print path to stdout, register event):
+  scratch <name>                              disposable computation dir
+  evidence --issue <ID> <name>                issue-scoped review-artifact dir
+  session                                     long-lived session-state dir
+  path <category>                             scratch|evidence|session|tmp|logs
+  path worktree --issue <ID>                  pcli-managed worktree path
+
+Evidence sub-actions:
+  evidence manifest --issue <ID> <name>       write manifests/capture-manifest.json
+                                              flags: --with-hashes, --force
+  evidence upload --issue <ID> <name>         upload to a target (default: paperclip)
+                                              flags: --skip-manifest, --target,
+                                                     --comment-id <ID>
+  evidence post --issue <ID> <name>           upload + post comment in one call
+                                              flags: --comment "msg", --target,
+                                                     --allow-empty-comment
+
+Validation:
+  check-path <path>                           exit 0 if sanctioned, 69 otherwise
+  bless <path> --type <t> [--issue <ID>]      mark a path as sanctioned
+
+Discovery:
+  status                                      registry summary, sizes
+  orphans [--in <dir>]                        list orphans in scan target
+  orphans --adopt --type <t> [--issue <ID>] [--name <slug>] <path>
+                                              retroactively claim ONE orphan
+  audit [filters]                             query registry across all sessions
+                                              filters: --since X, --agent N, --issue I,
+                                                       --verb V, --path P, --session S,
+                                                       --limit N
+
+Cleanup:
+  clean [--dry-run] [--older-than X]          sweep stale dirs
+                                              flags: --type T, --uploaded,
+                                                     --no-keep-pinned
+  pin <path> [--reason "..."]                 protect a tracked path from clean
+  unpin <path>                                release a pin
+
+Lifecycle:
+  init [flags]                                bootstrap dirs, config, env script
+       --append-rc                            append source line to ~/.zshrc
+       --runtime claude-code                  install PreToolUse hook
+       --runtime codex                        write managed block to ~/.codex/AGENTS.md
+       --runtime vscode                       set AGENT_FS_BIN in VS Code / Cursor terminal env
+       --runtime warp                         (no-op confirmation — rc-sourced env.sh is enough)
+       --schedule-orphan-report               install daily launchd job
+       --no-schedule-orphan-report            uninstall the launchd job
+  doctor                                      verify setup; exit 0/68
+  env                                         print export statements (eval-able)
+
+Common flags:
+  --json                                      machine-readable output
+  --quiet                                     minimal stdout
+  --help                                      this help
+  --version                                   print version
+
+Environment variables consumed:
+  AGENT_FS_SESSION_ID, PAPERCLIP_RUN_ID, CLAUDE_CODE_SESSION_ID,
+  CODEX_SESSION_ID, COPILOT_CLI_SESSION_ID, WARP_SESSION_ID
+  AGENT_FS_DISABLE_PCLI=1                     disable pcli state fallback
+  AGENT_FS_AGENT_LABEL                        override agent label in registry events
+  AGENT_FS_ROOT                               override scratch root (default ~/.agent-scratch)
+  PCLI_BIN                                    override pcli location
+
+POSIX exit codes:
+  0  ok
+  64 usage error
+  65 missing required arg
+  68 doctor check failed
+  69 path not sanctioned / filesystem error
+  70 upload failed / external dependency unavailable
+`;
+}
+
+export function run(argv) {
+  const rest = argv.slice(2);
+  if (rest.length === 0 || rest[0] === '--help' || rest[0] === '-h') {
+    process.stdout.write(renderHelp());
+    return rest.length === 0 ? 64 : 0;
+  }
+  if (rest[0] === '--version' || rest[0] === '-V') {
+    process.stdout.write(VERSION + '\n');
+    return 0;
+  }
+  const verbName = rest[0];
+  const fn = VERBS[verbName];
+  if (!fn) {
+    process.stderr.write(`error: unknown verb "${verbName}". Run \`agent-fs --help\`.\n`);
+    return 64;
+  }
+  const args = parseArgs(rest.slice(1));
+  if (args.help) {
+    process.stdout.write(renderHelp());
+    return 0;
+  }
+  const ctx = buildContext();
+  try {
+    fn(args, ctx);
+  } catch (err) {
+    process.stderr.write(`error: ${err?.stack ?? err}\n`);
+    return 69;
+  }
+  return 0;
+}

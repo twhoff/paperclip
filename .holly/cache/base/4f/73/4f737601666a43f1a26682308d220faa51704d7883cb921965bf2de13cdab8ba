@@ -1,0 +1,183 @@
+#!/usr/bin/env node
+/**
+ * dev-server-daemon.mjs
+ *
+ * Long-running watchdog process spawned by startDevServer() in dev-server.mjs.
+ * Monitors a running frontend dev server registered in the metadata registry
+ * and stops it after a configurable idle period (default 5 minutes).
+ *
+ * Usage (internal — invoked automatically):
+ *   node dev-server-daemon.mjs <port> <registryDir>
+ *
+ * Environment variables:
+ *   UI_VISUAL_CAPTURE_IDLE_MS  Idle timeout in milliseconds (default 300000 = 5 min).
+ *                              Set to a shorter value in tests.
+ *   UI_VISUAL_CAPTURE_DEBUG    Truthy → log every iteration to stderr (else only kills).
+ */
+
+import fs from 'node:fs';
+import path from 'node:path';
+
+import { loadServerMetadata, clearServerMetadata } from './dev-server.mjs';
+
+const port = parseInt(process.argv[2], 10);
+const registryDir = process.argv[3] ?? undefined;
+
+if (isNaN(port)) {
+  process.stderr.write('dev-server-daemon: missing or invalid <port> argument\n');
+  process.exit(1);
+}
+
+const idleMs = parseInt(process.env.UI_VISUAL_CAPTURE_IDLE_MS ?? String(5 * 60 * 1000), 10);
+// Check at most once per minute, but always at least 5 checks during the idle window
+const checkIntervalMs = Math.min(Math.floor(idleMs / 5), 60_000);
+const debug = !!process.env.UI_VISUAL_CAPTURE_DEBUG;
+
+// PID file lets external tools (e.g. pcli worktree clean) discover and clean up
+// orphan daemons without grepping ps. Written at startup, removed at every exit path.
+const daemonPidPath = registryDir
+  ? path.join(registryDir, `${port}.daemon.pid`)
+  : null;
+
+function writeDaemonPidFile() {
+  if (!daemonPidPath) return;
+  try {
+    fs.mkdirSync(path.dirname(daemonPidPath), { recursive: true });
+    fs.writeFileSync(daemonPidPath, String(process.pid));
+  } catch (err) {
+    process.stderr.write(`dev-server-daemon: failed to write pid file: ${err.message}\n`);
+  }
+}
+
+function removeDaemonPidFile() {
+  if (!daemonPidPath) return;
+  try { fs.unlinkSync(daemonPidPath); } catch { /* already gone */ }
+}
+
+function log(msg) {
+  if (debug) process.stderr.write(`dev-server-daemon[port ${port}]: ${msg}\n`);
+}
+
+/**
+ * Probe whether `pid` is alive.
+ *
+ * `process.kill(pid, 0)` returns true if the process exists. On failure it throws:
+ *   - ESRCH → no such process (truly dead)
+ *   - EPERM → process exists but caller has no permission to signal it (still alive)
+ *
+ * The old implementation treated EPERM as dead, which would silently clean up
+ * metadata for a server the daemon couldn't signal — leaving an orphan process.
+ */
+function isAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err && err.code === 'EPERM';
+  }
+}
+
+/**
+ * Send `signal` to the dev server's process group, falling back to the lead PID.
+ * `detached: true` makes the spawned child a process-group leader, so signalling
+ * `-pid` reaches the leader AND every child (webpack compiler, file watchers, etc.).
+ * Without the group signal, sub-processes can survive a leader-only SIGTERM.
+ */
+function signalProcessGroup(pid, signal) {
+  // Try the process group first.
+  try {
+    process.kill(-pid, signal);
+    return;
+  } catch (groupErr) {
+    if (groupErr && groupErr.code === 'ESRCH') {
+      // No process group with this leader — fall back to PID-only.
+    } else if (groupErr && groupErr.code === 'EPERM') {
+      // Permission denied for the group signal; PID-only may also fail but try.
+    } else {
+      throw groupErr;
+    }
+  }
+  try {
+    process.kill(pid, signal);
+  } catch { /* already gone */ }
+}
+
+/**
+ * Kill `pid` (and its process group). SIGTERM first, give the process 2s to
+ * exit cleanly, then SIGKILL if it's still alive. Returns the final liveness.
+ */
+async function killWithEscalation(pid) {
+  log(`SIGTERM → pid ${pid}`);
+  try { signalProcessGroup(pid, 'SIGTERM'); } catch (err) {
+    log(`SIGTERM failed: ${err.message}`);
+  }
+  await new Promise((r) => setTimeout(r, 2000));
+
+  if (!isAlive(pid)) return false;
+
+  log(`pid ${pid} survived SIGTERM, escalating to SIGKILL`);
+  try { signalProcessGroup(pid, 'SIGKILL'); } catch (err) {
+    log(`SIGKILL failed: ${err.message}`);
+  }
+  await new Promise((r) => setTimeout(r, 500));
+
+  return isAlive(pid);
+}
+
+async function watchdog() {
+  writeDaemonPidFile();
+
+  while (true) {
+    await new Promise((r) => setTimeout(r, checkIntervalMs));
+
+    const meta = loadServerMetadata(port, registryDir);
+    if (!meta) {
+      log('metadata missing — server was cleaned up externally');
+      break;
+    }
+
+    const pid = meta.pid;
+    if (!pid) {
+      log('metadata has no pid — exiting');
+      break;
+    }
+
+    if (!isAlive(pid)) {
+      log(`pid ${pid} no longer alive — clearing metadata`);
+      clearServerMetadata(port, registryDir);
+      break;
+    }
+
+    const idleElapsed = Date.now() - meta.lastUsedAt;
+    log(`pid ${pid} alive, idle for ${Math.round(idleElapsed / 1000)}s`);
+
+    if (idleElapsed >= idleMs) {
+      process.stderr.write(
+        `dev-server-daemon: port ${port} idle for ${Math.round(idleElapsed / 1000)}s ` +
+        `(limit ${Math.round(idleMs / 1000)}s), stopping pid ${pid}\n`,
+      );
+      const stillAlive = await killWithEscalation(pid);
+      if (stillAlive) {
+        process.stderr.write(
+          `dev-server-daemon: port ${port} pid ${pid} survived SIGTERM+SIGKILL ` +
+          `— leaving metadata in place so external tools can intervene\n`,
+        );
+        // Do NOT clear metadata if we couldn't actually stop the server. That way
+        // the next caller still has a record of who owns the port and can fix it.
+      } else {
+        clearServerMetadata(port, registryDir);
+      }
+      break;
+    }
+  }
+}
+
+// Always remove the daemon pid file on exit, regardless of how we leave.
+process.on('exit', removeDaemonPidFile);
+process.on('SIGINT', () => process.exit(0));
+process.on('SIGTERM', () => process.exit(0));
+
+watchdog().catch((err) => {
+  process.stderr.write(`dev-server-daemon error: ${err.stack || err.message}\n`);
+  process.exit(1);
+});

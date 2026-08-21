@@ -1,0 +1,85 @@
+---
+name: track
+description: >-
+  Capture requirements and decompose them into a tracked epic of deliverable
+  child issues. Use when the user asks to "track", "plan", "break down",
+  "decompose", or "scope" a task, user story, raw requirements, or an existing
+  epic that needs children. Owns WHAT to build (decomposition); pair it with the
+  `track` workflow (`workflows/track.yaml`) which sequences the steps.
+---
+
+# Track
+
+`track` is the planning command surface for Holly. It turns fuzzy requirements
+into a clean, dependency-aware epic whose children can be delivered one at a
+time or in parallel. It owns **what** to build; the `implement` and
+`orchestrate` commands own **how** it gets built.
+
+This skill is the durable methodology. The executable step sequence lives in
+`workflows/track.yaml` and is run via the [use-workflow](../use-workflow/SKILL.md)
+executor contract. Tracker-specific CLI verbs (create epic, add child, set
+dependency) are adapter-flavoured — get the concrete commands from the
+[issue-tracker](../issue-tracker/SKILL.md) skill and its installed adapter
+addendum.
+
+## When to use
+
+- A new feature, fix, or chunk of work needs to be planned before coding.
+- An existing epic needs to be split into children, re-ordered, or re-scoped.
+- The user hands you a user story or raw requirements with no issues yet.
+
+If a concrete, single, already-scoped issue exists and you just need to build
+it, skip `track` and go straight to `implement`.
+
+## The four phases
+
+1. **Capture & clarify.** Parse the request for task description, user story,
+   acceptance criteria, constraints, referenced files/systems, and any existing
+   epic ID. If an epic ID was given, load it and check for existing children
+   before adding more. If the requirements are ambiguous, ask targeted
+   questions about the why, the who/what, what "done" looks like, and known
+   constraints. Do not decompose until the requirements are clear enough to
+   turn into concrete tasks.
+
+2. **Scope against the codebase.** Search only as much as needed to identify
+   affected files, modules, and systems, the blast radius, risks, and open
+   questions. Start narrow; broaden only when scope is unclear.
+
+3. **Decompose into children.** Break the work into discrete, independently
+   deliverable issues under one epic. Each child gets a clear title,
+   description, acceptance criteria, priority, and type. Establish dependencies
+   between children so the tracker's ready-work view surfaces them in the right
+   order.
+
+4. **Label for delivery.** Analyse the dependency DAG and assign:
+   - **wave labels** (`wave-1`, `wave-2`, …) — topological layers that show
+     execution order for phased delivery.
+   - **agent-path labels** (`agent-1`, `agent-2`, …) — independent dependency
+     chains that partition the work so multiple agents can each take a full
+     chain without blocking each other.
+
+## Approval gate
+
+Present the full epic structure — epic, children, dependencies, wave and
+agent-path labels — for review **before creating any issues**. The user may
+request re-ordering, scope changes, or different granularity. Only create the
+issues once the structure is approved.
+
+## Hand-off
+
+Once the epic exists, deliver it with one of:
+
+- `implement <epic-id>` — TDD delivery; epic mode iterates all unblocked
+  children automatically.
+- `orchestrate <epic-id>` — bounded swarm delivery across worker agents when
+  the agent-path labels expose real parallelism. See the
+  [orchestrate](../orchestrate/SKILL.md) skill.
+
+## Granularity guidance
+
+- A child should be a single coherent change a worker can finish and verify on
+  its own. If a child needs its own sub-plan, it is an epic, not a child.
+- Prefer dependencies over giant sequential children — they are what let waves
+  and agent-paths parallelise the work.
+- Do not invent children for hypothetical future work. Decompose the request in
+  front of you.

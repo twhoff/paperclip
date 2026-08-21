@@ -1,0 +1,106 @@
+#!/usr/bin/env python3
+"""Create a labelled contact-sheet PNG from extracted WebM frame PNGs."""
+import argparse
+import math
+import sys
+from pathlib import Path
+
+from PIL import Image, ImageDraw, ImageFont
+
+FONT_CANDIDATES = [
+    "/System/Library/Fonts/Helvetica.ttc",
+    "/System/Library/Fonts/Supplemental/Arial.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+]
+
+LABEL_HEIGHT = 22
+BG_COLOUR = (24, 24, 24)
+LABEL_BG_COLOUR = (36, 36, 36)
+LABEL_TEXT_COLOUR = (210, 210, 210)
+
+
+def load_font(size: int = 12) -> ImageFont.ImageFont:
+    for path in FONT_CANDIDATES:
+        try:
+            return ImageFont.truetype(path, size)
+        except Exception:
+            pass
+    return ImageFont.load_default()
+
+
+def make_contact_sheet(
+    frames_dir: Path,
+    output: Path,
+    fps: float,
+    columns: int,
+    thumb_width: int,
+) -> None:
+    frame_paths = sorted(frames_dir.glob("frame-*.png"))
+    if not frame_paths:
+        print(f"error: no frames found in {frames_dir}", file=sys.stderr)
+        sys.exit(1)
+
+    src_w, src_h = Image.open(frame_paths[0]).size
+    tw = thumb_width if thumb_width > 0 else src_w
+    th = round(src_h * (tw / src_w))
+
+    rows = math.ceil(len(frame_paths) / columns)
+    sheet_w = columns * tw
+    sheet_h = rows * (th + LABEL_HEIGHT)
+
+    sheet = Image.new("RGB", (sheet_w, sheet_h), BG_COLOUR)
+    draw = ImageDraw.Draw(sheet)
+    font = load_font(12)
+
+    for i, fpath in enumerate(frame_paths):
+        col = i % columns
+        row = i // columns
+        x = col * tw
+        y = row * (th + LABEL_HEIGHT)
+
+        img = Image.open(fpath)
+        if tw != src_w:
+            img = img.resize((tw, th), Image.LANCZOS)
+        sheet.paste(img, (x, y))
+
+        # Frame number is 1-based in filename (frame-001, frame-002, …)
+        frame_num = int(fpath.stem.split("-")[-1])
+        timestamp = (frame_num - 1) / fps
+        label = f"{fpath.stem}  {timestamp:.1f}s"
+
+        draw.rectangle(
+            [x, y + th, x + tw - 1, y + th + LABEL_HEIGHT - 1],
+            fill=LABEL_BG_COLOUR,
+        )
+        draw.text((x + 5, y + th + 4), label, fill=LABEL_TEXT_COLOUR, font=font)
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    sheet.save(str(output), "PNG", optimize=True)
+    print(
+        f"saved: {output}  "
+        f"({len(frame_paths)} frames, {columns}×{rows} grid, {tw}px thumbnails)"
+    )
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="WebM contact-sheet generator")
+    parser.add_argument("--frames-dir", required=True, type=Path)
+    parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument(
+        "--fps",
+        type=float,
+        default=2.0,
+        help="FPS used for extraction (for timestamp labels)",
+    )
+    parser.add_argument("--columns", type=int, default=4, help="Columns in the grid")
+    parser.add_argument(
+        "--thumb-width",
+        type=int,
+        default=0,
+        help="Thumbnail width in px (0 = original size)",
+    )
+    parser.add_argument("--viewport", default="", help="Viewport name (for informational use)")
+    args = parser.parse_args()
+    make_contact_sheet(
+        args.frames_dir, args.output, args.fps, args.columns, args.thumb_width
+    )

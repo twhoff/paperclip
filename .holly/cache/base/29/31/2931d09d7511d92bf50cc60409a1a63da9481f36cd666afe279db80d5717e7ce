@@ -1,0 +1,479 @@
+import { test, beforeEach, afterEach } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import http from 'node:http';
+
+import {
+  classifyGitContext,
+  findFrontendPackage,
+  detectPackageManager,
+  detectFramework,
+  buildDevSpawnArgs,
+  checkPortServing,
+  loadServerMetadata,
+  saveServerMetadata,
+  touchServerMetadata,
+  clearServerMetadata,
+  decideServerMode,
+  parseLocalhostPort,
+  FRONTEND_CANDIDATES,
+} from '../scripts/lib/dev-server.mjs';
+
+let tmp;
+beforeEach(() => {
+  tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pws-ds-test-'));
+});
+afterEach(() => {
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+// ─── classifyGitContext ───────────────────────────────────────────────────────
+
+test('classifyGitContext: .git as directory → main checkout', () => {
+  const repo = path.join(tmp, 'repo');
+  fs.mkdirSync(path.join(repo, '.git'), { recursive: true });
+  const r = classifyGitContext(repo);
+  assert.equal(r.isWorktree, false);
+  assert.equal(r.worktreeRoot, null);
+});
+
+test('classifyGitContext: .git as file → linked worktree', () => {
+  const wt = path.join(tmp, 'worktrees', 'gro-829');
+  fs.mkdirSync(wt, { recursive: true });
+  fs.writeFileSync(path.join(wt, '.git'), 'gitdir: /repo/.git/worktrees/gro-829\n');
+  const r = classifyGitContext(wt);
+  assert.equal(r.isWorktree, true);
+  assert.equal(r.worktreeRoot, wt);
+});
+
+test('classifyGitContext: walks up from nested dir to find .git', () => {
+  const wt = path.join(tmp, 'worktrees', 'gro-829');
+  const nested = path.join(wt, 'frontend', 'src', 'components');
+  fs.mkdirSync(nested, { recursive: true });
+  fs.writeFileSync(path.join(wt, '.git'), 'gitdir: /repo/.git/worktrees/gro-829\n');
+  const r = classifyGitContext(nested);
+  assert.equal(r.isWorktree, true);
+  assert.equal(r.worktreeRoot, wt);
+});
+
+test('classifyGitContext: no .git anywhere → not a worktree', () => {
+  const isolated = path.join(tmp, 'isolated');
+  fs.mkdirSync(isolated, { recursive: true });
+  const r = classifyGitContext(isolated);
+  assert.equal(r.isWorktree, false);
+  assert.equal(r.worktreeRoot, null);
+});
+
+// ─── findFrontendPackage ──────────────────────────────────────────────────────
+
+test('findFrontendPackage: returns first matching FRONTEND_CANDIDATES dir', () => {
+  const root = path.join(tmp, 'repo');
+  const feDir = path.join(root, 'frontend');
+  fs.mkdirSync(feDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(feDir, 'package.json'),
+    JSON.stringify({ scripts: { dev: 'next dev' }, dependencies: { next: '14.0.0' } }),
+  );
+  const result = findFrontendPackage(root);
+  assert.equal(result.dir, feDir);
+  assert.equal(result.packageJson.scripts.dev, 'next dev');
+});
+
+test('findFrontendPackage: skips candidate dirs without a dev script', () => {
+  const root = path.join(tmp, 'repo');
+  const feDir = path.join(root, 'frontend');
+  const uiDir = path.join(root, 'ui');
+  fs.mkdirSync(feDir, { recursive: true });
+  fs.mkdirSync(uiDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(feDir, 'package.json'),
+    JSON.stringify({ scripts: { build: 'next build' } }),
+  );
+  fs.writeFileSync(
+    path.join(uiDir, 'package.json'),
+    JSON.stringify({ scripts: { dev: 'vite' }, devDependencies: { vite: '5.0.0' } }),
+  );
+  const result = findFrontendPackage(root);
+  assert.equal(result.dir, uiDir);
+});
+
+test('findFrontendPackage: falls back to root package.json', () => {
+  const root = path.join(tmp, 'repo');
+  fs.mkdirSync(root, { recursive: true });
+  fs.writeFileSync(
+    path.join(root, 'package.json'),
+    JSON.stringify({ scripts: { dev: 'pnpm dev' } }),
+  );
+  const result = findFrontendPackage(root);
+  assert.equal(result.dir, root);
+});
+
+test('findFrontendPackage: returns null when no package with dev script found', () => {
+  const root = path.join(tmp, 'repo');
+  fs.mkdirSync(root, { recursive: true });
+  assert.equal(findFrontendPackage(root), null);
+});
+
+test(`findFrontendPackage: checks all of [${FRONTEND_CANDIDATES.join(', ')}] before root`, () => {
+  // Only the last candidate has a dev script
+  const root = path.join(tmp, 'repo');
+  const lastCandidate = FRONTEND_CANDIDATES[FRONTEND_CANDIDATES.length - 1];
+  const lastDir = path.join(root, lastCandidate);
+  fs.mkdirSync(lastDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(lastDir, 'package.json'),
+    JSON.stringify({ scripts: { dev: 'vite' } }),
+  );
+  const result = findFrontendPackage(root);
+  assert.equal(result.dir, lastDir);
+});
+
+// ─── detectPackageManager ────────────────────────────────────────────────────
+
+test('detectPackageManager: detects pnpm from pnpm-lock.yaml', () => {
+  const dir = path.join(tmp, 'p');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'pnpm-lock.yaml'), '');
+  assert.equal(detectPackageManager(dir), 'pnpm');
+});
+
+test('detectPackageManager: detects bun from bun.lockb', () => {
+  const dir = path.join(tmp, 'p');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'bun.lockb'), '');
+  assert.equal(detectPackageManager(dir), 'bun');
+});
+
+test('detectPackageManager: detects yarn from yarn.lock', () => {
+  const dir = path.join(tmp, 'p');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'yarn.lock'), '');
+  assert.equal(detectPackageManager(dir), 'yarn');
+});
+
+test('detectPackageManager: detects npm from package-lock.json', () => {
+  const dir = path.join(tmp, 'p');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'package-lock.json'), '{}');
+  assert.equal(detectPackageManager(dir), 'npm');
+});
+
+test('detectPackageManager: pnpm wins over yarn when both present', () => {
+  const dir = path.join(tmp, 'p');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'pnpm-lock.yaml'), '');
+  fs.writeFileSync(path.join(dir, 'yarn.lock'), '');
+  assert.equal(detectPackageManager(dir), 'pnpm');
+});
+
+test('detectPackageManager: walks up to find lockfile', () => {
+  const root = path.join(tmp, 'root');
+  const sub = path.join(root, 'packages', 'app');
+  fs.mkdirSync(sub, { recursive: true });
+  fs.writeFileSync(path.join(root, 'pnpm-lock.yaml'), '');
+  assert.equal(detectPackageManager(sub), 'pnpm');
+});
+
+test('detectPackageManager: defaults to npm when nothing found', () => {
+  const dir = path.join(tmp, 'empty');
+  fs.mkdirSync(dir, { recursive: true });
+  assert.equal(detectPackageManager(dir), 'npm');
+});
+
+// ─── detectFramework ─────────────────────────────────────────────────────────
+
+test('detectFramework: returns next when next in dependencies', () => {
+  assert.equal(detectFramework({ dependencies: { next: '14.0.0' } }), 'next');
+});
+
+test('detectFramework: returns vite when vite in devDependencies', () => {
+  assert.equal(detectFramework({ devDependencies: { vite: '^5.0.0' } }), 'vite');
+});
+
+test('detectFramework: returns cra for react-scripts', () => {
+  assert.equal(detectFramework({ dependencies: { 'react-scripts': '5.0.0' } }), 'cra');
+});
+
+test('detectFramework: returns generic for unknown stack', () => {
+  assert.equal(detectFramework({ dependencies: { react: '18.0.0' } }), 'generic');
+});
+
+test('detectFramework: handles missing dep objects', () => {
+  assert.equal(detectFramework({}), 'generic');
+});
+
+// ─── buildDevSpawnArgs ───────────────────────────────────────────────────────
+
+test('buildDevSpawnArgs: next + pnpm → pnpm run dev with PORT env', () => {
+  const pkg = { dependencies: { next: '14.0.0' }, scripts: { dev: 'next dev' } };
+  const { args, envOverride } = buildDevSpawnArgs(pkg, 'pnpm', 3101);
+  assert.deepEqual(args, ['pnpm', 'run', 'dev']);
+  assert.equal(envOverride.PORT, '3101');
+});
+
+test('buildDevSpawnArgs: vite + pnpm → pnpm run dev -- --port PORT --host', () => {
+  const pkg = { devDependencies: { vite: '5.0.0' }, scripts: { dev: 'vite' } };
+  const { args, envOverride } = buildDevSpawnArgs(pkg, 'pnpm', 3102);
+  assert.ok(args.includes('--port'), 'must include --port');
+  assert.ok(args.includes('3102'), 'must include port number');
+  assert.ok(args.includes('--host'), 'must include --host');
+  assert.ok(args.includes('--'), 'must pass -- separator');
+  // Vite does not use PORT env var; envOverride should be empty
+  assert.equal(Object.keys(envOverride).length, 0);
+});
+
+test('buildDevSpawnArgs: yarn package manager', () => {
+  const pkg = { dependencies: { next: '14.0.0' } };
+  const { args } = buildDevSpawnArgs(pkg, 'yarn', 3000);
+  assert.deepEqual(args, ['yarn', 'dev']);
+});
+
+test('buildDevSpawnArgs: npm package manager', () => {
+  const pkg = { dependencies: { next: '14.0.0' } };
+  const { args } = buildDevSpawnArgs(pkg, 'npm', 3000);
+  assert.deepEqual(args, ['npm', 'run', 'dev']);
+});
+
+// ─── parseLocalhostPort ───────────────────────────────────────────────────────
+
+test('parseLocalhostPort: extracts port from localhost URL', () => {
+  assert.equal(parseLocalhostPort('http://localhost:3000/path'), 3000);
+  assert.equal(parseLocalhostPort('http://localhost:3101'), 3101);
+});
+
+test('parseLocalhostPort: extracts port from 127.0.0.1 URL', () => {
+  assert.equal(parseLocalhostPort('http://127.0.0.1:3000/'), 3000);
+});
+
+test('parseLocalhostPort: returns null when port is implicit (not specified)', () => {
+  // http://localhost has implicit port 80, but we require explicit ports
+  assert.equal(parseLocalhostPort('http://localhost/path'), null);
+  assert.equal(parseLocalhostPort('http://localhost'), null);
+});
+
+test('parseLocalhostPort: returns null for non-localhost URLs', () => {
+  assert.equal(parseLocalhostPort('https://example.com:3000'), null);
+  assert.equal(parseLocalhostPort('https://app.example.com/'), null);
+});
+
+test('parseLocalhostPort: returns null for malformed URLs', () => {
+  assert.equal(parseLocalhostPort('not-a-url'), null);
+  assert.equal(parseLocalhostPort(''), null);
+});
+
+// ─── Registry operations ──────────────────────────────────────────────────────
+
+test('saveServerMetadata and loadServerMetadata round-trip', () => {
+  const reg = path.join(tmp, 'registry');
+  const data = { port: 3000, pid: 12345, worktreeRoot: '/wt', lastUsedAt: Date.now() };
+  saveServerMetadata(3000, data, reg);
+  assert.deepEqual(loadServerMetadata(3000, reg), data);
+});
+
+test('loadServerMetadata returns null for a missing file', () => {
+  const reg = path.join(tmp, 'registry');
+  assert.equal(loadServerMetadata(3000, reg), null);
+});
+
+test('saveServerMetadata creates registry dir if needed', () => {
+  const reg = path.join(tmp, 'new', 'registry');
+  saveServerMetadata(3000, { port: 3000, pid: 1 }, reg);
+  assert.ok(fs.existsSync(reg));
+});
+
+test('touchServerMetadata updates lastUsedAt', async () => {
+  const reg = path.join(tmp, 'registry');
+  const before = Date.now() - 5;
+  saveServerMetadata(3000, { port: 3000, pid: 1, worktreeRoot: '/wt', lastUsedAt: before }, reg);
+  // Ensure time advances
+  await new Promise((r) => setTimeout(r, 10));
+  touchServerMetadata(3000, reg);
+  const updated = loadServerMetadata(3000, reg);
+  assert.ok(updated.lastUsedAt > before, `lastUsedAt ${updated.lastUsedAt} should be > ${before}`);
+});
+
+test('touchServerMetadata is a no-op when metadata is missing', () => {
+  const reg = path.join(tmp, 'registry');
+  assert.doesNotThrow(() => touchServerMetadata(3000, reg));
+});
+
+test('clearServerMetadata removes the file', () => {
+  const reg = path.join(tmp, 'registry');
+  saveServerMetadata(3000, { port: 3000, pid: 1 }, reg);
+  clearServerMetadata(3000, reg);
+  assert.equal(loadServerMetadata(3000, reg), null);
+});
+
+test('clearServerMetadata is a no-op when file is missing', () => {
+  const reg = path.join(tmp, 'registry');
+  assert.doesNotThrow(() => clearServerMetadata(3000, reg));
+});
+
+// ─── checkPortServing ─────────────────────────────────────────────────────────
+
+test('checkPortServing: returns true when a server is responding', async () => {
+  const server = http.createServer((_, res) => res.end('ok'));
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const port = server.address().port;
+  try {
+    assert.equal(await checkPortServing(port), true);
+  } finally {
+    await new Promise((r) => server.close(r));
+  }
+});
+
+test('checkPortServing: returns false for a closed port', async () => {
+  // Get a free port and immediately release it, then probe it
+  const server = http.createServer();
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const port = server.address().port;
+  await new Promise((r) => server.close(r));
+  assert.equal(await checkPortServing(port, { timeout: 300 }), false);
+});
+
+// ─── decideServerMode ─────────────────────────────────────────────────────────
+
+// Helper: build a fake worktree directory with optional frontend package
+function makeWorktree(base, name, { withFrontend = false, frameworkPkg = null } = {}) {
+  const wt = path.join(base, 'worktrees', name);
+  fs.mkdirSync(wt, { recursive: true });
+  fs.writeFileSync(path.join(wt, '.git'), `gitdir: /repo/.git/worktrees/${name}\n`);
+  if (withFrontend) {
+    const feDir = path.join(wt, 'frontend');
+    fs.mkdirSync(feDir, { recursive: true });
+    const pkg = frameworkPkg ?? { scripts: { dev: 'next dev' }, dependencies: { next: '14.0.0' } };
+    fs.writeFileSync(path.join(feDir, 'package.json'), JSON.stringify(pkg));
+  }
+  return wt;
+}
+
+function makeMainCheckout(base) {
+  const repo = path.join(base, 'repo');
+  fs.mkdirSync(path.join(repo, '.git'), { recursive: true });
+  return repo;
+}
+
+test('decideServerMode: free port + main checkout → require-running', async () => {
+  const reg = path.join(tmp, 'reg');
+  const dir = makeMainCheckout(tmp);
+  const result = await decideServerMode({ port: 59990, cwd: dir, registryDir: reg });
+  assert.equal(result.mode, 'require-running');
+  assert.match(result.reason, /main checkout/i);
+});
+
+test('decideServerMode: free port + worktree + frontend → start', async () => {
+  const reg = path.join(tmp, 'reg');
+  const wt = makeWorktree(tmp, 'gro-829', { withFrontend: true });
+  const result = await decideServerMode({ port: 59991, cwd: wt, registryDir: reg });
+  assert.equal(result.mode, 'start');
+  assert.equal(result.packageDir, path.join(wt, 'frontend'));
+  assert.equal(result.worktreeRoot, wt);
+});
+
+test('decideServerMode: free port + worktree + no frontend → conflict', async () => {
+  const reg = path.join(tmp, 'reg');
+  const wt = makeWorktree(tmp, 'gro-829', { withFrontend: false });
+  const result = await decideServerMode({ port: 59992, cwd: wt, registryDir: reg });
+  assert.equal(result.mode, 'conflict');
+  assert.match(result.reason, /Could not find/i);
+});
+
+test('decideServerMode: serving port + main checkout + no metadata → no-server', async () => {
+  const reg = path.join(tmp, 'reg');
+  const dir = makeMainCheckout(tmp);
+  const server = http.createServer((_, res) => res.end('ok'));
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const port = server.address().port;
+  try {
+    const result = await decideServerMode({ port, cwd: dir, registryDir: reg });
+    assert.equal(result.mode, 'no-server');
+  } finally {
+    await new Promise((r) => server.close(r));
+  }
+});
+
+test('decideServerMode: serving port + worktree + same-worktree metadata → attach', async () => {
+  const reg = path.join(tmp, 'reg');
+  const wt = makeWorktree(tmp, 'gro-829', { withFrontend: true });
+  const server = http.createServer((_, res) => res.end('ok'));
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const port = server.address().port;
+  saveServerMetadata(port, { port, pid: 999, worktreeRoot: wt, lastUsedAt: Date.now() }, reg);
+  try {
+    const result = await decideServerMode({ port, cwd: wt, registryDir: reg });
+    assert.equal(result.mode, 'attach');
+    assert.equal(result.worktreeRoot, wt);
+    assert.equal(result.pid, 999);
+  } finally {
+    await new Promise((r) => server.close(r));
+  }
+});
+
+test('decideServerMode: serving port + worktree + different-worktree metadata → conflict', async () => {
+  const reg = path.join(tmp, 'reg');
+  const wt1 = makeWorktree(tmp, 'gro-829', { withFrontend: true });
+  const wt2 = makeWorktree(tmp, 'gro-830', { withFrontend: true });
+  const server = http.createServer((_, res) => res.end('ok'));
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const port = server.address().port;
+  saveServerMetadata(port, { port, pid: 999, worktreeRoot: wt2, lastUsedAt: Date.now() }, reg);
+  try {
+    const result = await decideServerMode({ port, cwd: wt1, registryDir: reg });
+    assert.equal(result.mode, 'conflict');
+    assert.match(result.reason, /different worktree/i);
+    assert.match(result.reason, /--attach-existing/i);
+  } finally {
+    await new Promise((r) => server.close(r));
+  }
+});
+
+test('decideServerMode: serving port + worktree + no metadata → conflict', async () => {
+  const reg = path.join(tmp, 'reg');
+  const wt = makeWorktree(tmp, 'gro-829', { withFrontend: true });
+  const server = http.createServer((_, res) => res.end('ok'));
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const port = server.address().port;
+  try {
+    const result = await decideServerMode({ port, cwd: wt, registryDir: reg });
+    assert.equal(result.mode, 'conflict');
+    assert.match(result.reason, /unknown process/i);
+    assert.match(result.reason, /--attach-existing/i);
+  } finally {
+    await new Promise((r) => server.close(r));
+  }
+});
+
+test('decideServerMode: --attach-existing overrides a conflict', async () => {
+  const reg = path.join(tmp, 'reg');
+  const wt1 = makeWorktree(tmp, 'gro-829', { withFrontend: true });
+  const wt2 = makeWorktree(tmp, 'gro-830', { withFrontend: true });
+  const server = http.createServer((_, res) => res.end('ok'));
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const port = server.address().port;
+  saveServerMetadata(port, { port, pid: 999, worktreeRoot: wt2, lastUsedAt: Date.now() }, reg);
+  try {
+    const result = await decideServerMode({ port, cwd: wt1, registryDir: reg, attachExisting: true });
+    assert.equal(result.mode, 'attach-explicit');
+  } finally {
+    await new Promise((r) => server.close(r));
+  }
+});
+
+test('decideServerMode: touch is called on attach (metadata lastUsedAt updates)', async () => {
+  const reg = path.join(tmp, 'reg');
+  const wt = makeWorktree(tmp, 'gro-829', { withFrontend: true });
+  const before = Date.now() - 10;
+  const server = http.createServer((_, res) => res.end('ok'));
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const port = server.address().port;
+  saveServerMetadata(port, { port, pid: 999, worktreeRoot: wt, lastUsedAt: before }, reg);
+  try {
+    await decideServerMode({ port, cwd: wt, registryDir: reg });
+    const after = loadServerMetadata(port, reg);
+    assert.ok(after.lastUsedAt >= before);
+  } finally {
+    await new Promise((r) => server.close(r));
+  }
+});

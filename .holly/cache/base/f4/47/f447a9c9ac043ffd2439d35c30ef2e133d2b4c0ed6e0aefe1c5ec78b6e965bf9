@@ -1,0 +1,162 @@
+// agent-fs doctor — verify setup, return checklist + fix commands.
+// Exit 0 if all green, 68 if any check fails.
+
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { loadAllowlist, buildMatcher } from '../allowlist.mjs';
+
+const HERE = fileURLToPath(import.meta.url);
+const SKILL_ROOT = path.resolve(HERE, '..', '..', '..');
+const BIN_PATH = path.join(SKILL_ROOT, 'bin', 'agent-fs');
+// Match the guard hook by a stable substring rather than a resolved absolute
+// path: the registered command is the resilient fallback form (see init.mjs),
+// which references the script relatively and never contains an absolute path.
+const HOOK_MARKER = 'agent-fs/hooks/agent-fs-guard.sh';
+const CLAUDE_SETTINGS = path.join(os.homedir(), '.claude', 'settings.json');
+
+function check(name, passed, detail, fix) {
+  return { name, passed, detail, fix };
+}
+
+function envBinCheck() {
+  const v = process.env.AGENT_FS_BIN;
+  if (!v) return check('AGENT_FS_BIN exported', false, 'unset', 'eval "$(agent-fs env)" or source ~/.config/agent-fs/env.sh');
+  if (!fs.existsSync(v)) return check('AGENT_FS_BIN exported', false, `points at missing file ${v}`, 'reinstall agent-fs and rerun init');
+  return check('AGENT_FS_BIN exported', true, v);
+}
+
+function tmpdirCheck(ctx) {
+  // Soft check: TMPDIR redirect is a bonus for POSIX-aware tools, not a
+  // correctness boundary. Inside Claude Code tool calls, TMPDIR is inherited
+  // from the parent shell at claude-launch time — if claude was started from
+  // a plain Warp/iTerm shell (no runtime env var in scope), env.sh skipped
+  // exporting TMPDIR and the redirect doesn't apply. The hook still blocks
+  // unsanctioned /tmp writes regardless, so this is advisory.
+  if (!ctx.config.tmpdir_override) return check('TMPDIR redirect', true, 'disabled in config');
+  const t = process.env.TMPDIR;
+  if (!t) {
+    return check('TMPDIR redirect', true, 'unset (advisory; mktemp etc. will hit /tmp and be hook-blocked)');
+  }
+  const resolved = path.resolve(t).replace(/\/$/, '');
+  if (resolved === ctx.layout.tmp) {
+    return check('TMPDIR redirect', true, `${t} (session-scoped)`);
+  }
+  if (resolved.startsWith(ctx.config.root)) {
+    return check('TMPDIR redirect', true, `${t} (under AGENT_FS_ROOT)`);
+  }
+  return check(
+    'TMPDIR redirect',
+    true,
+    `${t} (advisory; not under AGENT_FS_ROOT; source ~/.config/agent-fs/env.sh inside an agent shell to upgrade)`,
+  );
+}
+
+// Session dir check removed: the directory is created lazily on the first
+// path-getter or init call. Registry-writable + bin-present cover the real
+// invariants.
+
+function registryCheck(ctx) {
+  // The registry file is created lazily on the first append. As long as the
+  // session directory exists, the registry will materialise on demand. So we
+  // only fail if the parent dir is missing — which sessionDirCheck already
+  // covers — or if the registry path exists but isn't a regular file.
+  if (!fs.existsSync(ctx.layout.registry)) {
+    return check('registry writable', true, `pending lazy-create at ${ctx.layout.registry}`);
+  }
+  const stat = fs.statSync(ctx.layout.registry);
+  if (!stat.isFile()) {
+    return check('registry writable', false, `${ctx.layout.registry} is not a regular file`, 'remove and rerun agent-fs init');
+  }
+  return check('registry writable', true, ctx.layout.registry);
+}
+
+function allowlistCheck(ctx) {
+  const allowlist = loadAllowlist(ctx.layout.meta);
+  const total = allowlist.exact.length + allowlist.prefix.length + allowlist.glob.length + allowlist.regex.length;
+  if (total === 0) {
+    return check('allowlist populated', false, 'empty allowlist', 'agent-fs init');
+  }
+  return check('allowlist populated', true, `${total} rules loaded`);
+}
+
+function claudeHookCheck() {
+  if (!fs.existsSync(CLAUDE_SETTINGS)) {
+    return check('Claude Code hook registered', false, `${CLAUDE_SETTINGS} missing`, 'agent-fs init --runtime claude-code');
+  }
+  let settings;
+  try {
+    settings = JSON.parse(fs.readFileSync(CLAUDE_SETTINGS, 'utf8'));
+  } catch (err) {
+    return check('Claude Code hook registered', false, `parse error: ${err.message}`, 'fix ~/.claude/settings.json then rerun agent-fs init --runtime claude-code');
+  }
+  const entries = settings?.hooks?.PreToolUse ?? [];
+  for (const entry of entries) {
+    for (const h of entry?.hooks ?? []) {
+      if (h?.command && h.command.includes(HOOK_MARKER)) {
+        return check('Claude Code hook registered', true, 'present in ~/.claude/settings.json');
+      }
+    }
+  }
+  return check('Claude Code hook registered', false, 'not found in PreToolUse chain', 'agent-fs init --runtime claude-code');
+}
+
+function orphanCountCheck(ctx) {
+  // Soft check: /tmp can accumulate legacy orphans that long predate agent-fs.
+  // Doctor reports the count but never fails on it; the value is advisory.
+  let entries;
+  try {
+    entries = fs.readdirSync('/tmp', { withFileTypes: true });
+  } catch (err) {
+    return check('/tmp orphan count', true, `cannot read /tmp (${err.message}); advisory only`);
+  }
+  const allowlist = loadAllowlist(ctx.layout.meta);
+  const isAllowed = buildMatcher(allowlist);
+  let orphans = 0;
+  for (const entry of entries) {
+    const full = path.join('/tmp', entry.name);
+    if (!isAllowed(full)) orphans++;
+  }
+  const threshold = ctx.config.doctor.orphan_warn_threshold;
+  const detail =
+    orphans > threshold
+      ? `${orphans} orphans (advisory; >${threshold}; run \`agent-fs orphans --in /tmp\` to triage)`
+      : `${orphans} orphans`;
+  return check('/tmp orphan count', true, detail);
+}
+
+function binResolvedCheck() {
+  if (!fs.existsSync(BIN_PATH)) {
+    return check('bin script present', false, `missing ${BIN_PATH}`, 'reinstall agent-fs');
+  }
+  return check('bin script present', true, BIN_PATH);
+}
+
+export function doctorVerb(args, ctx) {
+  const checks = [
+    binResolvedCheck(),
+    envBinCheck(),
+    tmpdirCheck(ctx),
+    registryCheck(ctx),
+    allowlistCheck(ctx),
+    claudeHookCheck(),
+    orphanCountCheck(ctx),
+  ];
+  const allPassed = checks.every((c) => c.passed);
+
+  if (args.json) {
+    process.stdout.write(JSON.stringify({ passed: allPassed, checks }, null, 2) + '\n');
+    process.exit(allPassed ? 0 : 68);
+  }
+  for (const c of checks) {
+    const icon = c.passed ? '✓' : '✗';
+    const line = c.detail ? `${icon} ${c.name} — ${c.detail}` : `${icon} ${c.name}`;
+    process.stdout.write(line + '\n');
+    if (!c.passed && c.fix) {
+      process.stdout.write(`    fix: ${c.fix}\n`);
+    }
+  }
+  process.stdout.write('\n' + (allPassed ? 'all checks passed.' : 'some checks failed.') + '\n');
+  process.exit(allPassed ? 0 : 68);
+}

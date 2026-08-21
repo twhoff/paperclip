@@ -1,0 +1,156 @@
+# yaml-language-server: $schema=../schemas/workflow.schema.json
+
+name: Commit & Push
+description: >-
+  Commit all local changes and push to remote. Automatically groups changes
+  by Beads epics/issues and project concerns, generates commitizen-format
+  messages (WITHOUT using the cz tool), runs quality gates, and pushes.
+  Success criteria: holly task exec_in_current_task_worktree -- git status shows clean working tree, up to date with origin.
+
+preflight:
+  - prompt: >-
+      Run `holly task exec_in_current_task_worktree -- git status --porcelain` and `holly task exec_in_current_task_worktree -- git diff --stat` to capture the full
+      set of uncommitted changes (staged, unstaged, and untracked). If the
+      working tree is already clean, report "nothing to commit" and STOP —
+      skip all remaining steps.
+    category: discovery
+
+  - prompt: >-
+      Run `holly tracker exec -- list --status=open --json` and `holly tracker exec -- list --status=in_progress --json`
+      to load all active Beads issues. Also run `holly tracker ready` for context. Build
+      a lookup of issue IDs to titles/types so you can associate changes with
+      issues in the next step.
+    category: discovery
+    requires:
+      - Holly tracker CLI
+
+steps:
+  - prompt: >-
+      Verify that every change group will have a Beads issue ID for its
+      commit message. The commit-msg hook requires a <issue-id> ID in the
+      first line of every commit.
+
+      1. Review the active issues loaded in the previous step.
+      2. For each logical group of changes, identify which Beads issue
+         it belongs to.
+      3. If any change group has NO associated Beads issue:
+         a. Create one with `holly tracker create "<description>" -t task -p 2`
+         b. Record the new issue ID
+      4. Confirm: every change group now has a trackable issue ID.
+
+      This step prevents the commit step from failing due to missing
+      issue IDs. Do NOT proceed until every group is covered.
+    category: quality
+    requires:
+      - Holly tracker CLI
+
+  - prompt: >-
+      Analyse the changed files from preflight and group them into logical
+      commits. Each group should represent ONE coherent concern. Use this
+      priority order for grouping:
+
+
+      1. **By Beads issue** — if a change directly relates to an open/in-progress
+         Beads issue, group it under that issue ID.
+
+      2. **By epic** — if multiple changes relate to the same epic, group them
+         under the epic.
+
+      3. **By project concern** — group remaining changes by their domain:
+         schemas, scripts, workflows, hooks, docs, config, legal, prompts, etc.
+
+
+      For each group, record: (a) the list of files, (b) the Beads issue ID
+      (or epic ID, or "untracked"), (c) a short summary of what changed.
+      Output the plan as a numbered list. Aim for the FEWEST commits that
+      still maintain logical separation — do NOT over-split.
+    category: discovery
+
+  - prompt: >-
+      Review the commit plan. For each group, verify:
+
+      - Every changed file is assigned to exactly one group (no orphans).
+
+      - No group mixes unrelated concerns.
+
+      - The grouping is efficient — merge groups that share the same issue
+        or concern.
+
+
+      If adjustments are needed, update the plan. Then confirm the final
+      commit order (dependencies first, dependents after).
+    category: quality
+
+  - prompt: >-
+      For each commit group (in order), execute:
+
+
+      1. `holly task exec_in_current_task_worktree -- git add <files>` — stage ONLY the files in this group.
+
+      2. Compose a commitizen-format commit message. Format:
+         `<type>(<scope>): <subject> (<issue-id>)`
+         where:
+         - **type**: feat, fix, docs, style, refactor, test, chore, ci, perf, build
+         - **scope**: optional, the project area (e.g. schemas, hooks, scripts)
+         - **subject**: imperative, lowercase, no period, max 72 chars
+         - **issue-id**: the Beads issue ID (e.g. <issue-2026>-02-22 or the project-abc).
+           If no specific issue exists, use today's all-agents epic ID.
+         - **body** (optional): bullet list of what changed, wrapped at 72 chars.
+
+         Do NOT use the `cz` tool. Generate the message directly.
+
+      3. `holly task exec_in_current_task_worktree -- git commit -m "<message>"` — commit with the composed message.
+
+      4. If the pre-commit hook reports "files were modified by this hook",
+         the hook has rewritten one or more staged files and intentionally
+         stopped the commit. Recover in-place:
+
+         a. Run `holly task exec_in_current_task_worktree -- git status --porcelain`
+            to identify exactly what changed.
+         b. Run `holly task exec_in_current_task_worktree -- git add <same files for this commit group>`
+            to restage the hook edits without pulling unrelated files into
+            the commit.
+         c. Retry the commit once with the same message:
+            `holly task exec_in_current_task_worktree -- git commit -m "<same message>"`.
+         d. If the retry fails, stop and report the hook output. Do not push
+            or start the next commit group.
+
+      5. Verify the commit succeeded before moving to the next group.
+
+
+      IMPORTANT: The commit-msg hook requires a Beads issue ID (<issue-id>) in
+      the first line. Every commit message MUST include one.
+    category: delivery
+    requires:
+      - Holly tracker CLI
+
+  - prompt: >-
+      Run quality gates on the committed changes:
+
+      - `python scripts/validate_schemas.py` — all schemas must pass.
+
+      - `get_errors` — zero problems policy, no lint/type errors allowed.
+
+      If any gate fails, fix the issue with an additional commit (following
+      the same commitizen format and issue-ID rules), then re-run gates
+      until all pass.
+    category: quality
+
+postflight:
+  - prompt: >-
+      Land all committed work through Holly:
+
+      ```
+      eval "$(holly task finish)"
+      ```
+
+      Then verify:
+      - `holly task finish` output indicates completion, and
+      - `holly task status` shows the task is no longer active.
+    requires:
+      - Holly tracker CLI
+
+  - prompt: >-
+      Report a summary: number of commits made, files changed, issues
+      referenced. Confirm success criteria: clean working tree, pushed
+      to origin.

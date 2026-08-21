@@ -1,0 +1,236 @@
+# yaml-language-server: $schema=../schemas/workflow.schema.json
+
+name: Begin Session
+description: >-
+  Prepare to carry out a task described by the user. Handles task discovery
+  via Beads, context gathering across the codebase and case documents,
+  workflow selection, and detailed planning with an approval gate.
+
+  Before presenting the plan, print a compact Session Context Snapshot
+  showing the current session, task, execution mode, workspace safety,
+  and hard gates.
+
+  Plan presentation: the detailed plan is presented in three parts --
+  a Session Context Snapshot, a structured version for agent use, and a
+  screen-reader friendly summary in natural spoken Australian English
+  with no formatting, no special characters, and only straight single
+  and double quotes.
+
+  Composable: this workflow owns task discovery and planning. The
+  workflow-wrapper handles generic infrastructure such as session init,
+  `bd` readiness, and AGENTS.md, and defers task-specific preparation to this
+  workflow.
+
+preflight: []
+
+steps:
+  - prompt: >-
+      Parse the user's message to understand the requested task.
+      Extract the task description, issue IDs, file paths, and any specifics.
+
+      Search Beads for relevant issues:
+      1. Run `holly tracker ready`
+      2. If useful, pass native ready filters through `holly tracker ready -- <args>`
+      3. If a specific issue ID was provided, run `holly tracker show <id>`
+
+      If a matching issue or epic exists, use it.
+      If no relevant issue exists, create one with
+      `holly tracker create "<task title>" --type task`.
+
+      Record:
+      - resolved issue ID
+      - issue title
+      - issue status
+      - parent epic if any
+    category: discovery
+
+  - prompt: >-
+      Gather execution-state context needed to safely perform the task.
+
+      Determine and record:
+      - agent name
+      - session id
+      - workspace path
+      - current holly task exec_in_current_task_worktree -- git branch
+      - whether the current checkout is the main checkout or a Holly task workspace
+      - whether code changes are likely required
+      - whether file edits are allowed in the current workspace
+      - whether commits are allowed in the current workspace
+      - whether a formula matches the task
+      - whether a molecule or epic already exists
+      - whether the work can be delivered by parallel-form swarm agents:
+        classify it as a single coherent change, a set of tightly coupled
+        / mostly sequential steps, or two or more independently deliverable
+        units. If an epic already exists, count its ready, unblocked,
+        mutually independent children (run `holly tracker ready` and check each child's
+        dependencies). Real parallelism means two or more independent ready
+        children that can run at once without colliding.
+      - the recommended delivery mode that follows from that classification:
+        serial `implement` for one coherent change or tightly coupled work,
+        or parallel swarm `orchestrate` only when there are two or more
+        independent ready children
+      - whether user approval is required
+      - whether user approval is currently pending
+      - the one next hard gate or required action
+
+      If code changes are likely required and the current workspace is the
+      main checkout, record that a Holly task workspace is mandatory before execution.
+    category: discovery
+
+  - prompt: >-
+      Gather only the codebase and document context relevant to the task.
+      Start with referenced files and narrow searches. Broaden only when the
+      requested work is ambiguous, high-risk, or cannot be planned safely from
+      the initial context.
+
+      Build a context summary covering:
+      - relevant files
+      - current state
+      - dependencies
+      - constraints
+    category: discovery
+
+  - prompt: >-
+      Select the most appropriate workflow.
+
+      1. Read workflow files in `workflows/*.yaml`
+      2. Match the task to the best workflow by name and description.
+         Honour the delivery-mode determination from the execution-state
+         context: route a parallelisable epic (two or more independent
+         ready children) to `orchestrate-swarm`, and a single coherent or
+         tightly coupled change to `implement`.
+      3. Check whether an existing formula or poured molecule should
+         shape the plan before defaulting to manual decomposition
+      4. If no specific workflow matches, use the default workflow
+
+      Then build a detailed plan.
+      For each numbered step, determine:
+      - action
+      - likely files touched
+      - dependencies
+      - related Beads issue
+      - whether specialist delegation is actually needed
+
+      Prefer direct execution for ordinary planning. Only suggest specialist
+      delegation when the task has clear parallelism, unusually high risk, or
+      a domain-specific skill gap.
+
+      Create the full todo list using manage_todo_list.
+    category: discovery
+
+  - prompt: >-
+      Present the result in FOUR parts.
+
+      PART 1 - Session Context Snapshot
+      Print a compact operational snapshot with these headings:
+      - Session
+      - Task
+      - Execution
+      - Workspace Safety
+      - Hard Gates
+      - Next required action
+
+      PART 2 - Structured Plan
+      Present the detailed implementation plan with numbered steps,
+      workers, files, dependencies, and issue references.
+
+      PART 3 - Screen-reader summary
+      Present a natural spoken Australian English summary of the plan.
+
+      Rules for the screen-reader summary:
+      - Use only natural spoken language, as if explaining the plan to
+        someone in a conversation
+      - plain paragraphs only
+      - no markdown formatting
+      - no tables
+      - no bullet points
+      - no ordered lists
+      - no code blocks
+      - no code examples
+      - no special characters
+      - no backtick quotes
+      - no smart quotes
+      - only straight single and double quotes
+      - address the user as "you" and "your"
+      - use Australian English spelling
+
+      Example of correct screen-reader format:
+      "Right, so here is what I am planning to do for you. First, I will
+      confirm the issue and session context so the task is attached to the
+      right work item and workspace. Then I will gather the code and
+      document context that matters for your task. After that, I will
+      choose the most suitable workflow and break the work into clear
+      steps with the right worker for each part. Once that is done, I
+      will show you the plan and wait for your approval before I begin."
+
+      PART 4 - Next Steps
+      Present a "Next Steps" panel with 2 to 5 concrete suggested actions.
+      Each suggestion is a short description followed by a copy-pasteable
+      invocation in a code block.
+
+      Invocation syntax rules (stay multi-platform; do not assume one IDE):
+      - Holly workflows run through the `use-workflow` executor, not a
+        universal slash command. Only `track` and `orchestrate` ship a real
+        command surface (a Claude Code skill plus a `.github/prompts`
+        loader). Every other workflow -- `implement`, `commit`,
+        `begin-session`, `review-implementation`, `zero-problems` -- is
+        invoked by its phrase, which the agent's `use-workflow` skill routes
+        to the matching `workflows/*.yaml`.
+      - Emit the portable phrase form as the primary pasteable, with the
+        resolved ID substituted in: `implement <ISSUE-ID>` for serial work,
+        `orchestrate <EPIC-ID>` for parallel swarm delivery, or
+        `track <scope>` for decomposition.
+      - On runtimes that register slash commands (Claude Code and GitHub
+        Copilot / VS Code), note that `orchestrate` and `track` may also be
+        run as `/orchestrate <EPIC-ID>` and `/track <scope>`.
+      - Never invent commands that do not exist: there is no `/implement`,
+        no `/begin-session`, and no `/orchestrate-swarm`. Never emit a
+        literal placeholder or a phrase like "the <id>" -- always
+        substitute the resolved issue or epic ID.
+
+      Tailor the suggestions to the recommended delivery mode from the
+      execution-state context:
+      - Serial (one coherent change, or tightly coupled / sequential
+        children): suggest `implement <ISSUE-ID>`.
+      - Parallel (an epic with two or more independent ready children):
+        suggest opening a fresh window and running `orchestrate <EPIC-ID>`
+        to dispatch bounded swarm workers across the ready children.
+      - Include one tracker command to review the work, e.g.
+        `holly tracker show <ISSUE-ID>`.
+      - Offer an alternative workflow only when more than one genuinely fits.
+
+      Format each suggestion as a short description followed by the
+      command in a code block so it is easy to copy-paste. Keep the
+      panel concise -- 2 to 5 suggestions maximum.
+
+      Do not start executing the plan until the user confirms.
+    category: discovery
+
+postflight:
+  - prompt: >-
+      If the resolved Beads issue is currently `backlog`, move it to `todo`
+      now that the session has prepared the work and a concrete execution path
+      exists.
+
+      Run:
+      `holly tracker update <resolved-issue-id> --status open`
+
+      If the issue is already `todo`, `in_progress`, `in_review`, or closed,
+      leave the status unchanged.
+
+  - prompt: >-
+      Post a status update to the task epic channel summarising:
+      - the resolved issue
+      - the selected workflow
+      - the next required action
+      - whether user approval is pending or granted
+
+      To find the epic channel, run
+      `holly tracker show <resolved-issue-id> --json` and look for a parent with
+      --type "epic". If the resolved issue itself is an epic, use its
+      ID as the channel. If it has no epic parent and is not an epic,
+      skip the holly chat post.
+
+      Example:
+      `holly chat post --channel <epic-id> --message
+      "Session prepared. Issue: <id>. Workflow: <workflow>. Next: <action>. Status: <approved/pending>."`

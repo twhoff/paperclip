@@ -1,0 +1,273 @@
+# yaml-language-server: $schema=../schemas/workflow.schema.json
+
+name: Grind
+description: >-
+  Queue-driven worker loop: pull from `bd ready`, triage for staleness,
+  implement via TDD, signal "ready for review" on chat, wait for verdict,
+  then repeat. Designed to run in a worker agent chat window under
+  orchestrator supervision (see queue-orchestrate.yaml).
+
+  The worker does NOT merge or close issues — the orchestrator handles
+  that after the review agent approves the work.
+
+  Label conventions used by this pipeline:
+  - grind-implementing: worker is actively implementing
+  - grind-review-pending: implementation done, awaiting review
+  - grind-review-approved: review passed, merged
+  - grind-review-changes: review found issues, needs rework
+  - grind-stale: triaged as stale/superseded, skipped
+
+  Chat protocol:
+  - Workers post status updates to `grind` channel
+  - Workers MUST use `chat wait` when idle (not manual polling)
+
+  This workflow is invoked per-assignment from the orchestrator. The
+  worker receives a task ID on the chat channel, executes this workflow,
+  posts the result, and waits for the next assignment.
+
+preflight:
+  # Step 1: Receive assignment
+  - prompt: >-
+      Wait for a task assignment from the orchestrator on the `grind` channel.
+      Read the channel for your assignment message:
+
+        chat read --channel grind --last 10
+
+      The orchestrator will post a message like:
+        "ASSIGN <agent-name>: <issue-id> — <title>"
+
+      If no assignment is waiting, enter wait mode:
+        chat wait --channel grind --timeout 0 --interval 10
+
+      Once you receive an assignment, extract the issue ID and record it
+      as CURRENT_ISSUE. Run `bd show <issue-id> --json` to load full details.
+
+      Set your session task:
+        session task set "Grind: <issue-id> -- <title>" --intent "Triage and implement <issue-id>"
+        session task verify
+
+  # Step 2: Triage for staleness
+  - prompt: >-
+      Triage the assigned issue to determine if it is still relevant:
+
+      1. Read the issue description, dependencies, and parent epic (if any)
+         via `bd show <issue-id> --json`.
+
+      2. Check for staleness indicators:
+         a. Has the problem already been fixed? Search the codebase for
+            evidence that the issue's concern has been addressed since
+            it was created.
+         b. Is it superseded by another issue? Check `bd dep <issue-id>`
+            for any supersedes/superseded-by relationships.
+         c. Are the referenced files/components still present? If the
+            issue references code that no longer exists, it may be stale.
+         d. Is the issue description still accurate against the current
+            codebase state?
+         e. DESCRIPTION QUALITY: Does the description name specific files,
+            tools, or APIs? If the description is vague (e.g. "update X"
+            without naming files), post a warning to the grind channel:
+            "TRIAGE-WARN <issue-id>: Description lacks specific file/tool
+            names. Adding discovered specifics: <list files/tools found
+            during triage>."
+            Then update the issue description with the discovered specifics:
+            `bd update <issue-id> --description "<original + appended specifics>"`
+
+      3. VERDICT:
+         - If STALE or SUPERSEDED:
+           a. Add label: `bd label add <issue-id> grind-stale`
+           b. Post to grind channel:
+              "STALE <issue-id>: <reason>. Recommending skip."
+           c. Wait for orchestrator acknowledgement before proceeding.
+              The orchestrator will either confirm the skip or override.
+           d. If confirmed, this workflow ends — return to waiting for
+              the next assignment.
+
+         - If RELEVANT:
+           a. Post to grind channel:
+              "TRIAGE-OK <issue-id>: Issue is current. Proceeding."
+           b. Continue to the main steps.
+    category: discovery
+
+  # Step 3: Prepare worktree
+  - prompt: >-
+      Create an isolated worktree for this issue:
+
+        mkdir -p ../<repo>-worktrees
+        bd worktree create ../<repo>-worktrees/<issue-id> --branch <issue-id>
+        cd ../<repo>-worktrees/<issue-id>
+
+      Claim the issue: `bd update <issue-id> --claim --json`
+      Add the implementing label: `bd label add <issue-id> grind-implementing`
+
+      Post to grind channel:
+        "START <issue-id>: Worktree created, beginning implementation."
+    requires:
+      - CURRENT_ISSUE from step 1
+      - Triage verdict RELEVANT from step 2
+
+steps:
+  # Step 1: Research
+  - prompt: >-
+      Build implementation context for the current task:
+
+      1. Search the codebase for files related to the issue using
+         semantic_search, grep_search, and file_search.
+      2. Identify files to modify, dependencies, existing tests,
+         and coding patterns in the affected area.
+      3. Check for a TDD.md file in the project root.
+      4. Check schema registry coverage if relevant.
+
+      Output a brief research summary: files to modify, approach,
+      risks, and testing strategy.
+    category: discovery
+
+  # Step 2: Design (brief)
+  - prompt: >-
+      Produce a concise implementation plan:
+
+      1. List files to create/modify/delete
+      2. Define the test plan (what tests, what they verify)
+      3. Identify the simplest approach that solves the issue
+
+      This is a working plan, not a design document — keep it brief.
+      Post a one-line summary to the grind channel:
+        "PLAN <issue-id>: <one-line approach summary>"
+    category: discovery
+
+  # Step 3: TDD Red — write failing tests
+  - prompt: >-
+      Write tests FIRST following TDD Red phase:
+
+      1. Create or update test files per the test plan.
+      2. Each test should test ONE behaviour using Arrange-Act-Assert.
+      3. Run tests to confirm they FAIL (Red phase).
+      4. If any test passes unexpectedly, investigate.
+    category: delivery
+
+  # Step 4: TDD Green — implement to pass
+  - prompt: >-
+      Implement the minimum code to make all failing tests pass:
+
+      1. Work through each failing test in order.
+      2. Write the simplest code that makes each test pass.
+      3. Run the full test suite after each change to catch regressions.
+      4. Update any configuration or schemas the implementation requires.
+    category: delivery
+
+  # Step 5: TDD Refactor
+  - prompt: >-
+      Refactor while keeping all tests green:
+
+      1. Review for duplication, clarity, and convention compliance.
+      2. Run full test suite after each refactoring change.
+      3. Run quality gates: tests, linter, schema validation.
+    category: delivery
+    condition: Refactoring opportunities exist or quality gates have failures.
+
+  # Step 6: Fix quality gate failures
+  - prompt: >-
+      If quality gates reported failures, fix and re-validate.
+      Repeat up to 3 iterations. If still failing after 3 attempts,
+      post a BLOCKER to the grind channel and wait for orchestrator
+      guidance.
+
+      BLOCKER message format:
+        "BLOCKER <issue-id>: Quality gates failing after 3 fix attempts.
+        Failures: <summary>. Awaiting guidance."
+    category: delivery
+    condition: Quality gates from previous step reported failures.
+
+  # Step 7: Visual verification (UI tasks only)
+  - prompt: >-
+      If the task involves UI or frontend changes:
+
+      1. Run the Playwright visual regression suite:
+         cd <frontend> && npx playwright test visual-regression --reporter=html
+      2. If tests fail, update snapshots if changes are intentional,
+         or fix visual regressions.
+      3. Check the HTML report for screenshot diffs.
+
+      If non-visual task, skip this step.
+    category: quality
+    condition: The task involves UI, frontend components, or CSS changes.
+
+  # Step 8: Commit
+  - prompt: >-
+      Commit the completed work:
+
+      1. Stage changes with logical grouping.
+      2. Use commitizen-format messages:
+         <type>(<scope>): <subject> (<issue-id>)
+      3. Push from the worktree:
+         git pull --rebase && git push -u origin <branch-name>
+    requires:
+      - bd CLI
+
+postflight:
+  # Step 1: Rebase on main (HARD GATE)
+  - prompt: >-
+      MANDATORY rebase on main before signalling review-ready.
+      This is a hard gate -- do NOT skip or defer this step.
+
+      1. Fetch and rebase on origin/main:
+         git fetch origin main && git rebase origin/main
+
+      2. If the rebase succeeds cleanly, continue to the next step.
+
+      3. If conflicts occur:
+         a. Resolve each conflict carefully, preserving your changes
+            and integrating upstream updates.
+         b. Run tests after resolving to confirm nothing broke.
+         c. Complete the rebase: git rebase --continue
+         d. If conflicts are too complex to resolve safely, post a
+            BLOCKER to the grind channel and wait for guidance:
+            "BLOCKER <issue-id>: Rebase conflicts on main too complex.
+            Conflicting files: <list>. Awaiting guidance."
+
+      4. Force-push the rebased branch:
+         git push --force-with-lease -u origin <branch-name>
+
+      Rationale: Stale branches waste 10-15 min of reviewer time per
+      incident. This gate was raised unanimously in the 2026-03-12 retro.
+
+  # Step 2: Signal ready for review
+  - prompt: >-
+      Signal that implementation is complete and ready for review:
+
+      1. Remove implementing label, add review-pending:
+         bd label remove <issue-id> grind-implementing
+         bd label add <issue-id> grind-review-pending
+
+      2. Post to grind channel with review context:
+         "REVIEW-READY <issue-id>: <title>
+         Branch: <branch-name>
+         Files changed: <count>
+         Tests: <pass/fail summary>
+         Approach: <one-line summary>"
+
+      3. While waiting for the review verdict, do read-ahead research
+         on upcoming queue items (run bd ready --json, read issue
+         descriptions, explore relevant code areas). This reduces
+         ramp-up time when the next assignment arrives.
+
+      4. Enter wait mode for the review verdict:
+         chat wait --channel grind --timeout 0 --interval 10
+
+      4. When a verdict arrives for your issue:
+
+         If "REVIEW-APPROVED <issue-id>":
+           - Post: "ACK <issue-id>: Review approved."
+           - Clean up worktree: bd worktree remove ../<repo>-worktrees/<issue-id>
+           - Clear session task: session task clear
+           - Return to preflight step 1 to receive the next assignment.
+
+         If "REVIEW-CHANGES <issue-id>: <feedback>":
+           - Post: "ACK <issue-id>: Addressing review feedback."
+           - Read the detailed feedback from the channel
+           - Re-enter the main steps to address the changes
+           - After fixing, re-run postflight to signal review-ready again
+
+         If "SKIP <issue-id>":
+           - Post: "ACK <issue-id>: Skipping per orchestrator."
+           - Clean up worktree
+           - Return to preflight step 1

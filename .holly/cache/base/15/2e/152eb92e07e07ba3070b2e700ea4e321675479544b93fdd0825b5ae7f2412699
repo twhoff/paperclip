@@ -1,0 +1,139 @@
+// agent-fs pin <path> — protect a tracked path from cleanup sweeps.
+// agent-fs unpin <path> — release a pin.
+//
+// Pins are advisory: they prevent agent-fs clean from removing the path.
+// Derived state is computed from the append-only registry log — most-recent
+// pin/unpin event per path wins.
+
+import fs from 'node:fs';
+import path from 'node:path';
+import { aggregateTrackedPaths, Registry, VERBS } from '../registry.mjs';
+
+function isUnderRoot(target, root) {
+  const rel = path.relative(root, target);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+function ensureUnderRoot(target, ctx) {
+  // pin/unpin only operate on paths in the sanctioned tree. Pinning a system
+  // path (e.g. /tmp/allowlisted) doesn't make sense — clean doesn't touch them.
+  if (!isUnderRoot(target, ctx.config.root)) {
+    process.stderr.write(
+      `error: ${target} is outside AGENT_FS_ROOT (${ctx.config.root}); pin only works on tracked paths.\n`,
+    );
+    process.exit(64);
+  }
+}
+
+function ensureTracked(target, ctx) {
+  // Path must have been registered (scratch / evidence / session / bless / adopt)
+  // before it can be pinned. Reject phantom paths.
+  const tracked = aggregateTrackedPaths(ctx.config.root);
+  for (const t of tracked) {
+    if (target === t || target.startsWith(t + path.sep) || t.startsWith(target + path.sep)) {
+      return true;
+    }
+  }
+  process.stderr.write(
+    `error: ${target} is not tracked by any session registry.\n` +
+      'hint: create or claim the path first via scratch/evidence/session/bless/adopt.\n',
+  );
+  process.exit(64);
+}
+
+export function pinVerb(args, ctx) {
+  const raw = args._[0];
+  if (!raw) {
+    process.stderr.write('error: pin requires a path argument\n');
+    process.exit(65);
+  }
+  const target = path.resolve(raw);
+  if (!fs.existsSync(target)) {
+    process.stderr.write(`error: path does not exist: ${target}\n`);
+    process.exit(69);
+  }
+  ensureUnderRoot(target, ctx);
+  ensureTracked(target, ctx);
+
+  const meta = {};
+  if (args.reason) meta.reason = String(args.reason);
+
+  const record = ctx.registry.append({
+    verb: VERBS.PIN,
+    path: target,
+    issue: args.issue ?? null,
+    agent: ctx.agent,
+    runtime: ctx.runtime,
+    meta,
+  });
+
+  if (args.json) {
+    process.stdout.write(JSON.stringify({ path: target, pinned: true, ts: record.ts }) + '\n');
+  } else {
+    process.stdout.write(`pinned: ${target}${meta.reason ? ` (${meta.reason})` : ''}\n`);
+  }
+}
+
+export function unpinVerb(args, ctx) {
+  const raw = args._[0];
+  if (!raw) {
+    process.stderr.write('error: unpin requires a path argument\n');
+    process.exit(65);
+  }
+  const target = path.resolve(raw);
+  ensureUnderRoot(target, ctx);
+
+  const record = ctx.registry.append({
+    verb: VERBS.UNPIN,
+    path: target,
+    agent: ctx.agent,
+    runtime: ctx.runtime,
+  });
+
+  if (args.json) {
+    process.stdout.write(JSON.stringify({ path: target, pinned: false, ts: record.ts }) + '\n');
+  } else {
+    process.stdout.write(`unpinned: ${target}\n`);
+  }
+}
+
+/**
+ * Compute the set of currently-pinned paths from all session registries.
+ * Most-recent pin/unpin event per path wins.
+ */
+export function pinnedPaths(rootDir) {
+  const lastVerbByPath = new Map();
+  if (!fs.existsSync(rootDir)) return new Set();
+  let entries;
+  try {
+    entries = fs.readdirSync(rootDir, { withFileTypes: true });
+  } catch {
+    return new Set();
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !entry.name.startsWith('sess-')) continue;
+    const reg = new Registry(path.join(rootDir, entry.name));
+    for (const ev of reg.readAll()) {
+      if (ev.verb !== VERBS.PIN && ev.verb !== VERBS.UNPIN) continue;
+      if (!ev.path) continue;
+      const existing = lastVerbByPath.get(ev.path);
+      if (!existing || ev.ts >= existing.ts) {
+        lastVerbByPath.set(ev.path, { ts: ev.ts, verb: ev.verb });
+      }
+    }
+  }
+  const pinned = new Set();
+  for (const [p, { verb }] of lastVerbByPath) {
+    if (verb === VERBS.PIN) pinned.add(p);
+  }
+  return pinned;
+}
+
+export function isPinned(target, rootDir) {
+  const pinned = pinnedPaths(rootDir);
+  if (pinned.has(target)) return true;
+  for (const p of pinned) {
+    if (target.startsWith(p + path.sep)) return true;
+  }
+  return false;
+}

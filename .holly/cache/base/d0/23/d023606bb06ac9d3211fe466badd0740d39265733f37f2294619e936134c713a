@@ -1,0 +1,234 @@
+---
+name: issue-tracker
+description: >
+  Adapter-agnostic reference for the issue-tracker integration in holly.
+  Covers the session protocol for claiming, tracking, and closing issues
+  using whichever adapter is installed.
+  For adapter-specific commands, read the matching addendum file in this
+  same directory (`addendum-<adapter>.md`).
+  Use whenever managing multi-session work, tracking dependencies, or
+  recovering context after compaction.
+  Use when the user invokes the holly skill without any further instruction
+  or when the user invokes the holly skill with words like bootstrap, prepare,
+  load and so forth.
+---
+
+# Issue Tracker
+
+Holly drives issue tracking through a pluggable adapter. The active
+adapter is configured in `.holly/config.toml` (`[holly] adapter = "..."`)
+and decides which CLI or API actually runs.
+
+```bash
+holly adapter list   # list installed adapters (active marked, with versions)
+holly tracker info   # show the active adapter and its capabilities
+```
+
+If the active adapter ships an addendum file in this skill directory,
+read it for backend semantics, not for direct commands. Holly agents use
+the `holly` CLI for tracker, task, memory, chat, and git lifecycle work.
+
+---
+
+## Decision: Issue Tracker vs TodoWrite
+
+**Use the issue tracker when:** work spans multiple sessions, has
+blockers or dependencies, or needs to survive conversation compaction.
+
+**Use TodoWrite when:** a single-session linear task with no
+cross-session persistence is required.
+
+**Self-check question:** "Will I need this context in two weeks?"
+Yes → tracker. No → TodoWrite.
+
+---
+
+## The IssueTrackerAdapter API
+
+Every adapter exposes the same capability groups regardless of backend:
+
+| Group       | Operations                                                                                            |
+| ----------- | ----------------------------------------------------------------------------------------------------- |
+| `issues`    | `ready_queue`, `search_issues`, `get_issue`, `create_issue`, `update_issue`, `close_issue`            |
+| `comments`  | `list_comments`, `add_comment`                                                                        |
+| `worktrees` | `worktree_create`, `worktree_list`, `worktree_remove`, `worktree_tool_name()`, `worktrees_base_dir()` |
+| `sync`      | `sync_push()`, `sync_pull()`                                                                          |
+| `labels`    | `label_catalog`, `add_label`, `remove_label`, `map_label_to_native`, `map_native_to_label`            |
+| `blockers`  | `add_blocker`, `list_blockers`, `remove_blocker`                                                      |
+
+`ready_queue` returns only **unblocked, open** issues (the next-work queue) —
+not every issue. To browse the full board, use `holly tracker list`, the
+adapter-neutral CLI surface for `search_issues`; it accepts `--status`,
+`--type`, `--assignee`, `--label` (repeatable), `--query`, and `--limit`
+filters, and `--json` for machine-readable output (the default in non-TTY/agent
+contexts). `holly tracker label list` is the read-only discovery surface for
+canonical orchestration labels and adapter-native labels. Holly labels describe
+what an issue means to orchestration (`holly:type:*`, `holly:track:*`,
+`holly:wave:*`, `holly:blocked-by:*`); ticket lifecycle status remains the
+tracker status field.
+
+Write labels with `holly tracker label add`/`holly tracker label remove`:
+
+```bash
+holly tracker label add <id> [<id> ...] --label <name> [--label <name> ...]
+holly tracker label remove <id> [<id> ...] --label <name>
+```
+
+The label is always a **named** flag (`--label`), never a trailing positional,
+so the adapter's label-ordering footgun is unrepresentable. `add` validates
+each label against the catalog and **rejects** unknown labels and issue-ID-shaped
+values (with a nearest-match hint), so a typo can't silently create a junk
+label. `remove` is permissive — it can delete any label, including a bogus one
+created before this guard existed. Both echo the resulting label set per issue
+(`--json` for machine-readable output). They map onto the adapter `add_label`/
+`remove_label` methods, so behaviour is identical across adapters.
+
+For the orchestration `wave` and `track` families, prefer the dedicated
+setters over raw `label add` — you supply only the value and Holly owns the
+`holly:` namespace:
+
+```bash
+holly tracker wave  set <id> [<id> ...] --wave 2      # writes holly:wave:2
+holly tracker track set <id> [<id> ...] --track infra # writes holly:track:infra
+```
+
+Both are **single-valued**: setting a new wave/track replaces any existing
+label in that family, so an issue can't end up in two waves. `--wave` must be a
+positive integer; `--track` must be a single token (no `:` or whitespace).
+
+To compute waves for a whole epic from its dependency graph instead of by hand,
+use `holly tracker wave plan <epic>`:
+
+```bash
+holly tracker wave plan <epic>           # dry-run: print the layering
+holly tracker wave plan <epic> --apply   # write the holly:wave:N labels
+```
+
+It layers the epic's children by their in-epic dependencies
+(`wave = 1 + max(wave of deps)`). Dry-run is the safe default; `--apply`
+commits via the single-valued wave setter. A dependency cycle is reported and
+refused. (Requires a tracker that models parent-child hierarchy; trackers
+without one report no children.)
+
+`holly tracker create` accepts first-class orchestration flags so a wired-up
+child needs only one command instead of create → dep add → label add:
+
+```bash
+holly tracker create "Child task" --parent <epic> \
+    --depends-on <id> --depends-on <id> --track backend --wave 1
+```
+
+`--parent` is applied natively at create time (preserving the tracker's
+hierarchical child numbering); `--depends-on` (repeatable), `--track`, and
+`--wave` are applied immediately after creation via the same blocker/label
+surface. Parent and dependency IDs are validated up front, so a typo fails
+before any half-wired issue is created.
+
+`holly tracker show <id>` surfaces the orchestration view — Type, Track, Wave,
+and the full label set — alongside the issue detail (and `--json` includes
+`labels`), so you can read an issue's wave/track placement at a glance.
+
+Wire dependencies between existing issues with `holly tracker dep`:
+
+```bash
+holly tracker dep add    <id> --on <id> [--on <id> ...]   # <id> is blocked by each --on
+holly tracker dep remove <id> --on <id>
+holly tracker dep list   <id>                              # what blocks <id>
+```
+
+The blocker is a **named** flag (`--on`), never a positional, so the
+blocked/blocker direction can't be swapped by mistake. `add` validates every
+ID, rejects self-dependencies, and refuses edges that would create a cycle.
+
+The `null` adapter implements everything as a no-op — useful for
+projects that do not want issue tracking at all.
+
+---
+
+## Universal Session Protocol
+
+Regardless of adapter, every task follows the same Holly-owned flow:
+
+1. **Find** work with `holly tracker ready` (next-work queue) or `holly tracker list` (full board, filterable), or create it with `holly tracker create`.
+2. **Verify session identity**: `$HOLLY_SESSION_ID` must already be set by the shell/runtime. If this check or any other `holly ...` command is routed through context-mode, prefix the command as `HOLLY_SESSION_ID=$HOLLY_SESSION_ID holly ...`; the sandbox may not inherit the parent shell env. If that expands empty inside context-mode, pass the existing parent-shell value explicitly.
+3. **Register task state and post intent** with `eval "$(holly task start --id <issue-id> --intent '<agent-intent>')"`. This single command records the task, posts intent to all-agents, and unblocks gated tools. New user prompts are classified by the UserPromptSubmit hook; changed intents are updated automatically, and `holly task resume` is now a recovery/re-entry command rather than a normal per-turn requirement.
+4. **Create/enter the task worktree** through the active adapter/workflow before editing.
+6. **Add notes** with `holly tracker comment` as you progress.
+7. **Finish** with `eval "$(holly task finish)"`.
+
+Direct backend CLIs, raw Git, raw session commands, and raw chat commands are
+private implementation details for Holly itself.
+
+---
+
+## Worktrees
+
+All implementation work happens in a dedicated worktree — never on the
+main checkout. The PreToolUse hook enforces this and the BLOCKED message
+points at the canonical one-command path.
+
+```bash
+# Register task state and post intent for an existing issue
+# (idempotent: re-run the same command to re-post intent and re-enter the worktree)
+eval "$(holly task start --id <issue-id> --intent '<agent-intent>')"
+
+# Where am I, what's next? (current task — NOT whole-project status)
+holly task status
+
+# Re-cd into the active worktree (e.g. after a shell reset)
+eval "$(holly task resume)"
+
+# When work in the worktree is committed
+eval "$(holly task finish)"
+
+# Wrong issue / give up — refuses unpushed commits unless --force
+eval "$(holly task abort)"
+```
+
+**Safety contract.** `start` requires the existing shell/runtime-owned
+`HOLLY_SESSION_ID`, records task ID and/or intent in session state, and posts
+intent to all-agents in the same step. Re-running `start` with the same active
+id is idempotent: it re-posts intent and re-enters the worktree without
+re-claiming or recreating it.
+The active adapter's worktree tool owns checkout creation; use the BLOCKED
+message or `holly worktree ...` pass-through for adapter-specific worktree
+operations. `finish` resolves the integration branch via `origin/HEAD` then
+`main`/`master`/`trunk`/`develop`, **verifies the main checkout is on that
+branch and clean** before the FF-merge, then pushes when a remote exists,
+closes the issue, syncs tracker state, removes the worktree, and clears the
+session. `abort` is the symmetric give-up: refuses to discard unpushed work
+without `--force`, removes the worktree, reopens the issue, clears the session.
+If no `worktree_path` is registered, `finish` is a summary-only recovery path:
+it can post the lifecycle summary, but it does not push, close, sync, remove a
+worktree, or clear task state. Do not wrap that no-worktree recovery path in
+`eval`.
+
+**Output.** All eval-emitting verbs (`start`, `finish`, `abort`, `resume`) take
+`--json` for non-eval consumers and print a one-line `eval` reminder to stderr
+if you forget the `eval` wrapper (detected via `stdout.isatty()`).
+
+`holly task start` is adapter-agnostic session/task registration. Worktree
+operations are adapter-aware through `holly worktree ...`, which passes through
+to the native tracker worktree command when the active adapter exposes one.
+
+See `docs/worktree-workflow.md` for the full lifecycle.
+
+---
+
+## Recovery after compaction
+
+```bash
+holly task status                            # what was I doing?
+holly tracker show <id>                      # full context for the issue
+```
+
+Then re-claim or re-open the issue and continue.
+
+---
+
+## Adapter Addenda
+
+Adapter packages may overlay this skill with `addendum-<name>.md` and
+supporting resources. When you add a new adapter, ship a matching
+addendum in that adapter package so agents can find the concrete
+command surface after `holly init` or `holly sync skills --mode apply`.

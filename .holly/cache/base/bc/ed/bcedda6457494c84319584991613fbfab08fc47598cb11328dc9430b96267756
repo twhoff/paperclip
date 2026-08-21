@@ -1,0 +1,12 @@
+const TABLE = {
+  low: { deviceScaleFactor: 1, type: 'jpeg', quality: 60, ext: 'jpg' },
+  medium: { deviceScaleFactor: 1, type: 'jpeg', quality: 85, ext: 'jpg' },
+  high: { deviceScaleFactor: 2, type: 'png', quality: undefined, ext: 'png' },
+  native: { deviceScaleFactor: 2, type: 'png', quality: undefined, ext: 'png' },
+};
+
+export function resolutionToCaptureOpts(value) {
+  const r = TABLE[value];
+  if (!r) throw new Error(`invalid resolution: ${value}`);
+  return { ...r };
+}

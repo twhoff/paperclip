@@ -1,0 +1,60 @@
+// agent-fs env — print shell `export` statements for the current session.
+// Designed for: eval "$(agent-fs env)"
+
+import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
+
+function findBinAbsolute() {
+  // bin/agent-fs imports this module; we can resolve the bin path from here.
+  // import.meta.url points at this file inside lib/verbs/; bin is ../../bin/agent-fs.
+  const here = fileURLToPath(import.meta.url);
+  const bin = path.resolve(here, '..', '..', '..', 'bin', 'agent-fs');
+  return fs.existsSync(bin) ? bin : null;
+}
+
+function shellQuote(s) {
+  // Single-quote with escaping for embedded single quotes.
+  return `'${String(s).replace(/'/g, `'\\''`)}'`;
+}
+
+// Session-tied vars are emitted only when the session resolved from a known
+// runtime env var (Claude Code, Codex, Paperclip, Warp, explicit override).
+// Emitting them based on the git-ppid fallback pollutes parent shells and
+// bleeds stale values into agent runtimes launched later from the same shell.
+function isStableSessionSource(source) {
+  if (!source) return false;
+  if (source.startsWith('env:')) return true;
+  if (source.startsWith('pcli:')) return true;
+  return false;
+}
+
+export function envVerb(args, ctx) {
+  const exports = {};
+  const bin = findBinAbsolute();
+  if (bin) exports.AGENT_FS_BIN = bin;
+  exports.AGENT_FS_ROOT = ctx.config.root;
+
+  if (isStableSessionSource(ctx.sessionSource)) {
+    exports.AGENT_FS_SESSION_ID = ctx.sessionId;
+    exports.AGENT_FS_SESSION_SOURCE = ctx.sessionSource;
+    exports.AGENT_FS_RUNTIME = ctx.runtime;
+    exports.AGENT_SCRATCH_DIR = ctx.layout.scratch;
+    exports.AGENT_EVIDENCE_DIR = ctx.layout.evidence;
+    exports.AGENT_SESSION_DIR = ctx.layout.sessionState;
+    exports.AGENT_TMP_DIR = ctx.layout.tmp;
+    if (ctx.config.tmpdir_override) {
+      exports.TMPDIR = ctx.layout.tmp;
+    }
+  }
+
+  if (args.json) {
+    process.stdout.write(JSON.stringify(exports) + '\n');
+    return;
+  }
+  const lines = [];
+  for (const [k, v] of Object.entries(exports)) {
+    lines.push(`export ${k}=${shellQuote(v)};`);
+  }
+  process.stdout.write(lines.join('\n') + '\n');
+}

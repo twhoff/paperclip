@@ -1,0 +1,4 @@
+interface:
+  display_name: "Holly Project Release"
+  short_description: "Release refs and rescue branches"
+  default_prompt: "Use $holly-project-release to prepare or verify a Holly release tag, release branch, or hotfix."

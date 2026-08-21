@@ -1,0 +1,259 @@
+---
+name: holly-wireframe-bash
+description: >-
+  Run Holly-backed wireframe review and synchronization sessions for Tizzi.
+  Use when the user invokes $holly-wireframe-bash, asks to review unapproved
+  wireframes, wants to look at or change a specific ASCII wireframe set, or
+  wants a consistency/drift check between a requirement set's ADRs, specs,
+  wireframes, and Storybook stories. Covers the three modes: unapproved
+  wireframe review, collaborative wireframe editing with no file edits until
+  the user says to lock it in, and autonomous requirement-set synchronization
+  after establishing the source of truth from file timestamps, git history, and
+  all-agent chat.
+---
+
+# Holly Wireframe Bash
+
+You are the wireframe review and synchronization agent. Your job is to keep
+Tizzi's product intent, ASCII wireframes, specs, ADRs, and Storybook UI aligned
+without surprising the user.
+
+## Definitions
+
+- **Wireframe set**: mobile, tablet portrait, tablet landscape, and desktop
+  wireframes presented as ASCII art.
+- **Requirement set**: the file set that makes up one functional or
+  non-functional requirement, such as a feature. It can include ADRs, specs,
+  wireframes, Storybook stories, and implementation files needed to prove the
+  UI.
+
+## Required Baseline
+
+Before acting, load the project skills relevant to the selected mode:
+
+- `holly`, `agent-sessions`, `agent-lifecycle`, `issue-tracker`, and
+  `agent-chat` for task state, tracker access, and all-agent history.
+- `agent-fs` for scratch/evidence paths. Never write temp files under `/tmp`.
+- `tizzi-design-guide` for Tizzi UI law, atomic composition, themes, energy
+  modes, Storybook proof, and review gates.
+- `tizzi-docs-graph` when discovering related specs, ADRs, and wireframes.
+- `tizzi-dev-storybook` and `ui-visual-capture` when Storybook stories or visual
+  implementation proof are in the requirement set.
+
+Use a Holly worktree before any file edit. If the current task is intent-only,
+create or claim a task before writing.
+
+## Start Every Session
+
+If the user does not specify a mode, ask one short question:
+
+```text
+Do you want to:
+1. Review unapproved wireframes
+2. Look at or revise a specific wireframe set
+3. Check consistency between a spec, wireframe, and implemented UI set
+```
+
+If the user already gave enough context, infer the mode and continue.
+
+When showing wireframes, draw the ASCII art in the chat response. Do not answer
+with only file paths. Include paths as supporting references after the visible
+wireframes.
+
+## Mode 1: Review Unapproved Wireframes
+
+Use this when the user wants to review pending/unapproved wireframes.
+
+1. Discover candidate wireframes, usually under `docs/wireframes/`.
+2. Read frontmatter/status and identify `status` values that are not approved,
+   missing, stale, or explicitly marked draft/review.
+3. Group candidates by requirement set using frontmatter links, spec references,
+   filenames, docs graph results, and nearby Storybook stories.
+4. Present a concise queue: requirement name, current status, linked spec/ADR,
+   and the first decision needed.
+5. For the selected item, show the wireframe set as ASCII art in chat and ask
+   for review direction.
+
+Do not mark a wireframe approved unless the user explicitly says it is approved
+or asks you to update status.
+
+## Mode 2: Revise a Specific Wireframe Set
+
+Use this when the user wants to look at, change, or iterate on a specific
+wireframe set.
+
+### Hard Rule: No File Edits During Exploration
+
+Until the user says to "lock it in", "apply it", "make the edits", or an
+equivalent explicit approval, do **not** edit files. Work in chat only:
+
+1. Find and read the current requirement set: ADRs, specs, wireframes, and
+   Storybook stories if present.
+2. Show the current wireframe set as ASCII art in chat.
+3. Discuss the requested change and draw the proposed output in chat.
+4. On every iteration, assess downstream impact:
+   - ADR changes needed?
+   - Spec changes needed?
+   - Other wireframes affected?
+   - Storybook story or implemented UI changes needed?
+   - Design-guide gates affected: atomic composition, tokens/themes, energy,
+     accessibility, mobile-first behavior?
+5. Keep iterating in chat until the user is happy.
+
+### Lock-In Rule
+
+When the user explicitly approves the design:
+
+1. Create/claim a Holly task and worktree if not already in one.
+2. Edit the primary wireframe.
+3. Immediately update every affected file in the requirement set:
+   - related wireframes,
+   - related specs,
+   - Storybook stories and implementation if present,
+   - ADRs if the change alters a decision, constraint, pattern, or architecture.
+4. Run appropriate checks:
+   - docs consistency checks where available,
+   - Storybook render/a11y/visual proof for visible UI,
+   - tests/typecheck for implementation changes.
+5. Report changed files, verification, and any residual risk.
+
+Do not leave the repository with a wireframe that knowingly contradicts its
+spec, ADR, or Storybook implementation.
+
+## Mode 3: Requirement-Set Consistency Check
+
+Use this when the user wants drift detection or synchronization across any
+artifacts in the requirement set — ADRs, specs, wireframes, Storybook stories,
+and the implementation they prove. Every artifact type is checked the same way
+(git diff archaeology below), not just the spec and wireframe. This mode is
+intended to be autonomous after source of truth is established.
+
+### Establish Source of Truth
+
+Do not assume the newest file is correct, and do **not** rank or date files by
+their self-reported metadata. Frontmatter `version`, `created`, and `modified`
+fields are hand-edited, drift, and do not track real edit activity — a doc can
+read `version: 2` yet have *more* real commits than a `version: 8` sibling.
+File modification times are equally unreliable (bumped by reformatting, syncs,
+checkouts). Establish the real history from **git**, then from the **diffs**.
+This applies equally to all four artifact types — ADRs, specs, wireframes, and
+Storybook stories. None is exempt; you run the same archaeology on each.
+
+1. Identify every file in the requirement set, across all artifact types:
+   - ADRs in `docs/adr/`,
+   - specs in `docs/specs/`,
+   - wireframes in `docs/wireframes/`,
+   - Storybook stories (`*.stories.tsx`) and the implementation they prove.
+
+2. For EVERY file in the set (ADR, spec, wireframe, AND Storybook story), build
+   its real history from git — never from frontmatter:
+
+   ```bash
+   F=<path>
+   # Creation: the commit that first ADDED the file (follow renames)
+   git log --follow --diff-filter=A --format='%ad  %h  %an  %s' --date=short -- "$F"
+   # Full edit arc, oldest -> newest, with real commit count
+   git log --follow --reverse --format='%h|%ad|%s' --date=short -- "$F"
+   git log --follow --oneline -- "$F" | wc -l
+   ```
+
+3. Summarize EVERY commit's diff for each file to reconstruct the actual
+   design-direction trajectory. Do not infer direction from version numbers,
+   changelog prose, or commit subjects alone — read the diff itself:
+
+   ```bash
+   git show --numstat --format='' <hash> -- "$F"   # ins/del for THIS file
+   git show -U0     --format='' <hash> -- "$F"      # the real +/- content
+   ```
+
+   For each commit, record: ins/del, whether the change to this file is
+   substantive or incidental (files routinely ride in on unrelated bulk
+   commits — a big "feat/perf/test" subject can carry a one-line doc edit, or a
+   whole new section), and one line on the design decision it encodes (e.g.
+   "sheet -> full-screen route -> overlay", "added rich interaction widgets",
+   "introduced the bug", "fixed the bug"). The ordered list of those per-commit
+   summaries **is** the design-direction trajectory — produce one per artifact.
+
+4. Cross the trajectories to pick the source of truth. It is the artifact whose
+   diff history shows the latest *deliberate, approved* design decision — read
+   from commit content, ticket IDs, and **shared commits that moved several
+   artifacts together** — corroborated by all-agent chat (handoffs, approvals,
+   bug-bash findings, reviewer decisions). Watch specifically for:
+   - artifacts that flip-flopped (a decision reversed then re-confirmed) — the
+     last *confirmed* state wins, not the loudest prose;
+   - shared commits touching spec + wireframe (or ADR + story) together — these
+     mark intended, synchronized direction;
+   - one artifact moving while a sibling stayed still — the still one is the
+     drifted one, regardless of its version field;
+   - bugs that entered via one artifact and were fixed in another (e.g. a
+     wireframe documents a "current bug" the code later fixed) — the fix commit
+     is the truth; the still-open description is the drift.
+
+5. Compare the actual current content for contradictions in: layout/responsive
+   behavior, state names and coverage, interaction semantics, copy/voice,
+   accessibility requirements, theme/energy behavior, ADR decisions and
+   constraints, and Storybook story coverage.
+
+Ask the user for help only if the diff archaeology cannot establish a source of
+truth. This is the only normal question in autonomous mode.
+
+#### Deliverable: the per-commit diff trajectory (evidence, not version numbers)
+
+Before declaring a source of truth, output the evidence you built. For **each**
+artifact (ADR, spec, wireframe, story), present a table of its commits
+oldest -> newest with: hash, date, ins/del for that file, and a one-line
+summary of what the diff changed — then a short "design direction" synthesis
+for that artifact. The source-of-truth call must be justified by this
+trajectory; never substitute a version number, changelog row, or `modified`
+date for it.
+
+### Synchronize Everything Else
+
+Once the source of truth is established:
+
+1. Treat it as authoritative for this sync.
+2. Iterate across every non-authoritative file in the requirement set until it
+   aligns perfectly with the source of truth.
+3. Update the wireframe set, specs, ADRs, Storybook stories, and implementation
+   as required by the drift.
+4. Verify with the correct gates. For UI-visible drift, Storybook proof is not
+   optional.
+5. Stop only when no contradictions remain, or when a blocker prevents a safe
+   sync.
+
+If an ADR is the source of truth, do not weaken it to match implementation drift.
+If the implementation is the source of truth because a later approved change
+landed there first, back-propagate into wireframes/specs/ADRs as needed.
+
+## Review Output Format
+
+For reviews and drift checks, lead with findings:
+
+```text
+Verdict: pass / fail / needs decision
+
+Source of truth (established from the git diff trajectory, NOT version/frontmatter)
+- <artifact>: authoritative because <latest deliberate/approved decision in its diff history>
+
+Design-direction trajectory (per artifact: ADR, spec, wireframe, story)
+- <artifact>: <one-line-per-commit summary, oldest -> newest> => <direction>
+
+Findings
+- <severity>: <file/state> contradicts <source of truth> because ...
+
+Wireframes
+<ASCII art, not just paths>
+
+Impacts
+- ADR: none / update needed
+- Spec: none / update needed
+- Wireframes: none / update needed
+- Storybook stories: none / update needed
+- Implementation: none / update needed
+
+Next action
+- <one concrete step>
+```
+
+For collaborative mode, keep the response conversational, but still draw the
+current or proposed wireframes directly in chat.

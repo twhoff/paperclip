@@ -1,0 +1,82 @@
+// agent-fs status — human/json summary of session state, registry events, sizes.
+
+import fs from 'node:fs';
+import path from 'node:path';
+
+function dirSize(p) {
+  let total = 0;
+  try {
+    const entries = fs.readdirSync(p, { withFileTypes: true });
+    for (const entry of entries) {
+      const full = path.join(p, entry.name);
+      if (entry.isDirectory()) total += dirSize(full);
+      else {
+        try {
+          total += fs.statSync(full).size;
+        } catch {
+          // ignore
+        }
+      }
+    }
+  } catch {
+    // missing directory or permission error
+  }
+  return total;
+}
+
+function fmtBytes(n) {
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let v = n;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  return `${v.toFixed(v < 10 && i > 0 ? 1 : 0)} ${units[i]}`;
+}
+
+export function statusVerb(args, ctx) {
+  const events = ctx.registry.readAll();
+  const verbCounts = {};
+  for (const e of events) {
+    verbCounts[e.verb] = (verbCounts[e.verb] ?? 0) + 1;
+  }
+
+  const categories = ['scratch', 'evidence', 'sessionState', 'tmp', 'logs'];
+  const sizes = {};
+  for (const cat of categories) {
+    sizes[cat] = dirSize(ctx.layout[cat]);
+  }
+
+  const summary = {
+    sessionId: ctx.sessionId,
+    sessionSource: ctx.sessionSource,
+    runtime: ctx.runtime,
+    agent: ctx.agent,
+    root: ctx.config.root,
+    sessionDir: ctx.layout.session,
+    eventCount: events.length,
+    verbCounts,
+    sizes,
+  };
+
+  if (args.json) {
+    process.stdout.write(JSON.stringify(summary, null, 2) + '\n');
+    return;
+  }
+
+  process.stdout.write(`agent-fs status\n`);
+  process.stdout.write(`  session     : ${summary.sessionId} (${summary.sessionSource})\n`);
+  process.stdout.write(`  runtime     : ${summary.runtime}\n`);
+  process.stdout.write(`  agent       : ${summary.agent ?? '—'}\n`);
+  process.stdout.write(`  root        : ${summary.root}\n`);
+  process.stdout.write(`  session dir : ${summary.sessionDir}\n\n`);
+  process.stdout.write(`  events: ${summary.eventCount}\n`);
+  for (const [v, c] of Object.entries(verbCounts)) {
+    process.stdout.write(`    ${v.padEnd(12)} ${c}\n`);
+  }
+  process.stdout.write(`\n  sizes:\n`);
+  for (const [cat, bytes] of Object.entries(sizes)) {
+    process.stdout.write(`    ${cat.padEnd(12)} ${fmtBytes(bytes).padStart(8)}\n`);
+  }
+}

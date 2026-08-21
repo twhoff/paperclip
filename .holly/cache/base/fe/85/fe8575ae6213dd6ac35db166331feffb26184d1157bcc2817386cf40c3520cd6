@@ -1,0 +1,436 @@
+/**
+ * dev-server.mjs
+ *
+ * Worktree detection, frontend package discovery, dev-server lifecycle
+ * management, and port-conflict resolution for playwright-screenshot.
+ *
+ * Agents can run playwright-screenshot from a git linked worktree and the
+ * CLI will automatically start a temporary frontend dev server on the
+ * requested localhost port, wait for it to be ready, capture screenshots,
+ * and leave the server running (managed by dev-server-daemon.mjs) for reuse.
+ *
+ * Auto-start only happens from linked git worktrees (where .git is a file).
+ * Main checkouts require the server to already be running.
+ */
+
+import fs from 'node:fs';
+import path from 'node:path';
+import http from 'node:http';
+import { spawn } from 'node:child_process';
+
+export const DEFAULT_REGISTRY_DIR = path.join('/tmp', 'ui-visual-capture', 'servers');
+export const DEFAULT_IDLE_MS = 5 * 60 * 1000; // 5 minutes
+
+// Known subdirectory candidates for frontend packages, in priority order
+export const FRONTEND_CANDIDATES = ['frontend', 'ui', 'app', 'web'];
+
+// ─── Git context ─────────────────────────────────────────────────────────────
+
+/**
+ * Classify whether `dir` (or an ancestor) is a linked git worktree or a main
+ * checkout, by looking for .git:
+ *   - .git as a FILE  → linked worktree
+ *   - .git as a DIR   → main checkout
+ *
+ * Returns { isWorktree, worktreeRoot }.
+ */
+export function classifyGitContext(dir) {
+  let current = path.resolve(dir);
+  while (true) {
+    const gitPath = path.join(current, '.git');
+    if (fs.existsSync(gitPath)) {
+      let stat;
+      try { stat = fs.statSync(gitPath); } catch { break; }
+      if (stat.isFile()) {
+        return { isWorktree: true, worktreeRoot: current };
+      }
+      if (stat.isDirectory()) {
+        return { isWorktree: false, worktreeRoot: null };
+      }
+    }
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return { isWorktree: false, worktreeRoot: null };
+}
+
+// ─── Frontend package detection ───────────────────────────────────────────────
+
+/**
+ * Find the best frontend package.json under `projectRoot`.
+ * Checks FRONTEND_CANDIDATES subdirectories first (in order), then the root.
+ * The package must have a `scripts.dev` entry.
+ * Returns { dir, packageJson } or null.
+ */
+export function findFrontendPackage(projectRoot) {
+  for (const sub of FRONTEND_CANDIDATES) {
+    const dir = path.join(projectRoot, sub);
+    const pkgPath = path.join(dir, 'package.json');
+    if (fs.existsSync(pkgPath)) {
+      try {
+        const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+        if (pkg?.scripts?.dev) return { dir, packageJson: pkg };
+      } catch { /* skip malformed */ }
+    }
+  }
+  // Fallback: root package.json
+  const rootPkg = path.join(projectRoot, 'package.json');
+  if (fs.existsSync(rootPkg)) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(rootPkg, 'utf8'));
+      if (pkg?.scripts?.dev) return { dir: projectRoot, packageJson: pkg };
+    } catch { /* skip */ }
+  }
+  return null;
+}
+
+/**
+ * Detect the package manager for a project directory by walking up looking
+ * for lockfiles.  Priority: pnpm > bun > yarn > npm (default).
+ */
+export function detectPackageManager(dir) {
+  let current = path.resolve(dir);
+  while (true) {
+    if (fs.existsSync(path.join(current, 'pnpm-lock.yaml'))) return 'pnpm';
+    if (fs.existsSync(path.join(current, 'bun.lockb'))) return 'bun';
+    if (fs.existsSync(path.join(current, 'yarn.lock'))) return 'yarn';
+    if (fs.existsSync(path.join(current, 'package-lock.json'))) return 'npm';
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return 'npm';
+}
+
+/**
+ * Detect the JS framework from package.json dependencies.
+ * Returns 'next' | 'vite' | 'cra' | 'generic'.
+ */
+export function detectFramework(packageJson) {
+  const deps = { ...packageJson?.dependencies, ...packageJson?.devDependencies };
+  if (deps.next) return 'next';
+  if (deps.vite) return 'vite';
+  if (deps['react-scripts']) return 'cra';
+  return 'generic';
+}
+
+/**
+ * Build spawn args and env overrides to start the dev server on `port`.
+ *
+ * For Vite: appends `-- --port PORT --host 127.0.0.1` (Vite ignores PORT env).
+ * For Next/CRA/generic: sets PORT env var (all three read it natively).
+ *
+ * Returns { args: string[], envOverride: Record<string, string> }.
+ */
+export function buildDevSpawnArgs(packageJson, packageManager, port) {
+  const framework = detectFramework(packageJson);
+  const base =
+    packageManager === 'yarn' ? ['yarn', 'dev'] :
+    packageManager === 'bun'  ? ['bun', 'run', 'dev'] :
+    packageManager === 'pnpm' ? ['pnpm', 'run', 'dev'] :
+    ['npm', 'run', 'dev'];
+
+  if (framework === 'vite') {
+    // Vite ignores PORT; pass CLI args after `--`
+    return {
+      args: [...base, '--', '--port', String(port), '--host', '127.0.0.1'],
+      envOverride: {},
+    };
+  }
+
+  // Next.js, CRA, and generic all respect the PORT env variable
+  return { args: base, envOverride: { PORT: String(port) } };
+}
+
+// ─── URL / port helpers ───────────────────────────────────────────────────────
+
+/**
+ * Extract the explicit localhost port from a URL string.
+ * Returns a number when the URL is localhost/127.0.0.1 AND has an explicit
+ * port component; returns null otherwise (including http://localhost with no
+ * port, which defaults to 80 — not a dev-server port).
+ */
+export function parseLocalhostPort(urlStr) {
+  try {
+    const u = new URL(urlStr);
+    if (
+      (u.hostname === 'localhost' || u.hostname === '127.0.0.1') &&
+      u.port !== ''
+    ) {
+      return parseInt(u.port, 10);
+    }
+  } catch { /* malformed URL */ }
+  return null;
+}
+
+// ─── Port readiness ───────────────────────────────────────────────────────────
+
+/**
+ * Check whether a localhost port is currently serving HTTP.
+ * Returns true if the port responds (any HTTP status), false otherwise.
+ */
+export function checkPortServing(port, { timeout = 1000 } = {}) {
+  return new Promise((resolve) => {
+    const req = http.get(
+      { hostname: '127.0.0.1', port, path: '/', timeout },
+      () => { req.destroy(); resolve(true); },
+    );
+    req.on('error', () => resolve(false));
+    req.on('timeout', () => { req.destroy(); resolve(false); });
+  });
+}
+
+/**
+ * Poll until `port` is serving HTTP, or until `timeoutMs` has elapsed.
+ * Throws if the port never responds in time.
+ */
+export async function waitForPort(port, { timeoutMs = 60_000, intervalMs = 500 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await checkPortServing(port, { timeout: Math.min(1000, deadline - Date.now()) })) return;
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  throw new Error(`Port ${port} did not respond within ${timeoutMs}ms`);
+}
+
+// ─── Server metadata registry ─────────────────────────────────────────────────
+
+function metadataFilePath(port, registryDir) {
+  return path.join(registryDir, `${port}.json`);
+}
+
+function pidFilePath(port, registryDir) {
+  return path.join(registryDir, `${port}.pid`);
+}
+
+/** Load server metadata for `port` from the registry. Returns null if missing/unreadable. */
+export function loadServerMetadata(port, registryDir = DEFAULT_REGISTRY_DIR) {
+  try {
+    return JSON.parse(fs.readFileSync(metadataFilePath(port, registryDir), 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Persist server metadata for `port` to the registry. Creates the registry dir if needed.
+ *
+ * Also writes a plain-text `<port>.pid` file containing just the dev server PID. The
+ * `.pid` file is for external cleanup tools (e.g. `pcli worktree clean`, a `pkill -F`
+ * one-liner) that want to discover and stop orphan dev servers without parsing JSON.
+ */
+export function saveServerMetadata(port, data, registryDir = DEFAULT_REGISTRY_DIR) {
+  fs.mkdirSync(registryDir, { recursive: true });
+  fs.writeFileSync(
+    metadataFilePath(port, registryDir),
+    JSON.stringify(data, null, 2) + '\n',
+  );
+  if (data && typeof data.pid === 'number') {
+    try {
+      fs.writeFileSync(pidFilePath(port, registryDir), String(data.pid) + '\n');
+    } catch { /* best-effort sidecar */ }
+  }
+}
+
+/** Update `lastUsedAt` for a running server so the watchdog resets its idle timer. */
+export function touchServerMetadata(port, registryDir = DEFAULT_REGISTRY_DIR) {
+  const meta = loadServerMetadata(port, registryDir);
+  if (!meta) return;
+  meta.lastUsedAt = Date.now();
+  saveServerMetadata(port, meta, registryDir);
+}
+
+/** Remove the metadata file (and pid sidecar) for `port`. Called when the server is stopped. */
+export function clearServerMetadata(port, registryDir = DEFAULT_REGISTRY_DIR) {
+  try { fs.unlinkSync(metadataFilePath(port, registryDir)); } catch { /* already gone */ }
+  try { fs.unlinkSync(pidFilePath(port, registryDir)); } catch { /* already gone */ }
+}
+
+// ─── Server decision ─────────────────────────────────────────────────────────
+
+/**
+ * Decide what to do with the dev server for the given `port` and `cwd`.
+ *
+ * Possible return shapes:
+ *
+ *   { mode: 'start', packageDir, packageJson, packageManager, worktreeRoot }
+ *      → start a new server (worktree + free port)
+ *
+ *   { mode: 'attach', worktreeRoot, pid }
+ *      → port is already serving and metadata matches the current worktree
+ *
+ *   { mode: 'attach-explicit', worktreeRoot }
+ *      → --attach-existing was supplied; capture from whatever is running
+ *
+ *   { mode: 'no-server' }
+ *      → main checkout + port already serving; just capture
+ *
+ *   { mode: 'conflict', reason }
+ *      → cannot proceed; `reason` is a human-readable explanation + suggestions
+ *
+ *   { mode: 'require-running', reason }
+ *      → main checkout + port not serving; agent must start the server first
+ */
+export async function decideServerMode({
+  port,
+  cwd,
+  attachExisting = false,
+  registryDir = DEFAULT_REGISTRY_DIR,
+}) {
+  const { isWorktree, worktreeRoot } = classifyGitContext(cwd);
+  const serving = await checkPortServing(port);
+  const meta = loadServerMetadata(port, registryDir);
+
+  if (serving) {
+    if (attachExisting) {
+      touchServerMetadata(port, registryDir);
+      return { mode: 'attach-explicit', worktreeRoot: meta?.worktreeRoot ?? null };
+    }
+
+    if (!isWorktree) {
+      // Main checkout: any running server is fine to capture from
+      if (meta) touchServerMetadata(port, registryDir);
+      return { mode: 'no-server' };
+    }
+
+    // In a worktree: check if this server belongs to us
+    if (meta && meta.worktreeRoot === worktreeRoot) {
+      touchServerMetadata(port, registryDir);
+      return { mode: 'attach', worktreeRoot, pid: meta.pid };
+    }
+
+    // Different worktree or no metadata → conflict
+    if (meta) {
+      return {
+        mode: 'conflict',
+        reason:
+          `Port ${port} is in use by a server started from a different worktree.\n` +
+          `  Worktree: ${meta.worktreeRoot}\n` +
+          `  Package:  ${meta.packageDir ?? 'unknown'}\n` +
+          `  PID:      ${meta.pid ?? 'unknown'}\n` +
+          `  Log:      ${meta.logPath ?? 'none'}\n\n` +
+          `To capture from that server:  rerun with --attach-existing\n` +
+          `To use your own server:       specify a different localhost port`,
+      };
+    }
+
+    return {
+      mode: 'conflict',
+      reason:
+        `Port ${port} is in use by an unknown process (no server metadata found).\n\n` +
+        `To capture from that server:  rerun with --attach-existing\n` +
+        `To start your own server:     specify a different localhost port`,
+    };
+  }
+
+  // Port is free
+  if (!isWorktree) {
+    return {
+      mode: 'require-running',
+      reason:
+        `The current directory is a main checkout (not a linked git worktree). ` +
+        `Auto-starting a dev server is only supported from a worktree.\n` +
+        `Start the frontend server manually (e.g. cd frontend && pnpm dev) and rerun.`,
+    };
+  }
+
+  // Worktree + free port → find and prepare the frontend start
+  const frontend = findFrontendPackage(worktreeRoot);
+  if (!frontend) {
+    return {
+      mode: 'conflict',
+      reason:
+        `Could not find a frontend package with a "dev" script under ${worktreeRoot}.\n` +
+        `Checked: ${FRONTEND_CANDIDATES.map((d) => d + '/').join(', ')} and the root package.json.\n` +
+        `Start the frontend server manually and rerun with the correct port.`,
+    };
+  }
+
+  const packageManager = detectPackageManager(frontend.dir);
+  return {
+    mode: 'start',
+    packageDir: frontend.dir,
+    packageJson: frontend.packageJson,
+    packageManager,
+    worktreeRoot,
+  };
+}
+
+// ─── Server lifecycle ─────────────────────────────────────────────────────────
+
+/**
+ * Start the frontend dev server on `port`, store metadata, spawn a watchdog,
+ * wait for the port to respond, then return { pid, logPath }.
+ *
+ * Throws if the server doesn't become ready within `startTimeoutMs`.
+ */
+export async function startDevServer({
+  port,
+  packageDir,
+  packageJson,
+  packageManager,
+  worktreeRoot,
+  registryDir = DEFAULT_REGISTRY_DIR,
+  startTimeoutMs = 60_000,
+  daemonPath,
+  idleMs = DEFAULT_IDLE_MS,
+}) {
+  const { args, envOverride } = buildDevSpawnArgs(packageJson, packageManager, port);
+  const logPath = path.join(registryDir, `${port}.log`);
+  fs.mkdirSync(registryDir, { recursive: true });
+
+  const env = { ...process.env, ...envOverride };
+  const logFd = fs.openSync(logPath, 'w');
+  const child = spawn(args[0], args.slice(1), {
+    cwd: packageDir,
+    env,
+    detached: true,
+    stdio: ['ignore', logFd, logFd],
+  });
+  fs.closeSync(logFd);
+  child.unref();
+
+  const pid = child.pid;
+  const now = Date.now();
+  const meta = {
+    port,
+    pid,
+    worktreeRoot,
+    packageDir,
+    command: args.join(' '),
+    logPath,
+    startedAt: now,
+    lastUsedAt: now,
+    expiresAt: now + idleMs,
+  };
+  saveServerMetadata(port, meta, registryDir);
+
+  // Spawn the watchdog process so the server auto-stops after idle time
+  const resolvedDaemonPath =
+    daemonPath ?? new URL('./dev-server-daemon.mjs', import.meta.url).pathname;
+  if (fs.existsSync(resolvedDaemonPath)) {
+    const daemon = spawn(
+      process.execPath,
+      [resolvedDaemonPath, String(port), registryDir],
+      {
+        detached: true,
+        stdio: 'ignore',
+        env: { ...process.env, UI_VISUAL_CAPTURE_IDLE_MS: String(idleMs) },
+      },
+    );
+    daemon.unref();
+  }
+
+  try {
+    await waitForPort(port, { timeoutMs: startTimeoutMs });
+  } catch (err) {
+    clearServerMetadata(port, registryDir);
+    throw new Error(
+      `Dev server on port ${port} did not become ready within ${startTimeoutMs}ms.\n` +
+      `Log: ${logPath}\n${err.message}`,
+    );
+  }
+
+  return { pid, logPath };
+}

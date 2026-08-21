@@ -1,0 +1,66 @@
+---
+name: orchestrate
+description: >-
+  Command surface for bounded swarm delivery of an epic across worker agents.
+  Use when the user asks to "orchestrate", "run the swarm", or deliver an epic's
+  children in parallel. This is a thin entrypoint: it routes to the
+  orchestration and swarm-delivery reference skills and runs the orchestrate-swarm
+  workflow. Owns HOW work is dispatched, not WHAT to build (that is `track`).
+---
+
+# Orchestrate
+
+`orchestrate` is the command surface that kicks off **bounded swarm delivery**:
+the Orchestrator stays in one window and dispatches subagent workers
+(`runSubagent` on VS Code, `Agent` on Claude Code) that each take one assigned
+issue, return a structured report, and exit.
+
+**Requires `multi-agent` mode.** Check `holly mode` (or `holly status`) first. In
+`single-agent` mode sub-agent dispatch is hard-blocked by the PreToolUse hook, so
+`orchestrate` cannot run — deliver the work directly or ask the user to switch
+with `holly mode multi` (this session) / `holly mode multi --default` (project
+default).
+
+This skill is intentionally thin. It exists to give consumers a `/orchestrate`
+slash command and to point at the material that does the real work:
+
+- **Workflow:** `workflows/orchestrate-swarm.yaml` — the executable step
+  sequence, run via the [use-workflow](../use-workflow/SKILL.md) executor
+  contract. (There is no separate `orchestrate.yaml`; orchestration *is* swarm
+  delivery.)
+- **[orchestration](../orchestration/SKILL.md)** — the Orchestrator's routing
+  tables, formula system, recovery playbooks, and learning mechanism. The
+  operations manual that complements the `orchestrator-v2` agent definition.
+- **[swarm-delivery](../swarm-delivery/SKILL.md)** — the swarm agents, capability
+  tiers, model routing, granularity limits, reviewer gates, and integration
+  ownership.
+
+## When to use
+
+- An epic already exists with children that are independently deliverable —
+  ideally already labelled with `agent-path` chains by the `track` command.
+- The parallelism is real: multiple independent chains, or enough volume that
+  dispatching bounded workers beats delivering serially with `implement`.
+
+If the work is a single coherent change, or the children are tightly coupled
+and mostly sequential, prefer `implement <epic-id>` instead — a swarm adds
+coordination overhead with no payoff.
+
+## What it does
+
+1. Confirm the epic and its ready children, then confirm the delivery plan with
+   the user before dispatching anything.
+2. Load the `orchestration` and `swarm-delivery` reference skills and follow the
+   `orchestrate-swarm` workflow.
+3. Route each ready child to the cheapest worker tier whose capability envelope
+   covers it; gate every result through the reviewer tier; own integration
+   centrally.
+4. Recover failed or escalated assignments per the orchestration recovery
+   playbooks rather than improvising.
+
+## Prerequisites
+
+`orchestrate-swarm` is contributed by the active Holly adapter. If your project
+has no supported adapter, the core placeholder workflow hard-blocks and tells
+you to fix `.holly/config.toml` and run `holly sync workflows`. Do not improvise
+a swarm in that case.

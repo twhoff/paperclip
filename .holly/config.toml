@@ -1,0 +1,12 @@
+# holly project configuration — see `holly validate` for active values.
+[holly]
+adapter = "beads"
+# timezone = "Australia/Melbourne"  # uncomment to override system local
+
+[worktrees]
+# base_dir = "../<project>-worktrees"  # uncomment to pin worktree location
+
+[hooks]
+chat_poll_enabled = true
+chat_poll_interval_seconds = 15
+enforce_task_intent = true

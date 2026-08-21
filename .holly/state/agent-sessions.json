@@ -1,0 +1,42 @@
+{
+  "sessions": {
+    "sess-d85e6e": {
+      "agent_name": "claude-opus",
+      "status": "active",
+      "started_at": "2026-05-24T22:33:49.539533+08:00",
+      "ended_at": null,
+      "last_activity": "2026-05-24T22:34:05.323140+08:00",
+      "current_task": {
+        "description": "pcl-kgs: fix(copilot-cli): dedup live log when delta and final assistant.message have same text",
+        "started_at": "2026-05-24T22:34:05.323140+08:00",
+        "ended_at": null
+      },
+      "task_history": [],
+      "task_intent": "Deliver pcl-kgs in worktree at /Users/twhoffmann/Projects/paperclip-worktrees/pcl-kgs. Commit there; finish with `eval \"$(holly task finish)\"`.",
+      "task_intent_verified": true,
+      "worktree_path": "/Users/twhoffmann/Projects/paperclip-worktrees/pcl-kgs",
+      "worktree_issue_id": "pcl-kgs",
+      "subagents": [],
+      "pending_subagents": []
+    },
+    "agent-E315A9E8-A828-4EC3-B78D-4024CA08DC7F": {
+      "agent_name": "Kryten",
+      "status": "active",
+      "started_at": "2026-08-21T17:47:06.225181+10:00",
+      "ended_at": null,
+      "last_activity": "2026-08-21T17:47:06.225181+10:00",
+      "current_task": null,
+      "task_history": [],
+      "subagents": [],
+      "pending_subagents": [],
+      "runtime_threads": {
+        "codex": "01a02349-b0dc-75e0-a6de-5fb71c05057e"
+      },
+      "agent_fs_reminded": false,
+      "intent_gate_denials": 0,
+      "intent_affirmations": 0,
+      "intent_continuity_skips": 0
+    }
+  },
+  "uuid_map": {}
+}

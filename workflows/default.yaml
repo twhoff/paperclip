@@ -1,0 +1,19 @@
+# yaml-language-server: $schema=../schemas/workflow.schema.json
+
+name: Default Workflow
+description: >-
+  Fallback workflow for when no specific workflow matches the user's intent.
+  Provides a general-purpose structure for executing tasks safely.
+
+preflight: []
+
+steps:
+  - prompt: >-
+      Execute the task as planned. Work through each todo item sequentially,
+      marking items in-progress before starting and completed immediately
+      after finishing. Delegate to sub-agents via runSubagent where appropriate.
+
+postflight:
+  - prompt: >-
+      Verify the work is complete. Review changes, confirm all todo items
+      are resolved, and ensure nothing was missed.

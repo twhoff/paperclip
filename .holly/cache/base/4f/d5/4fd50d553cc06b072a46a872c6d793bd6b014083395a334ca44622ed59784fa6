@@ -1,0 +1,90 @@
+# Runtime integration
+
+Notes on integrating agent-fs into each agent runtime. The CLI itself is
+runtime-agnostic; the differences live in install and enforcement.
+
+## Claude Code
+
+**Discovery**: Sourced from `~/.zshrc` (or whichever shell rc the user runs).
+The init script writes `~/.config/agent-fs/env.sh` and optionally appends a
+source line.
+
+**Enforcement**: PreToolUse hook at `hooks/agent-fs-guard.sh`. Registered in
+`~/.claude/settings.json` under `hooks.PreToolUse` by:
+
+```bash
+agent-fs init --runtime claude-code
+```
+
+The hook coexists with other PreToolUse entries (the user's existing
+`bash-guard` chain continues to run; Claude Code dispatches all matchers).
+
+Block message format: stdout JSON with `decision: "block"` and `reason`
+containing the offending paths plus the recommended verbs.
+
+## Codex CLI
+
+**Discovery**: Same env script (`~/.config/agent-fs/env.sh`) sourced from
+`~/.zshrc`. Codex inherits the parent shell environment.
+
+**Enforcement**: Codex does not have a hook system equivalent to Claude Code's
+PreToolUse. Defense is convention-only:
+
+1. `TMPDIR` redirect catches mktemp-style and POSIX-aware tools.
+2. `AGENTS.md` addendum (week 2) tells the agent: "never write `/tmp/...` —
+   use `$AGENT_FS_BIN` instead."
+3. `agent-fs orphans` runs nightly (week 4) to surface leaks.
+
+## Warp
+
+**Discovery**: Same env script via shell rc. Warp profiles run zsh/bash and
+inherit `~/.zshrc`.
+
+**Enforcement**: Same as Codex — convention + TMPDIR + orphans audit.
+
+## VS Code (with Copilot or Claude)
+
+**Discovery**: VS Code terminals inherit the parent shell environment, so the
+rc-sourced env script applies. For non-terminal extensions, set the env in
+`settings.json` → `terminal.integrated.env.osx`:
+
+```json
+{
+  "terminal.integrated.env.osx": {
+    "AGENT_FS_BIN": "/Users/<you>/.agents/skills/agent-fs/bin/agent-fs"
+  }
+}
+```
+
+**Enforcement**: depends on the extension. Claude in VS Code uses the same
+Claude Code hook chain. Copilot doesn't have hooks.
+
+## Adapter-native runtime
+
+**Discovery**: a tracker adapter's agent spawn may set a native runtime
+session-ID env var (and related identifiers) before invoking the agent. The
+agent-fs env script picks that up as the session ID (step 2 of the resolution
+chain).
+
+For the env script to be in scope, the adapter's spawn must inherit the parent
+shell environment (it does by default).
+
+**Enforcement**: depends on the agent type. Agents that run under the Claude
+Code runtime go through the Claude Code hook chain; other local agent types fall
+back to convention (TMPDIR + orphans audit).
+
+When an adapter invokes an agent via emulation (no native runtime env var set),
+the resolution falls through to the adapter state probe (step 6) — a read-only
+query for the current run/session id. To disable that probe (defensive), set
+`AGENT_FS_DISABLE_PCLI=1`; the deterministic git-fallback (step 7) kicks in
+instead.
+
+## Generic shell
+
+The git-fallback (step 7) means any plain shell session has a stable session
+ID derived from the git repo root + the parent process ID. Two shells in the
+same repo produce two different sessions. A child shell shares its parent's
+session.
+
+If you want a fixed session ID for a shell session (e.g. for scripting),
+export `AGENT_FS_SESSION_ID` manually before invoking agent-fs.

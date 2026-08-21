@@ -1,0 +1,421 @@
+#!/usr/bin/env node
+import fs from 'node:fs';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
+
+import { parseArgs } from './lib/args.mjs';
+import { applyViewportsOverride } from './lib/viewports.mjs';
+import { resolutionToCaptureOpts } from './lib/resolution.mjs';
+import {
+  findProjectRoot,
+  findPlaywrightModule,
+  resolveOutputPaths,
+} from './lib/paths.mjs';
+import {
+  buildContextOptions,
+  waitForStableDom,
+  loadInteractionScript,
+} from './lib/capture.mjs';
+import { renderHelp } from './lib/help.mjs';
+import {
+  decideServerMode,
+  startDevServer,
+  touchServerMetadata,
+  parseLocalhostPort,
+} from './lib/dev-server.mjs';
+
+const EXIT_OK = 0;
+const EXIT_PARTIAL = 1;
+const EXIT_BAD_ARGS = 2;
+const EXIT_NO_PLAYWRIGHT = 3;
+const EXIT_SERVER_ERROR = 4;
+
+function todayDateStr(d = new Date()) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+async function main() {
+  let opts;
+  try {
+    opts = parseArgs(process.argv.slice(2));
+  } catch (err) {
+    process.stderr.write(`error: ${err.message}\n`);
+    return EXIT_BAD_ARGS;
+  }
+
+  if (opts.help) {
+    process.stdout.write(renderHelp());
+    return EXIT_OK;
+  }
+
+  let viewports;
+  try {
+    viewports = applyViewportsOverride(opts.viewports);
+  } catch (err) {
+    process.stderr.write(`error: ${err.message}\n`);
+    return EXIT_BAD_ARGS;
+  }
+
+  const captureRes = resolutionToCaptureOpts(opts.resolution);
+
+  const projectRoot = findProjectRoot(process.cwd()) ?? process.cwd();
+
+  let outputResolved;
+  try {
+    outputResolved = resolveOutputPaths({
+      arg: opts.outputPath,
+      projectRoot,
+      viewports,
+      ext: captureRes.ext,
+      today: todayDateStr(),
+      cwd: process.cwd(),
+    });
+  } catch (err) {
+    process.stderr.write(`error: ${err.message}\n`);
+    return EXIT_BAD_ARGS;
+  }
+
+  const playwrightPath = findPlaywrightModule(process.cwd());
+  if (!playwrightPath) {
+    process.stderr.write(
+      'error: playwright not found in any ancestor node_modules.\n' +
+        'hint: cd into your project, run `pnpm install`, then `pnpm exec playwright install chromium`.\n',
+    );
+    return EXIT_NO_PLAYWRIGHT;
+  }
+
+  // ─── Server preflight ────────────────────────────────────────────────────────
+  // For localhost URLs with an explicit port, manage the frontend dev server.
+  const localhostPort = parseLocalhostPort(opts.url);
+  let serverSummary = null;
+
+  if (localhostPort !== null) {
+    let serverDecision;
+    try {
+      serverDecision = await decideServerMode({
+        port: localhostPort,
+        cwd: process.cwd(),
+        attachExisting: opts.attachExisting,
+      });
+    } catch (err) {
+      process.stderr.write(`error: server preflight failed: ${err.message}\n`);
+      return EXIT_SERVER_ERROR;
+    }
+
+    switch (serverDecision.mode) {
+      case 'conflict':
+      case 'require-running':
+        process.stderr.write(`error: ${serverDecision.reason}\n`);
+        return EXIT_SERVER_ERROR;
+
+      case 'start': {
+        process.stderr.write(
+          `info: starting dev server on port ${localhostPort} ` +
+          `from ${serverDecision.packageDir}\n`,
+        );
+        try {
+          const { pid, logPath } = await startDevServer({
+            port: localhostPort,
+            packageDir: serverDecision.packageDir,
+            packageJson: serverDecision.packageJson,
+            packageManager: serverDecision.packageManager,
+            worktreeRoot: serverDecision.worktreeRoot,
+          });
+          serverSummary = {
+            mode: 'started',
+            port: localhostPort,
+            worktreeRoot: serverDecision.worktreeRoot,
+            packageDir: serverDecision.packageDir,
+            pid,
+            logPath,
+          };
+        } catch (err) {
+          process.stderr.write(`error: ${err.message}\n`);
+          return EXIT_SERVER_ERROR;
+        }
+        break;
+      }
+
+      case 'attach':
+        touchServerMetadata(localhostPort);
+        serverSummary = {
+          mode: 'attached',
+          port: localhostPort,
+          worktreeRoot: serverDecision.worktreeRoot,
+          pid: serverDecision.pid,
+        };
+        break;
+
+      case 'attach-explicit':
+        touchServerMetadata(localhostPort);
+        serverSummary = {
+          mode: 'attached-explicit',
+          port: localhostPort,
+          worktreeRoot: serverDecision.worktreeRoot ?? null,
+        };
+        break;
+
+      case 'no-server':
+        // Main checkout with server already running; capture from it directly
+        serverSummary = { mode: 'external', port: localhostPort };
+        break;
+    }
+  }
+
+  let interactionScript = null;
+  if (opts.scriptPath) {
+    try {
+      interactionScript = await loadInteractionScript(path.resolve(opts.scriptPath));
+    } catch (err) {
+      process.stderr.write(`error: ${err.message}\n`);
+      return EXIT_BAD_ARGS;
+    }
+  }
+
+  fs.mkdirSync(outputResolved.outputDir, { recursive: true });
+
+  let chromium;
+  try {
+    ({ chromium } = await import(pathToFileURL(playwrightPath).href));
+  } catch (err) {
+    process.stderr.write(`error: failed to import playwright at ${playwrightPath}: ${err.message}\n`);
+    return EXIT_NO_PLAYWRIGHT;
+  }
+
+  let browser;
+  try {
+    browser = await chromium.launch({ headless: true });
+  } catch (err) {
+    process.stderr.write(
+      `error: chromium.launch failed: ${err.message}\n` +
+        'hint: run `pnpm exec playwright install chromium` from your project.\n',
+    );
+    return EXIT_NO_PLAYWRIGHT;
+  }
+
+  const captures = await Promise.allSettled(
+    viewports.map((vp) =>
+      captureViewport({
+        browser,
+        viewport: vp,
+        opts,
+        captureRes,
+        outputPath: outputResolved.paths.get(vp.name),
+        interactionScript,
+      }),
+    ),
+  );
+
+  await browser.close().catch(() => {});
+
+  const results = captures.map((r, i) => {
+    const vpName = viewports[i].name;
+    if (r.status === 'fulfilled') return r.value;
+    return {
+      viewport: vpName,
+      status: 'error',
+      error: r.reason?.message ?? String(r.reason),
+    };
+  });
+
+  const anyFailed = results.some((r) => r.status === 'error');
+
+  // Write capture manifest so reviewers can verify evidence validity.
+  const manifestDir = path.join(outputResolved.outputDir, 'manifests');
+  fs.mkdirSync(manifestDir, { recursive: true });
+  const manifestPath = path.join(manifestDir, 'capture-manifest.json');
+  const manifest = {
+    capturedAt: new Date().toISOString(),
+    captureTarget: opts.url,
+    route: (() => { try { return new URL(opts.url).pathname; } catch { return opts.url; } })(),
+    interaction: opts.scriptPath ? path.basename(opts.scriptPath) : null,
+    readyCondition: opts.scriptPath
+      ? `networkidle + interaction script: ${path.basename(opts.scriptPath)}`
+      : 'networkidle',
+    outputDir: outputResolved.outputDir,
+    viewports: results.map((r) => ({
+      viewport: r.viewport,
+      status: r.status,
+      pngPath: r.path ?? null,
+      webmPath: r.videoPath ?? null,
+      webmFramesDir: r.framesDir ?? null,
+      webmContactSheetPath: r.contactSheetPath ?? null,
+      finalWebmFrameMatchesSettledPng: null,
+      webmReachesIntendedFinalUiState: null,
+      spinnerOnlyEvidence: null,
+      validForReview: r.status === 'ok' ? null : false,
+      ...(r.error ? { error: r.error } : {}),
+    })),
+  };
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+
+  const summary = {
+    status: anyFailed ? (results.every((r) => r.status === 'error') ? 'error' : 'partial') : 'ok',
+    outputDir: outputResolved.outputDir,
+    manifestPath,
+    server: serverSummary,
+    captures: results,
+  };
+  process.stdout.write(JSON.stringify(summary, null, 2) + '\n');
+
+  return anyFailed ? EXIT_PARTIAL : EXIT_OK;
+}
+
+function generateWebmEvidence(webmPath, viewportName, outputDir, opts) {
+  const framesDir = path.join(outputDir, 'frames', `${viewportName}-webm`);
+  const contactSheetPath = path.join(
+    outputDir, 'contact-sheets', `${viewportName}-webm-contact-sheet.png`,
+  );
+
+  fs.mkdirSync(framesDir, { recursive: true });
+
+  // Extract frames at the requested review FPS so animations can be inspected frame-by-frame.
+  const frameResult = spawnSync(
+    'ffmpeg',
+    ['-y', '-i', webmPath, '-vf', `fps=${opts.videoFps}`, path.join(framesDir, 'frame-%03d.png')],
+    { stdio: ['ignore', 'pipe', 'pipe'] },
+  );
+  if (frameResult.status !== 0 || frameResult.error) {
+    const errTail = frameResult.stderr?.toString().trim().split('\n').at(-1)
+      ?? String(frameResult.error ?? 'unknown error');
+    process.stderr.write(
+      `warn: ffmpeg frame extraction failed for ${path.basename(webmPath)}: ${errTail}\n`,
+    );
+    return { framesDir: null, contactSheetPath: null };
+  }
+
+  // Build a labelled contact-sheet PNG via Pillow.
+  const scriptDir = path.dirname(new URL(import.meta.url).pathname);
+  const contactSheetScript = path.join(scriptDir, 'lib', 'webm-contact-sheet.py');
+  fs.mkdirSync(path.dirname(contactSheetPath), { recursive: true });
+
+  const sheetResult = spawnSync(
+    'python3',
+    [
+      contactSheetScript,
+      '--frames-dir', framesDir,
+      '--output', contactSheetPath,
+      '--fps', String(opts.videoFps),
+      '--viewport', viewportName,
+      '--columns', String(opts.contactSheetColumns),
+      '--thumb-width', String(opts.contactSheetThumbWidth),
+    ],
+    { stdio: ['ignore', 'pipe', 'pipe'] },
+  );
+  if (sheetResult.status !== 0 || sheetResult.error) {
+    const errTail = sheetResult.stderr?.toString().trim().split('\n').at(-1)
+      ?? String(sheetResult.error ?? 'unknown error');
+    process.stderr.write(`warn: contact sheet generation failed for ${viewportName}: ${errTail}\n`);
+    return { framesDir, contactSheetPath: null };
+  }
+
+  return { framesDir, contactSheetPath };
+}
+
+async function captureViewport({ browser, viewport, opts, captureRes, outputPath, interactionScript }) {
+  const videoDir = opts.scriptPath && !opts.noVideo
+    ? path.join(path.dirname(outputPath), '.videos', viewport.name)
+    : null;
+  if (videoDir) fs.mkdirSync(videoDir, { recursive: true });
+
+  const ctxOpts = buildContextOptions(viewport, opts, captureRes, videoDir);
+
+  let context;
+  let page;
+  let videoPathBefore = null;
+  try {
+    context = await browser.newContext(ctxOpts);
+    page = await context.newPage();
+    await page.goto(opts.url, { waitUntil: opts.waitUntil, timeout: 30000 });
+
+    if (interactionScript) {
+      await interactionScript({ page, viewport, context });
+    }
+
+    if (opts.scrollY !== undefined) {
+      await page.evaluate((y) => window.scrollTo(0, y), opts.scrollY);
+    } else if (opts.scrollTo) {
+      await page.locator(opts.scrollTo).scrollIntoViewIfNeeded();
+    }
+
+    const stable = await waitForStableDom(page, { timeoutMs: opts.stableTimeout });
+    if (stable.timedOut) {
+      process.stderr.write(`warn: ${viewport.name}: DOM did not stabilise within ${opts.stableTimeout}ms; capturing anyway\n`);
+    }
+
+    if (videoDir) {
+      const v = page.video();
+      if (v) videoPathBefore = await v.path();
+    }
+
+    fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+    const shotOpts = {
+      path: outputPath,
+      type: captureRes.type,
+    };
+    if (captureRes.quality !== undefined) shotOpts.quality = captureRes.quality;
+    if (opts.clipTo) {
+      // Crop to a single component: capture only the matched element's bounding
+      // box. fullPage / viewport-only do not apply to an element screenshot.
+      const target = page.locator(opts.clipTo).first();
+      await target.waitFor({ state: 'visible', timeout: opts.stableTimeout });
+      await target.screenshot(shotOpts);
+    } else {
+      shotOpts.fullPage = !opts.viewportOnly;
+      await page.screenshot(shotOpts);
+    }
+
+    await context.close();
+
+    let videoPath = null;
+    if (videoPathBefore) {
+      videoPath = outputPath.replace(/\.[^.]+$/, '.webm');
+      try {
+        fs.renameSync(videoPathBefore, videoPath);
+        try { fs.rmdirSync(path.dirname(videoPathBefore)); } catch {}
+      } catch {
+        videoPath = videoPathBefore;
+      }
+    }
+
+    let framesDir = null;
+    let contactSheetPath = null;
+    if (videoPath) {
+      const outputDir = path.dirname(outputPath);
+      ({ framesDir, contactSheetPath } = generateWebmEvidence(
+        videoPath,
+        viewport.name,
+        outputDir,
+        opts,
+      ));
+    }
+
+    return {
+      viewport: viewport.name,
+      status: 'ok',
+      path: outputPath,
+      ...(videoPath ? { videoPath } : {}),
+      ...(framesDir ? { framesDir } : {}),
+      ...(contactSheetPath ? { contactSheetPath } : {}),
+    };
+  } catch (err) {
+    if (context) await context.close().catch(() => {});
+    return {
+      viewport: viewport.name,
+      status: 'error',
+      error: err.message ?? String(err),
+    };
+  }
+}
+
+main().then(
+  (code) => process.exit(code),
+  (err) => {
+    process.stderr.write(`fatal: ${err.stack ?? err}\n`);
+    process.exit(1);
+  },
+);

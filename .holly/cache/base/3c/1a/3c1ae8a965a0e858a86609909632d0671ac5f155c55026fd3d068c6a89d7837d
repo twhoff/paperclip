@@ -1,0 +1,27 @@
+// Per-invocation context. Resolves config, session, layout, and registry once
+// and hands them to verbs.
+
+import { loadConfig } from './config.mjs';
+import { resolveSessionId } from './session-id.mjs';
+import { detectRuntime, detectAgentLabel } from './runtime.mjs';
+import { sessionLayout } from './paths.mjs';
+import { Registry } from './registry.mjs';
+
+export function buildContext() {
+  const config = loadConfig();
+  const session = resolveSessionId();
+  const layout = sessionLayout(config.root, session.id);
+  const runtime = detectRuntime();
+  const agent = detectAgentLabel();
+  const registry = new Registry(layout.session);
+
+  return {
+    config,
+    sessionId: session.id,
+    sessionSource: session.source,
+    runtime,
+    agent,
+    layout,
+    registry,
+  };
+}

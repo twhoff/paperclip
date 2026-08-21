@@ -1,0 +1,44 @@
+// `mobile_safari` is the same 390-px width as `mobile`, but the height accounts
+// for iPhone Safari top + bottom browser chrome (full iPhone 14 inner height
+// 844 - Safari header ~96 - Safari toolbar ~84 ≈ 664). Sheets, modals, drawers
+// and any other fixed/sticky overlay that ships to mobile MUST be captured at
+// this height to prove the layout survives real iPhone Safari chrome and not
+// just the fantasy chrome-less viewport. See SKILL.md "Sheet/modal geometry
+// assertions" for the mandate and the assertion snippet.
+export const DEFAULT_VIEWPORTS = [
+  { name: 'mobile', width: 390, height: 844 },
+  { name: 'mobile_safari', width: 390, height: 664 },
+  { name: 'tablet_p', width: 768, height: 1024 },
+  { name: 'tablet_l', width: 1024, height: 768 },
+  { name: 'desktop', width: 1280, height: 900 },
+];
+
+const BY_NAME = new Map(DEFAULT_VIEWPORTS.map((v) => [v.name, v]));
+
+export function applyViewportsOverride(spec) {
+  if (spec === undefined || spec === null) return DEFAULT_VIEWPORTS.map((v) => ({ ...v }));
+  if (typeof spec !== 'string' || spec.trim() === '') {
+    throw new Error('--viewports must not be empty');
+  }
+  const parts = spec.split(',').map((p) => p.trim()).filter(Boolean);
+  if (parts.length === 0) throw new Error('--viewports must not be empty');
+  const result = [];
+  for (const part of parts) {
+    const eq = part.indexOf('=');
+    const name = eq === -1 ? part : part.slice(0, eq).trim();
+    const sizeStr = eq === -1 ? null : part.slice(eq + 1).trim();
+    const base = BY_NAME.get(name);
+    if (!base) throw new Error(`unknown viewport: ${name}`);
+    const vp = { ...base };
+    if (sizeStr !== null) {
+      const sizeMatch = sizeStr.match(/^(\d+)(?:x(\d+))?$/);
+      if (!sizeMatch) {
+        throw new Error(`invalid size for ${name}: ${sizeStr}`);
+      }
+      vp.width = parseInt(sizeMatch[1], 10);
+      if (sizeMatch[2]) vp.height = parseInt(sizeMatch[2], 10);
+    }
+    result.push(vp);
+  }
+  return result;
+}

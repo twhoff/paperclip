@@ -1,0 +1,388 @@
+# yaml-language-server: $schema=../schemas/workflow.schema.json
+
+name: Queue Orchestrate
+description: >-
+  Continuous queue-driven orchestration: pulls tasks from `bd ready`,
+  assigns them to worker agents running the grind workflow, hands off
+  completed work to a persistent review agent, and manages the full
+  lifecycle until the queue is empty.
+
+  Agent roles:
+  - Orchestrator (this workflow): queue management, assignment, review
+    delegation, merge/close, progress tracking
+  - Worker agents (grind.yaml): claim, triage, implement, signal review
+  - Review agent (review-implementation.yaml): forensic code review,
+    verdict posting
+
+  The orchestrator runs from the main checkout (read-only). Workers and
+  reviewers operate in their own worktrees.
+
+  Chat channel: `grind` — all pipeline communication flows here.
+
+  Label conventions:
+  - grind-implementing: worker actively implementing
+  - grind-review-pending: awaiting review
+  - grind-review-approved: review passed, merged
+  - grind-review-changes: review found issues, rework needed
+  - grind-stale: triaged as stale, skipped
+
+  Worker count: unlimited. The orchestrator assigns one task per worker
+  at a time. When a worker finishes (review approved or stale skip),
+  it receives the next available task from the queue.
+
+preflight:
+  # Step 1: Assess the queue
+  - prompt: >-
+      Load the work queue and assess scope:
+
+      1. Run `bd ready --json` to get the priority-sorted queue.
+      2. Count total ready items.
+      3. Group by priority: P0 (critical), P1 (high), P2 (medium), P3 (low).
+      4. Check for any items already labelled grind-implementing or
+         grind-review-pending from a previous interrupted session.
+
+      Present the queue summary to the user:
+        "Queue: N items ready (P0: X, P1: Y, P2: Z, P3: W)"
+        "In-progress from previous session: M items" (if any)
+
+      Ask the user how many worker agents they want to start.
+      Record: QUEUE_SIZE, WORKER_COUNT, IN_PROGRESS_ITEMS.
+
+      Calculate reviewer count using the auto-scaling formula:
+        REVIEWER_COUNT = max(1, ceil(WORKER_COUNT / 2))
+      Present to the user:
+        "Reviewers: <REVIEWER_COUNT> (auto-scaled: ceil(workers/2), min 1)"
+      If QUEUE_SIZE >= 6, note that dynamic scaling may add reviewers later.
+      Record: REVIEWER_COUNT.
+    category: discovery
+
+  # Step 2: Set up the grind channel
+  - prompt: >-
+      Initialise the grind coordination channel:
+
+      1. Post the session kickoff message to the grind channel:
+         "GRIND SESSION START
+         Queue: <QUEUE_SIZE> items
+         Workers: <WORKER_COUNT> expected
+         Reviewers: <REVIEWER_COUNT> expected (auto-scaled)
+         Orchestrator online. Waiting for agents to register."
+
+      2. If there are IN_PROGRESS_ITEMS from a previous session,
+         post their status so workers and reviewers can pick them up.
+
+  # Step 3: Generate agent prompts
+  - prompt: >-
+      Generate onboarding prompts for each agent.
+
+      FOR EACH WORKER AGENT (1 through WORKER_COUNT):
+
+        Each worker should be a **Starbug** agent (select from the agent
+        picker in VS Code). Starbug already handles TDD implementation,
+        delegation to Haiku/Sonnet subagents, and worktree isolation.
+
+        Generate a bootstrap prompt for each worker that includes:
+
+        a. TELLS THE USER: "Open a new chat window, select the
+           **Starbug** agent from the agent picker, and paste
+           this prompt."
+        b. BOOTSTRAP PROMPT:
+           "You are Grind Worker <N> for this session. Execute
+           workflows/grind.yaml in a loop. Bootstrap:
+             1. Register: session get --name \"Worker-<N>\"
+             2. Read channel: chat read --channel grind --last 20
+             3. Announce: chat post --channel grind --message \"Worker-<N> online. Standing by.\"
+             4. Wait for ASSIGN messages from the orchestrator.
+           Follow grind.yaml steps for each assignment. Post status
+           updates using the message formats defined in grind.yaml.
+           After each task cycle (approved or skipped), wait for next
+           ASSIGN. If no ASSIGN arrives within 5 minutes, post:
+           \"Worker-<N> idle. Awaiting assignment.\"
+           ALL idle time uses: chat wait --channel grind --timeout 0 --interval 10"
+        c. MODEL RECOMMENDATION: Starbug runs on Opus 4.6 by default
+           and delegates implementation to Sonnet/Haiku subagents when
+           cost-efficient — no model override needed.
+
+      FOR EACH REVIEW AGENT (Reviewer-1 through Reviewer-REVIEWER_COUNT):
+
+        The review agent has a dedicated agent definition at
+        `.agents/agents/grind-reviewer.agent.md`. Generate a prompt
+        for each reviewer that includes:
+
+        a. TELLS THE USER: "Open a new chat window, select the
+           **Grind Reviewer** agent from the agent picker, and paste
+           this prompt."
+        b. BOOTSTRAP PROMPT:
+           "You are Reviewer-<N> for this grind session. Execute your
+           boot protocol from Section 2 of your agent definition:
+           register your session as Reviewer-<N>, read the grind
+           channel, and announce yourself. Then wait for
+           REVIEW-REQUEST messages directed to you. The orchestrator
+           will assign reviews to specific reviewers."
+        c. MODEL RECOMMENDATION: Opus-class model recommended for
+           deep reasoning during review. The user selects the model
+           in the chat window — the agent definition does not lock it.
+
+      Present all prompts to the user clearly labelled. The user will
+      copy-paste each into a separate chat window.
+
+      Wait for the user to confirm all agent windows are open.
+    category: delivery
+
+  # Step 4: Wait for agent registration
+  - prompt: >-
+      Wait for all agents to register on the grind channel:
+
+      1. Monitor the channel for "online" messages:
+         chat wait --channel grind --timeout 300 --interval 10
+
+      2. Track registrations on a checklist:
+         - Worker-1 through Worker-N
+         - Reviewer-1 through Reviewer-<REVIEWER_COUNT>
+
+      3. After each wait cycle, read and check:
+         chat read --channel grind --last 20
+
+      4. If an agent has not appeared after 5 minutes, ask the user
+         to check that agent's chat window.
+
+      5. Once ALL agents are registered, post:
+         "ALL AGENTS REGISTERED. Beginning queue processing."
+    category: delivery
+
+steps:
+  # Step 1: Assignment loop
+  - prompt: >-
+      Run the main assignment and monitoring loop. This step continues
+      until the queue is empty and all in-flight work is complete.
+
+      ASSIGNMENT LOGIC:
+
+      1. Identify idle workers — workers that have:
+         a. Just registered and have no assignment, OR
+         b. Posted ACK for a completed/skipped task, OR
+         c. Posted "idle" message
+
+      2. For each idle worker:
+         a. Run `bd ready --json` to get the current queue head.
+         b. If the queue is empty and no work is in-flight, go to
+            EXIT CONDITION.
+         c. If queue is empty but work is in-flight (other workers
+            still implementing or reviews pending), tell the idle
+            worker: "WAIT Worker-<N>: Queue empty, pending in-flight
+            work. Stand by."
+         d. If queue has items, pick the highest-priority unassigned item.
+            Check it is not already labelled grind-implementing.
+         e. DESCRIPTION QUALITY CHECK: Scan the candidate issue's
+            description for specific file paths (patterns like *.tsx,
+            *.ts, *.py, *.yaml), tool names, or API references. If the
+            description contains no file-specific references, append a
+            note to the ASSIGN message:
+            "NOTE: Description lacks specific file/tool names. Worker
+            should update the description during triage."
+         f. OVERLAP CHECK (before assigning):
+            Before posting the assignment, cross-check the candidate
+            issue against all currently in-flight work:
+
+            i.   Get in-flight issues: all items labelled
+                 grind-implementing (tracked in your assignment state).
+            ii.  For each in-flight issue, extract file/component
+                 references from its description (look for patterns
+                 like *.tsx, *.ts, *.py, component names, directory
+                 paths, and module names).
+            iii. Do the same for the candidate issue description.
+            iv.  If any extracted paths or component names overlap:
+                 - If the overlap is on the SAME file:
+                   DEFER the candidate. Skip it for now, pick the
+                   next queue item instead. Post:
+                   "DEFER <issue-id>: Overlaps with in-flight
+                   <other-issue-id> on <file>. Serializing."
+                 - If the overlap is on the same DIRECTORY but
+                   different files: WARN in the assignment message:
+                   "ASSIGN Worker-<N>: <issue-id> -- <title>
+                   WARNING: Shares directory with in-flight
+                   <other-issue-id>. Coordinate via chat if needed."
+            v.   If no overlap, proceed normally.
+
+         g. Post assignment:
+            "ASSIGN Worker-<N>: <issue-id> — <title>"
+            For complex/architectural tasks, add:
+            "NOTE: This task may benefit from Opus-level reasoning."
+
+      MONITORING LOGIC:
+
+      After each assignment round, enter the monitoring loop:
+
+      1. Wait for messages:
+         chat wait --channel grind --timeout 120 --interval 10
+
+      2. Read new messages:
+         chat read --channel grind
+
+      3. DISPATCH based on message type:
+
+         "TRIAGE-OK <issue-id>":
+           - Acknowledge. Worker proceeds with implementation.
+
+         "STALE <issue-id>: <reason>":
+           - Verify the staleness assessment. Check bd show for context.
+           - If confirmed stale:
+             a. Post: "SKIP <issue-id>: Confirmed stale. <reason>"
+             b. Close the issue: bd close <issue-id> --reason "Stale: <reason>"
+           - If not actually stale:
+             a. Post: "OVERRIDE <issue-id>: Not stale. <counter-reason>. Proceed."
+
+         "PLAN <issue-id>: <summary>":
+           - Acknowledge. No action needed unless the plan is concerning.
+
+         "START <issue-id>":
+           - Track: Worker-N is now implementing <issue-id>.
+
+         "BLOCKER <issue-id>: <details>":
+           - Assess the blocker.
+           - If resolvable with guidance, post advice.
+           - If the worker needs to skip, post: "SKIP <issue-id>: <reason>"
+             and file a follow-up issue.
+           - If a different worker should take over, reassign.
+
+         "REVIEW-READY <issue-id>: <details>":
+           - Delegate to an available reviewer:
+             "REVIEW-REQUEST <issue-id>: <branch>
+             Worker: <worker-name>
+             Summary: <approach-summary>"
+           - Track: <issue-id> is now in review.
+
+         "REVIEW-VERDICT <issue-id>: APPROVED":
+           NOTE: The reviewer now owns the landing sequence (merge,
+           push, close, cleanup). The orchestrator waits for the
+           LANDED message confirming completion.
+
+         "LANDED <issue-id>":
+           - Acknowledge: the reviewer has merged to main, closed
+             the issue, deleted the branch, and cleaned up worktrees.
+           - Pull the merged changes locally:
+             git pull --rebase (so subsequent merges have the latest main)
+           - Notify the worker:
+             "REVIEW-APPROVED <issue-id>"
+           - The worker will clean up and wait for next assignment.
+
+         "LANDED-BLOCKED <issue-id>: <reason>":
+           - The reviewer's landing sequence hit an obstacle (merge
+             conflict, push rejection, etc.)
+           - Assess the reason and resolve manually if possible.
+           - If a merge conflict: resolve locally, push, then close
+             the issue and clean up on the reviewer's behalf.
+           - Post "REVIEW-APPROVED <issue-id>" once resolved.
+
+         "REVIEW-VERDICT <issue-id>: CHANGES-NEEDED. <findings>":
+           - Update labels:
+             bd label remove <issue-id> grind-review-pending
+             bd label add <issue-id> grind-review-changes
+           - Relay feedback to the worker:
+             "REVIEW-CHANGES <issue-id>: <findings>"
+           - Track: <issue-id> returns to implementation.
+           - The worker addresses feedback and re-signals REVIEW-READY.
+
+         "Worker-<N> idle":
+           - Trigger a new assignment round for that worker.
+
+      4. PROGRESS TRACKING: After every 3 dispatched events, post a
+         progress summary to the grind channel:
+         "PROGRESS: <completed>/<total> done. <in-flight> in-flight.
+         <queue-remaining> queued. <stale-skipped> skipped."
+
+      5. REVIEWER AUTO-SCALING: After each progress check, evaluate
+         whether the reviewer pool needs to scale:
+         a. Count current active reviewers (agents that have posted
+            to the grind channel and are not stood down).
+         b. Count items labelled grind-review-pending (review backlog).
+         c. If review backlog >= 2 and active reviewers < ceil(WORKER_COUNT/2),
+            or if remaining queue items >= 6 and active reviewers == 1:
+            - Post to grind channel:
+              "SCALE-UP: Review backlog or queue depth warrants an
+              additional reviewer. User: please open a new Grind
+              Reviewer window with the Reviewer-<N+1> prompt."
+            - Post the reviewer bootstrap prompt (same format as
+              preflight Step 3) so the user can copy-paste it.
+         d. Do not scale beyond ceil(WORKER_COUNT / 2) reviewers
+            unless the review backlog exceeds 3 items.
+
+      6. DEAD WORKER DETECTION: Every 3rd monitoring cycle (roughly
+         every 6 minutes), scan for stalled workers:
+         a. For each task labelled grind-implementing, check when the
+            assigned worker last posted to the grind channel.
+         b. If no message from that worker in the last 10 minutes,
+            ping them: "HEALTH-CHECK Worker-<N>: Are you still
+            working on <issue-id>?"
+         c. If no response within 3 minutes of the ping, treat the
+            worker as lost:
+            - Release the task: bd update <issue-id> --assignee ""
+              --status open
+            - Remove label: bd label remove <issue-id> grind-implementing
+            - Post: "REASSIGN <issue-id>: Worker-<N> unresponsive.
+              Task returned to queue."
+            - Assign to the next idle worker, or leave in queue.
+
+      7. Repeat the monitoring loop.
+
+      EXIT CONDITION:
+      The loop ends when ALL of:
+        a. bd ready --json returns zero items
+        b. No issues are labelled grind-implementing
+        c. No issues are labelled grind-review-pending
+        d. All workers have posted ACK for their last assignment
+
+      When exit condition is met, proceed to postflight.
+    category: delivery
+
+postflight:
+  # Step 1: Sign off workers
+  - prompt: >-
+      Signal all agents to shut down:
+
+      1. Post to grind channel:
+         "GRIND SESSION COMPLETE.
+         Total processed: <count>
+         Approved and merged: <count>
+         Skipped (stale): <count>
+         All workers: stand down. Push any remaining commits and
+         clean up worktrees."
+
+      2. Wait for each worker to acknowledge:
+         chat wait --channel grind --timeout 120 --interval 10
+
+      3. Instruct all reviewers:
+         "All reviewers: session complete. No more reviews incoming. Stand down."
+
+  # Step 2: Final sync
+  - prompt: >-
+      Sync all state:
+
+      1. Run `bd dolt pull && bd dolt push`
+      2. Verify git status: all branches merged, main is clean.
+      3. Post final summary to all-agents channel:
+         "GRIND SESSION ENDED.
+         Processed: <total>
+         Merged: <merged>
+         Skipped: <skipped>
+         Duration: <start-to-end>"
+
+  # Step 3: File follow-up work
+  - prompt: >-
+      Review whether any follow-up issues need to be filed:
+
+      1. Check for WARNING findings from reviews that were not
+         filed as issues during the session.
+      2. Check for any tasks that were skipped due to blockers
+         that need re-queuing.
+      3. File any necessary follow-up issues with bd create.
+    condition: There are untracked follow-up items from the session.
+
+hooks:
+  beforeEach:
+    prompt: >-
+      Before each main step:
+      1. Read the grind channel for any new messages:
+         chat read --channel grind
+      2. Check for urgent messages (BLOCKER, agent failures).
+      3. If urgent messages exist, handle them before continuing
+         the current step.

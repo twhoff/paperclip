@@ -1,0 +1,143 @@
+// agent-fs audit — query the append-only registry across all sessions.
+//
+// Filters:
+//   --since <duration|date>   e.g. 24h, 7d, 2026-05-01T00:00:00Z
+//   --agent <label>           substring match against event.agent
+//   --issue <id>              exact match (case-insensitive)
+//   --verb <verb>             one of scratch|evidence|session|...
+//   --path <substring>        substring match against event.path
+//   --session <id>            limit to one session
+//   --limit <n>               cap on returned events (default 200)
+//
+// Output: human table (default) or --json.
+
+import fs from 'node:fs';
+import path from 'node:path';
+import { Registry } from '../registry.mjs';
+
+function parseSince(raw) {
+  if (!raw) return null;
+  if (typeof raw !== 'string') return null;
+  const m = String(raw).match(/^(\d+)([smhdw])$/);
+  if (m) {
+    const n = Number(m[1]);
+    const unit = m[2];
+    const ms =
+      unit === 's'
+        ? n * 1000
+        : unit === 'm'
+          ? n * 60_000
+          : unit === 'h'
+            ? n * 3_600_000
+            : unit === 'd'
+              ? n * 86_400_000
+              : n * 604_800_000;
+    return Date.now() - ms;
+  }
+  const parsed = Date.parse(raw);
+  if (!Number.isNaN(parsed)) return parsed;
+  return null;
+}
+
+function readAllSessionEvents(rootDir) {
+  const events = [];
+  if (!fs.existsSync(rootDir)) return events;
+  let entries;
+  try {
+    entries = fs.readdirSync(rootDir, { withFileTypes: true });
+  } catch {
+    return events;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !entry.name.startsWith('sess-')) continue;
+    const sessionId = entry.name.slice('sess-'.length);
+    const reg = new Registry(path.join(rootDir, entry.name));
+    for (const ev of reg.readAll()) {
+      events.push({ ...ev, _session: sessionId });
+    }
+  }
+  return events;
+}
+
+function applyFilters(events, args) {
+  const sinceMs = args.since ? parseSince(args.since) : null;
+  if (args.since && sinceMs === null) {
+    process.stderr.write(`error: invalid --since value "${args.since}" (try 24h, 7d, or ISO date)\n`);
+    process.exit(65);
+  }
+  const agentNeedle = args.agent ? String(args.agent).toLowerCase() : null;
+  const issueNeedle = args.issue ? String(args.issue).toLowerCase() : null;
+  const verbNeedle = args.verb ? String(args.verb).toLowerCase() : null;
+  const pathNeedle = args.path ? String(args.path) : null;
+  const sessionNeedle = args.session ? String(args.session) : null;
+
+  return events.filter((e) => {
+    if (sinceMs !== null && e.ts < sinceMs) return false;
+    if (agentNeedle && !(e.agent || '').toLowerCase().includes(agentNeedle)) return false;
+    if (issueNeedle && (e.issue || '').toLowerCase() !== issueNeedle) return false;
+    if (verbNeedle && (e.verb || '').toLowerCase() !== verbNeedle) return false;
+    if (pathNeedle && !(e.path || '').includes(pathNeedle)) return false;
+    if (sessionNeedle && e._session !== sessionNeedle) return false;
+    return true;
+  });
+}
+
+function fmtTime(ts) {
+  return new Date(ts).toISOString().replace('T', ' ').slice(0, 19);
+}
+
+function truncate(s, n) {
+  if (!s) return '';
+  return s.length <= n ? s : '…' + s.slice(-(n - 1));
+}
+
+export function auditVerb(args, ctx) {
+  const limit = Number(args.limit ?? 200);
+  let events = readAllSessionEvents(ctx.config.root);
+  events = applyFilters(events, args);
+  events.sort((a, b) => a.ts - b.ts);
+
+  const total = events.length;
+  if (limit > 0 && events.length > limit) {
+    events = events.slice(-limit); // most recent N
+  }
+
+  if (args.json) {
+    process.stdout.write(JSON.stringify({ total, returned: events.length, events }, null, 2) + '\n');
+    return;
+  }
+
+  if (events.length === 0) {
+    process.stdout.write('no matching events.\n');
+    return;
+  }
+
+  // Compact human table.
+  const W = { time: 19, verb: 9, issue: 11, agent: 28, path: 60 };
+  const sep = '─'.repeat(W.time + W.verb + W.issue + W.agent + W.path + 4);
+  process.stdout.write(sep + '\n');
+  process.stdout.write(
+    [
+      'time'.padEnd(W.time),
+      'verb'.padEnd(W.verb),
+      'issue'.padEnd(W.issue),
+      'agent'.padEnd(W.agent),
+      'path',
+    ].join(' ') + '\n',
+  );
+  process.stdout.write(sep + '\n');
+  for (const e of events) {
+    process.stdout.write(
+      [
+        fmtTime(e.ts).padEnd(W.time),
+        (e.verb || '').padEnd(W.verb),
+        truncate(e.issue || '', W.issue).padEnd(W.issue),
+        truncate(e.agent || '', W.agent).padEnd(W.agent),
+        truncate(e.path || '', W.path),
+      ].join(' ') + '\n',
+    );
+  }
+  process.stdout.write(sep + '\n');
+  const trunc = total > events.length ? ` (showing last ${events.length} of ${total})` : '';
+  process.stdout.write(`${total} event(s) match${trunc}\n`);
+}

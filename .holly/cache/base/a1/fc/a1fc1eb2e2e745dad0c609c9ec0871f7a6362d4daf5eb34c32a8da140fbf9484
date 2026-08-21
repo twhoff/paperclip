@@ -1,0 +1,280 @@
+---
+name: agent-fs
+description: >
+  Sanctioned filesystem paths for cross-runtime coding agents. Provides a single
+  CLI (`agent-fs`) plus environment variables for any agent writing temporary
+  files, screenshots, evidence artifacts, or long-lived run state. Replaces
+  hard-coded `/tmp/<anything>` paths with categorised, session-scoped, registry-
+  tracked locations. Use this skill whenever an agent needs to write a file that
+  is not part of the project's source tree. Use it before reaching for `/tmp/`,
+  `mktemp`, or hand-rolled scratch directories. The skill installs a Claude Code
+  PreToolUse hook that hard-blocks unsanctioned `/tmp/<path>` writes; on other
+  runtimes (Codex, Warp, Copilot, VS Code) the env variables + TMPDIR redirect
+  catch most leaks automatically.
+  Use when the user invokes the holly skill without any further instruction
+  or when the user invokes the holly skill with words like bootstrap, prepare,
+  load and so forth.
+allowed-tools:
+  - Bash
+---
+
+# agent-fs
+
+## The rule (do not skip)
+
+When an agent needs to write a file outside the project source tree:
+
+| What you're writing               | Use                                                    |
+| --------------------------------- | ------------------------------------------------------ |
+| Disposable computation, temp data | `$AGENT_FS_BIN scratch <name>`                         |
+| Screenshots and visual captures   | `$AGENT_FS_BIN scratch <name>`                         |
+| Explicitly publishable issue artifacts | `$AGENT_FS_BIN evidence --issue <ID> <name>`      |
+| Long-lived per-session state      | `$AGENT_FS_BIN session`                                |
+| A specific category root          | `$AGENT_FS_BIN path <category>`                        |
+
+**Never write to `/tmp/<anything>` directly.** In Claude Code this is blocked
+by a PreToolUse hook; on other runtimes it shows up in `agent-fs orphans` and
+your work loses its audit trail.
+
+Every path-getter creates the directory, writes a registry event, and prints
+the path to stdout. Wrap in `$(...)` for shell ergonomics:
+
+```bash
+SCRATCH="$("$AGENT_FS_BIN" scratch playwright-run)"
+playwright test --output-dir "$SCRATCH"
+
+CAPTURES="$("$AGENT_FS_BIN" scratch ui-visual-capture-GRO-881-dashboard-640)"
+screenshot --out "$CAPTURES/mobile.png"
+```
+
+### Screenshot handling by tracker adapter
+
+- **Local-only tracker adapters:** keep screenshots and visual-capture derivatives in session
+  `scratch`. Uploading or attaching them is not required, and a missing
+  attachment must not block issue closure. Put the exact scratch path in the
+  structured issue comment when it helps the reviewer find the captures.
+- **Attachment-capable tracker adapters:** capture into `scratch`
+  by default. Only promote selected artifacts into `evidence` and publish them
+  when the workflow or user explicitly requires an upload.
+
+`evidence` remains available for deliberately publishable issue artifacts. It
+is not the default screenshot destination.
+
+## Sanctioned root layout
+
+```
+~/.agent-scratch/
+├── sess-<id>/
+│   ├── tmp/                          # TMPDIR redirect lands here
+│   ├── scratch/<name>/               # disposable
+│   ├── evidence/<ISSUE-ID>/<name>/   # explicitly publishable issue artifacts
+│   ├── session/                      # long-lived run state
+│   ├── logs/
+│   └── registry.ndjson               # append-only event log
+└── _meta/
+    └── allowlist.json                # /tmp paths exempt from orphan flagging
+```
+
+One session directory per resolved session ID. Multiple concurrent sessions are
+fine — each has its own tree and registry.
+
+## How agents discover paths
+
+After `agent-fs init` and a fresh shell, these env vars are exported:
+
+```
+AGENT_FS_BIN              absolute path to the agent-fs CLI
+AGENT_FS_ROOT             scratch root (~/.agent-scratch by default)
+AGENT_FS_SESSION_ID       resolved session id
+AGENT_FS_SESSION_SOURCE   where the session id came from (env var or fallback)
+AGENT_FS_RUNTIME          detected runtime (claude-code|codex|warp|vscode|copilot|shell|<adapter-native>)
+AGENT_SCRATCH_DIR         scratch root for this session
+AGENT_EVIDENCE_DIR        evidence root for this session
+AGENT_SESSION_DIR         long-lived session-state dir
+AGENT_TMP_DIR             temp dir (TMPDIR points here too)
+TMPDIR                    overridden to AGENT_TMP_DIR (catches mktemp, playwright, ffmpeg…)
+```
+
+Agents that respect `TMPDIR` (most POSIX tools) automatically land in the
+sanctioned tree without any code changes. Agents that hard-code `/tmp/` need
+to be migrated; see `references/migration-cookbook.md`.
+
+## Verbs
+
+| Verb              | Effect                                                                  |
+| ----------------- | ----------------------------------------------------------------------- |
+| `init`            | Bootstrap dirs, config, env script. Flags: `--append-rc`, `--runtime <claude-code|codex|vscode|warp>`, `--schedule-orphan-report`, `--no-schedule-orphan-report`. |
+| `scratch <name>`  | Return a sanctioned scratch dir for disposable computation.             |
+| `evidence --issue <ID> <name>` | Return an issue-scoped evidence dir.                       |
+| `evidence manifest --issue <ID> <name>` | Write `manifests/capture-manifest.json` for an existing capture (auto-discovers files + subdirs; preserves prior `validForReview`/`route`/`viewport`/`custom`). `--with-hashes` adds sha256. `--force` overwrites preserved fields. |
+| `evidence upload --issue <ID> <name>` | Upload all files in a capture dir via a pluggable target adapter (the default target is set by `default_target` in the agent-fs config; uploaders live under `lib/uploaders/`). Writes `upload-receipt.json` with attachment IDs. Requires a manifest unless `--skip-manifest`. Does NOT delete local files. |
+| `evidence post --issue <ID> <name> --comment "..."` | Upload + post a comment in one call. Composes attachment markdown automatically and embeds it after the user message. Use `--allow-empty-comment` to post just the attachments. |
+| `session`         | Return the long-lived session-state dir for this session.               |
+| `path <category>` | Print the root of a category (`scratch|evidence|session|tmp|logs`).    |
+| `path worktree --issue <ID>` | Resolve the tracker-managed worktree path for an issue (read-only — agent-fs does not create worktrees). |
+| `env`             | Print export statements for `eval "$(agent-fs env)"`.                   |
+| `check-path <p>`  | Exit 0 if sanctioned, 69 otherwise. Used by the hook.                   |
+| `bless <p>`       | Explicitly mark a path as sanctioned. Requires `--type`, `--issue` for evidence. |
+| `pin <path> [--reason "..."]` | Protect a tracked path from `clean` sweeps.                |
+| `unpin <path>`    | Release a pin.                                                          |
+| `doctor`          | Verify setup; checklist + fix commands; exit 0/68.                      |
+| `status`          | Registry summary, sizes per category.                                   |
+| `orphans`         | List /tmp entries not in allowlist and not tracked. `--in <dir>` overrides scan target. |
+| `orphans --adopt --type <evidence|scratch|session> [--issue <ID>] [--name <slug>] <path>` | Retroactively claim ONE orphan as sanctioned. Refuses bulk adoption, already-tracked paths, and allowlisted paths. |
+| `audit [filters]` | Query the registry across all sessions. Filters: `--since 24h`, `--agent`, `--issue`, `--verb`, `--path`, `--session`, `--limit`. |
+| `clean [--dry-run]` | Sweep stale dirs. Flags: `--older-than <h|d|m>`, `--type scratch|evidence|session`, `--uploaded` (only evidence with `upload-receipt.json`), `--no-keep-pinned`. Pinned paths are protected by default. |
+
+All verbs accept `--json` for machine-readable output.
+
+## Common flags
+
+| Flag             | Meaning                                                       |
+| ---------------- | ------------------------------------------------------------- |
+| `--json`         | Machine-readable output (path on stdout, message on stderr).  |
+| `--issue <ID>`   | Tracker-agnostic issue ID (e.g. `GRO-881`, `ENG-1234`, `PROJ-42`). Casing is preserved on disk; downstream filters compare case-insensitively. Must be a single token: no whitespace, no path separators, no `.`/`..`, ≤ 128 chars. |
+| `--type <t>`     | For `bless`: `scratch|evidence|session`.                     |
+| `--quiet`        | Minimal stdout.                                              |
+| `--in <dir>`     | For `orphans`: scan directory.                               |
+| `--older-than X` | For `clean`: `30m|24h|7d`.                                   |
+| `--runtime <r>`  | For `init`: runtime-specific install (`claude-code`).        |
+| `--append-rc`    | For `init`: append source line to `~/.zshrc`.                |
+
+## Exit codes (POSIX)
+
+| Code | Meaning                                                          |
+| ---- | ---------------------------------------------------------------- |
+| 0    | Success                                                          |
+| 64   | Usage error (unknown verb, bad combo)                            |
+| 65   | Missing required argument (e.g. `evidence` without `--issue`)    |
+| 68   | Doctor check failed                                              |
+| 69   | Path not sanctioned / filesystem error                           |
+
+## First-time setup
+
+```bash
+# 1. agent-fs ships as a bundled holly skill: `holly init` scaffolds it and
+#    `holly sync skills --mode apply` refreshes it under ~/.agents/skills/agent-fs/.
+
+# 2. Bootstrap.
+~/.agents/skills/agent-fs/bin/agent-fs init --append-rc --runtime claude-code
+
+# 3. Open a fresh shell. Verify.
+agent-fs doctor
+```
+
+## Session-ID resolution chain
+
+Resolved at every CLI invocation:
+
+1. `$AGENT_FS_SESSION_ID` (explicit override)
+2. the active adapter's native runtime session-ID env var (set by the adapter's agent spawn)
+3. `$CLAUDE_SESSION_ID`
+4. `$CODEX_SESSION_ID`
+5. `$WARP_SESSION_ID`
+6. the active adapter's emulation state probe (read-only query for the current run/session id)
+7. `git-<repo-hash>-<ppid>` (deterministic fallback)
+
+Env vars first means zero process spawn in the common case. The adapter-probe
+fallback (step 6) only fires when no runtime env var is set, and reads state
+only — never calls lifecycle commands.
+
+To disable the adapter-probe fallback entirely (defensive), set
+`AGENT_FS_DISABLE_PCLI=1`.
+
+## What gets blocked (Claude Code)
+
+The PreToolUse hook (`hooks/agent-fs-guard.sh`) inspects every Write, Edit, and
+Bash tool call. It extracts target paths that match `/tmp/...` or `/private/tmp/...`
+and calls `check-path` on each. A path is sanctioned if any of these are true:
+
+- It is **not** under `/tmp/` (we don't police writes elsewhere).
+- It is under `$AGENT_FS_ROOT`.
+- It matches the allowlist at `~/.agent-scratch/_meta/allowlist.json`.
+- It has been explicitly registered (`scratch`/`evidence`/`session`/`bless`)
+  by any session under the root.
+
+If any extracted path fails, the call is blocked with a message naming the
+agent-fs verbs that would do the right thing.
+
+## Allowlist editing
+
+Some `/tmp` paths are system-owned (MCP sockets, macOS launchd dirs, Claude
+Code session state). The default allowlist covers the known ones. To add more:
+
+```bash
+$EDITOR ~/.agent-scratch/_meta/allowlist.json
+```
+
+Schema:
+
+```json
+{
+  "exact":  ["/tmp/specific/path"],
+  "prefix": ["/tmp/some-prefix-"],
+  "glob":   ["*.sock", "/tmp/known-*"],
+  "regex":  ["^/tmp/[A-F0-9]{8}-.*$"]
+}
+```
+
+After editing, rerun `agent-fs doctor` to confirm the orphan count is sensible.
+
+## Migration for skill authors
+
+If you are writing or updating a skill that previously wrote to `/tmp/...`,
+replace the path computation. Use `child_process.spawnSync` with an args array
+(no shell, safe by construction):
+
+```js
+import { spawnSync } from 'node:child_process';
+
+function resolveScreenshotDir(issue, name) {
+  const bin = process.env.AGENT_FS_BIN;
+  if (bin) {
+    const result = spawnSync(bin, ['scratch', `ui-visual-capture-${issue}-${name}`], {
+      encoding: 'utf8',
+    });
+    if (result.status === 0) return result.stdout.trim();
+  }
+  // Graceful fall-through when agent-fs is not installed.
+  const legacy = path.join('/tmp/my-skill', issue, name);
+  fs.mkdirSync(legacy, { recursive: true });
+  return legacy;
+}
+```
+
+For shell scripts, the spawn equivalent is direct invocation:
+
+```bash
+CAPTURE_DIR="$("$AGENT_FS_BIN" scratch "ui-visual-capture-$ISSUE-$NAME")"
+```
+
+Use `evidence --issue ...` instead only for an explicitly publishable artifact,
+not as the screenshot default.
+
+See `references/migration-cookbook.md` for full examples
+(`ui-visual-capture`, `rich-cli-capture`, `live-session-capture`).
+
+## When something is blocked and shouldn't be
+
+1. **Check it's really blocked, not just doctor warning.** `agent-fs check-path <path>` returns 0/69 deterministically.
+2. **If the path is a system path** (socket, launchd dir, etc.): add to the
+   allowlist at `~/.agent-scratch/_meta/allowlist.json`. Rerun `agent-fs doctor`.
+3. **If the path should be tracked but predates agent-fs**: use
+   `agent-fs bless <path> --type <scratch|evidence|session> [--issue <ID>]`
+   to register it retroactively.
+4. **If the skill needs migrating**: see the migration cookbook.
+
+## Non-goals
+
+- agent-fs does **not** police writes outside `/tmp/`. Your repo files, your
+  home dotfiles, `/var/log/` — those are the agent's choice.
+- agent-fs does **not** create or manage worktrees. The active tracker adapter owns that.
+  Week 3 adds `agent-fs path worktree --issue <ID>` for read-only resolution.
+- agent-fs deletes nothing automatically. `evidence upload` keeps local files;
+  cleanup is week-3 explicit-only.
+
+## See also
+
+- `references/architecture.md` — registry schema, session resolution internals.
+- `references/runtime-integration.md` — per-runtime install snippets.
+- `references/migration-cookbook.md` — how to port a skill from `/tmp/` to agent-fs.

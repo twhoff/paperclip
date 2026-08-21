@@ -1,0 +1,986 @@
+{
+  "schema": "holly.sync.manifest.v1",
+  "last_sync_iso": "2026-08-21T07:48:06Z",
+  "entries": {
+    ".agents/agents/model-capability-tiers.yaml": {
+      "sha256": "10f749b3de1002950a15ad3b0d77b3b1b3d55268e8443681348972919486ad89",
+      "size": 10469,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/agents/orchestrator-v2.agent.md": {
+      "sha256": "9e3fa8a4818a40f3d5e94961a76f64b99bb6136f532fa728188ba52843f975d1",
+      "size": 19030,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/agents/swarm-agents.manifest.schema.json": {
+      "sha256": "dec4db34b8cdcf9c488f78ad2b3b5496d1c1bc417c2a0f030b17cc3879d839a2",
+      "size": 4150,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/agents/swarm-agents.manifest.yaml": {
+      "sha256": "0f73283a5ef336a05970d6de7418105067aee85984cab448ec464ebbf89696ee",
+      "size": 4441,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/agents/swarm-principal-implementation.agent.md": {
+      "sha256": "d3283c3ba5db5b12d0d94f10de210959367b5a1d876efea01327957c0a0a5104",
+      "size": 23223,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/agents/swarm-principal-reviewer.agent.md": {
+      "sha256": "918f7224bf14898512f4ef429fde49c481f635b1341840fdc36c84b1fba3f6d7",
+      "size": 23340,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/agents/swarm-reviewer.agent.md": {
+      "sha256": "150e66d9a478d29d99fe456053c3a9ba2f97f94a2c0190d30bc59429018ee252",
+      "size": 21921,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/agents/swarm-senior-implementation.agent.md": {
+      "sha256": "ed83af6951c36bacadbae7dbf6bf7edb4735aa26efcc62b14cff891617c02e68",
+      "size": 22710,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/agents/swarm-senior-reviewer.agent.md": {
+      "sha256": "087f265f9a17f81ae215153ed74dd7bc918fb4ddffcdc6b8ee4addf3b310deb3",
+      "size": 22932,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/agents/swarm-standard-implementation.agent.md": {
+      "sha256": "a9ccfdaa1c4104f76a714c4d599d23c9f0cffc305a6060a6903ad64845811a0b",
+      "size": 21912,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/agents/swarm-tiny-implementation.agent.md": {
+      "sha256": "e05b9a6a5fd5f57a7280dbf3c744fb6a97a9cb6849872e0d539cfaf454e1e077",
+      "size": 20970,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/agents/swarm-ui-browser-implementation.agent.md": {
+      "sha256": "344af146541a738a0796ff40f680a604473757aec5c840235a9f028bd261ca31",
+      "size": 22788,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/agent-chat/SKILL.md": {
+      "sha256": "fcd75b012ae35876c10db1d8bb11527620c9c650401f099f59864473c84ee956",
+      "size": 11817,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/agent-fs/.lastscratch": {
+      "sha256": "8cecb85c2647b6597b080f6e114b3d9d818bf185f9e2d8eb58e3229824849d8d",
+      "size": 97,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/agent-fs/SKILL.md": {
+      "sha256": "a1fc1eb2e2e745dad0c609c9ec0871f7a6362d4daf5eb34c32a8da140fbf9484",
+      "size": 14092,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/agent-fs/bin/agent-fs": {
+      "sha256": "d0007422d060a248f93fba1c096d4c0347522c840e1ea86352da811d9fae3821",
+      "size": 101,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/agent-fs/hooks/agent-fs-guard.sh": {
+      "sha256": "980530631f63f247671aedf866fb0757ef61317d3de51c7bb32630f0c6c93ae7",
+      "size": 9710,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/agent-fs/hooks/orphan-report.sh": {
+      "sha256": "ba6840d92e7ab0e1f82bfbbcf7d0e5ecfaf87db76ae9c71a76feeca68cd9f3ff",
+      "size": 981,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/agent-fs/lib/allowlist.mjs": {
+      "sha256": "4c01bcaed1e748112ab9acce6bc717c15b5dc287138ed46a00da224082cdfa48",
+      "size": 2671,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/agent-fs/lib/cli.mjs": {
+      "sha256": "326d261fa5e56c1655c0580d59d8aaddad43e3c232042ea0fa8f52bc40b25d33",
+      "size": 7533,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/agent-fs/lib/config.mjs": {
+      "sha256": "5559a3e3dd017b1ebc26a7e2bd78dc80fce09e2c378bcf69eabb19a45bce2689",
+      "size": 1885,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/agent-fs/lib/context.mjs": {
+      "sha256": "3c1ae8a965a0e858a86609909632d0671ac5f155c55026fd3d068c6a89d7837d",
+      "size": 780,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/agent-fs/lib/paths.mjs": {
+      "sha256": "2f85e1bb8fe0d66286d0a30a2e7479d375fb0ed9ac3770a1c06fa97aa2b5e62a",
+      "size": 2423,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/agent-fs/lib/pcli.mjs": {
+      "sha256": "4d93f9503e61c1d4170e612e7742add671c9b02c0dce3a3abbc597881bcc60d6",
+      "size": 2175,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/agent-fs/lib/registry.mjs": {
+      "sha256": "a53eb4765433c4c645244a391c7442643b8fda880defa566e5463490140d092e",
+      "size": 3370,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/agent-fs/lib/runtime.mjs": {
+      "sha256": "b8930889b4d44c5fea9d4880fd01cdbf09b14fa2eaa73bfe09c43bbbf8a0d80c",
+      "size": 1909,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/agent-fs/lib/session-id.mjs": {
+      "sha256": "8d03065b466bb0e6986fcf0e7a373393785a9be8d0bc3ed3bfaa8592863abdfb",
+      "size": 3040,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/agent-fs/lib/uploaders/index.mjs": {
+      "sha256": "6a6f10102f803e1b3fab72bfc47e28bdec53b27158cc9831e199b2d2203dd4b9",
+      "size": 933,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/agent-fs/lib/uploaders/paperclip.mjs": {
+      "sha256": "64559fe7de14f8adbb81da7aa0c253410cd09efd5ec1f72ad031a150da5c7f06",
+      "size": 2255,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/agent-fs/lib/verbs/audit.mjs": {
+      "sha256": "cbe96b8c74de673a6314769d4836b84d4d29d02f833a79057183096df0e3b739",
+      "size": 4719,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/agent-fs/lib/verbs/bless.mjs": {
+      "sha256": "ff3d8ddcf7630a0b7460e9cbe6ed7afc9a6f193f3a53877453d001a7b7b19252",
+      "size": 1369,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/agent-fs/lib/verbs/check-path.mjs": {
+      "sha256": "93e70064ecfbb8f1d8c3724d0cea93c9e0c149066a3e778f325edf6d0e91130e",
+      "size": 2105,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/agent-fs/lib/verbs/clean.mjs": {
+      "sha256": "d2bfdeb49a8fc97890ea845e568754c58bd4d26fafba1888f87eeda1350cdaa4",
+      "size": 9821,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/agent-fs/lib/verbs/doctor.mjs": {
+      "sha256": "f447a9c9ac043ffd2439d35c30ef2e133d2b4c0ed6e0aefe1c5ec78b6e965bf9",
+      "size": 6692,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/agent-fs/lib/verbs/env.mjs": {
+      "sha256": "e8f75d3f5b97e58351fa496dec9f3f97ff096f16869bf617e19a3d666c19f298",
+      "size": 2139,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/agent-fs/lib/verbs/evidence.mjs": {
+      "sha256": "de3b3d30f6e1f73dde76c73c6d8ef784f932405364a9939cae5a323c4beadd1c",
+      "size": 15158,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/agent-fs/lib/verbs/init.mjs": {
+      "sha256": "07a294b89288e2e548b69ce927f404b589a0c8a91bd40a555140bada8e9ac63d",
+      "size": 18876,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/agent-fs/lib/verbs/orphans.mjs": {
+      "sha256": "19517652e5ffbdf63023d3b5fef7361689d65351556b9922016bf551601e0187",
+      "size": 6131,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/agent-fs/lib/verbs/path.mjs": {
+      "sha256": "4d08e39d18d85ab1e1bc25cbd9e07a4dc2c8ea103949ec3db8daf8347c34372c",
+      "size": 2321,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/agent-fs/lib/verbs/pin.mjs": {
+      "sha256": "152eb92e07e07ba3070b2e700ea4e321675479544b93fdd0825b5ae7f2412699",
+      "size": 4269,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/agent-fs/lib/verbs/scratch.mjs": {
+      "sha256": "0a46b8b31919dbaabd3c9e120f3c09f410f9d00799900e34624912df7ef2a486",
+      "size": 1035,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/agent-fs/lib/verbs/session.mjs": {
+      "sha256": "76f88fb3659b2e67a6b669a09203cbf743f6a7246c69c9d1e5d2d2ee0a87bf69",
+      "size": 704,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/agent-fs/lib/verbs/status.mjs": {
+      "sha256": "40f76c9c60e2ddadc2e591b8532e69e543f5869cbb47159ab8fdae937b6c3e78",
+      "size": 2330,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/agent-fs/references/architecture.md": {
+      "sha256": "bd3e52403e3798dc11412f4f9c872d4a523884518278c5689b63b1a57ed31e9f",
+      "size": 6501,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/agent-fs/references/migration-cookbook.md": {
+      "sha256": "126115ef86bd3b42249d5af349052d84e942656edbdc7635abced394f56b759c",
+      "size": 6104,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/agent-fs/references/runtime-integration.md": {
+      "sha256": "4fd50d553cc06b072a46a872c6d793bd6b014083395a334ca44622ed59784fa6",
+      "size": 3294,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/agent-lifecycle/SKILL.md": {
+      "sha256": "7b8097f93a2734afcd4a0f308ac270fee9a02f88647ffa3d11d1f332f4c7cfeb",
+      "size": 14698,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/agent-sessions/SKILL.md": {
+      "sha256": "94648525b649f89f450d228dd57bc16081bc60c27c1272838c8ae641d0af0cf8",
+      "size": 19518,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/ax-commandments/SKILL.md": {
+      "sha256": "d7a06ddc7c4f975caae39ee583f2e97782b92be94777cad76751d9ff70de4b74",
+      "size": 2473,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/beads-holly/CLAUDE.md": {
+      "sha256": "0ff7f756bc52ff575a4bad181948555808664d3ff917eb28f247e92f1899469d",
+      "size": 2648,
+      "owner": "adapter:beads",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/beads-holly/README.md": {
+      "sha256": "4842b6044291328d0a6c6556f03d2e0c3ab1e498eaf92c7fa9491cc0646bd5da",
+      "size": 4806,
+      "owner": "adapter:beads",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/beads-holly/SKILL.md": {
+      "sha256": "bd66ea695c7e57f85b14a54bb35c5abcd76cd9eebf036cacb087bc93cb4a9cab",
+      "size": 2395,
+      "owner": "adapter:beads",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/beads-holly/adr/0001-bd-prime-as-source-of-truth.md": {
+      "sha256": "29985565ab384b381d7288f2c01e19e6d06d760c560152a1238151731a35ca91",
+      "size": 1785,
+      "owner": "adapter:beads",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/beads-holly/resources/AGENTS.md": {
+      "sha256": "0158c156ffe03858fea3816bc6142cb75133ed54748936a05202b485a02250b5",
+      "size": 2008,
+      "owner": "adapter:beads",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/beads-holly/resources/ASYNC_GATES.md": {
+      "sha256": "519c66461cd17a4b6e2b97ae495d75976bf7f171fa87d70f94d1c89d9432f547",
+      "size": 4014,
+      "owner": "adapter:beads",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/beads-holly/resources/BOUNDARIES.md": {
+      "sha256": "9239200595fdc742bc2422c82bd7e71a55dc1af02ff6eea179642a0276f53a7c",
+      "size": 17035,
+      "owner": "adapter:beads",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/beads-holly/resources/CHEMISTRY_PATTERNS.md": {
+      "sha256": "c81bf240429099eeafd68c06bad4af45b0360dd5d3c6444f6d5b60d31c1641c5",
+      "size": 6863,
+      "owner": "adapter:beads",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/beads-holly/resources/CLI_REFERENCE.md": {
+      "sha256": "10ff8efad99805f5916a380e2e8bc8a493d5e25be43993a11afa7d37d4c95f6b",
+      "size": 20078,
+      "owner": "adapter:beads",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/beads-holly/resources/DEPENDENCIES.md": {
+      "sha256": "c9bb62e7539e6610d02f5d2040c711c50f8e002e677a042cb7e5fdcf15bd3c51",
+      "size": 19812,
+      "owner": "adapter:beads",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/beads-holly/resources/INTEGRATION_PATTERNS.md": {
+      "sha256": "a66e852d8b734f77bb9e157a37c2ecb14c7a2875cab43c5c96977b3c69321d55",
+      "size": 13783,
+      "owner": "adapter:beads",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/beads-holly/resources/ISSUE_CREATION.md": {
+      "sha256": "ff465ed1fb13fbb6c42b42ec15c1bd8fd677c4661237e4fc1675c179f7fca460",
+      "size": 5081,
+      "owner": "adapter:beads",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/beads-holly/resources/MOLECULES.md": {
+      "sha256": "4dbadf02ef5c4ec585c3aef43fb28e440470b03151a6ff6b49e0c8d51dc9e0a9",
+      "size": 10367,
+      "owner": "adapter:beads",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/beads-holly/resources/PATTERNS.md": {
+      "sha256": "b2f235633c664180da162d2b2bccdf62bd7865aeb2b4adde522964b6ca4cef7f",
+      "size": 11458,
+      "owner": "adapter:beads",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/beads-holly/resources/RESUMABILITY.md": {
+      "sha256": "01143c5c3c916b9e6074328e87b19ce2557ed19ce605ede41073066960815e0e",
+      "size": 5417,
+      "owner": "adapter:beads",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/beads-holly/resources/STATIC_DATA.md": {
+      "sha256": "610aca9de9cd7ff7bddeb636dd62f7b4b1e3b52694e90ed8c93639e4f17664c6",
+      "size": 2081,
+      "owner": "adapter:beads",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/beads-holly/resources/TROUBLESHOOTING.md": {
+      "sha256": "0c4303a7e387bd9253797872912c4e60ed57d35c29a2d7a73c9a430df27ad6d2",
+      "size": 10490,
+      "owner": "adapter:beads",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/beads-holly/resources/WORKFLOWS.md": {
+      "sha256": "710a110347e4e17282e1c8469456bf796898ccc2d51a6b5389f25d0c74ba37ea",
+      "size": 19427,
+      "owner": "adapter:beads",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/beads-holly/resources/WORKTREES.md": {
+      "sha256": "625c39eb381aec4b01d5cf5459d657db006d68bf196e0b400babea74410569a8",
+      "size": 3819,
+      "owner": "adapter:beads",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/glprojectkeywords-maintainer/SKILL.md": {
+      "sha256": "d503b5cfe356f11798bd70b78f7037399e7cfc880cfa7f135c7a0123f6b860b8",
+      "size": 14180,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/holly-bug-bash/SKILL.md": {
+      "sha256": "3811cef4e4099cf1ef171c94cfd9fe4cb0c74cd244f6d15708bb1499aefa72c0",
+      "size": 9496,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/holly-project-release/SKILL.md": {
+      "sha256": "0006a4949ffa2a6bbeac1bd2cc4906408b3be94568e27b3759073c3c2a5288df",
+      "size": 5496,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/holly-project-release/agents/openai.yaml": {
+      "sha256": "6cc7a6a63a7d95379b653091a2f99a515f81e98e5baa53ecc47e296ee7938642",
+      "size": 223,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/holly-project-release/references/release-checklist.md": {
+      "sha256": "95a710c8d155396a2d71b0e5e238f4d27bb485a3d56c5c14735605f3f2d70a2a",
+      "size": 1691,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/holly-project-release/scripts/holly_release_refs.py": {
+      "sha256": "5369a951b0cfc4205e9d12e1a61ad59c759895564ccdc5c7800b80b82cb3440d",
+      "size": 8328,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/holly-session-summary/SKILL.md": {
+      "sha256": "5913f7b505c02967b05e273c48a4285b2f1bc17d4020b2086641374e6bb17879",
+      "size": 6192,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/holly-session-summary/agents/openai.yaml": {
+      "sha256": "6f23a32a2941b061b55b8219817c3460b1c2e4f9caff12b7d0366d86435fc9d8",
+      "size": 192,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/holly-wireframe-bash/SKILL.md": {
+      "sha256": "69c664a41c50aeae8dedb61bc2b50e5413814eb261b36d90ab57ddf480da9d81",
+      "size": 11386,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/holly/SKILL.md": {
+      "sha256": "58fb5b60153868e8b51882713a4fcedfe6a78ae040251c7ca698872feee7396d",
+      "size": 20864,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/issue-tracker/SKILL.md": {
+      "sha256": "d023606bb06ac9d3211fe466badd0740d39265733f37f2294619e936134c713a",
+      "size": 11269,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/issue-tracker/addendum-beads.md": {
+      "sha256": "f4fcdb47837c52bf3a832598cab649b6647ba7af716233c086a34f8fb2674993",
+      "size": 2977,
+      "owner": "adapter:beads",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/issue-tracker/beads/CLAUDE.md": {
+      "sha256": "0ff7f756bc52ff575a4bad181948555808664d3ff917eb28f247e92f1899469d",
+      "size": 2648,
+      "owner": "adapter:beads",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/issue-tracker/beads/README.md": {
+      "sha256": "4842b6044291328d0a6c6556f03d2e0c3ab1e498eaf92c7fa9491cc0646bd5da",
+      "size": 4806,
+      "owner": "adapter:beads",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/issue-tracker/beads/adr/0001-bd-prime-as-source-of-truth.md": {
+      "sha256": "29985565ab384b381d7288f2c01e19e6d06d760c560152a1238151731a35ca91",
+      "size": 1785,
+      "owner": "adapter:beads",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/issue-tracker/beads/resources/AGENTS.md": {
+      "sha256": "0158c156ffe03858fea3816bc6142cb75133ed54748936a05202b485a02250b5",
+      "size": 2008,
+      "owner": "adapter:beads",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/issue-tracker/beads/resources/ASYNC_GATES.md": {
+      "sha256": "519c66461cd17a4b6e2b97ae495d75976bf7f171fa87d70f94d1c89d9432f547",
+      "size": 4014,
+      "owner": "adapter:beads",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/issue-tracker/beads/resources/BOUNDARIES.md": {
+      "sha256": "9239200595fdc742bc2422c82bd7e71a55dc1af02ff6eea179642a0276f53a7c",
+      "size": 17035,
+      "owner": "adapter:beads",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/issue-tracker/beads/resources/CHEMISTRY_PATTERNS.md": {
+      "sha256": "c81bf240429099eeafd68c06bad4af45b0360dd5d3c6444f6d5b60d31c1641c5",
+      "size": 6863,
+      "owner": "adapter:beads",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/issue-tracker/beads/resources/CLI_REFERENCE.md": {
+      "sha256": "e0318dcfddd00e19b5461a34e70de50e12243610527b9619ddcd3910d159e12d",
+      "size": 20100,
+      "owner": "adapter:beads",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/issue-tracker/beads/resources/DEPENDENCIES.md": {
+      "sha256": "c9bb62e7539e6610d02f5d2040c711c50f8e002e677a042cb7e5fdcf15bd3c51",
+      "size": 19812,
+      "owner": "adapter:beads",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/issue-tracker/beads/resources/INTEGRATION_PATTERNS.md": {
+      "sha256": "a66e852d8b734f77bb9e157a37c2ecb14c7a2875cab43c5c96977b3c69321d55",
+      "size": 13783,
+      "owner": "adapter:beads",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/issue-tracker/beads/resources/ISSUE_CREATION.md": {
+      "sha256": "ff465ed1fb13fbb6c42b42ec15c1bd8fd677c4661237e4fc1675c179f7fca460",
+      "size": 5081,
+      "owner": "adapter:beads",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/issue-tracker/beads/resources/MOLECULES.md": {
+      "sha256": "4dbadf02ef5c4ec585c3aef43fb28e440470b03151a6ff6b49e0c8d51dc9e0a9",
+      "size": 10367,
+      "owner": "adapter:beads",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/issue-tracker/beads/resources/PATTERNS.md": {
+      "sha256": "b2f235633c664180da162d2b2bccdf62bd7865aeb2b4adde522964b6ca4cef7f",
+      "size": 11458,
+      "owner": "adapter:beads",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/issue-tracker/beads/resources/RESUMABILITY.md": {
+      "sha256": "01143c5c3c916b9e6074328e87b19ce2557ed19ce605ede41073066960815e0e",
+      "size": 5417,
+      "owner": "adapter:beads",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/issue-tracker/beads/resources/STATIC_DATA.md": {
+      "sha256": "610aca9de9cd7ff7bddeb636dd62f7b4b1e3b52694e90ed8c93639e4f17664c6",
+      "size": 2081,
+      "owner": "adapter:beads",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/issue-tracker/beads/resources/TROUBLESHOOTING.md": {
+      "sha256": "0c4303a7e387bd9253797872912c4e60ed57d35c29a2d7a73c9a430df27ad6d2",
+      "size": 10490,
+      "owner": "adapter:beads",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/issue-tracker/beads/resources/WORKFLOWS.md": {
+      "sha256": "710a110347e4e17282e1c8469456bf796898ccc2d51a6b5389f25d0c74ba37ea",
+      "size": 19427,
+      "owner": "adapter:beads",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/issue-tracker/beads/resources/WORKTREES.md": {
+      "sha256": "625c39eb381aec4b01d5cf5459d657db006d68bf196e0b400babea74410569a8",
+      "size": 3819,
+      "owner": "adapter:beads",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/orchestrate/SKILL.md": {
+      "sha256": "69e7b83a8e60f83b746e0aec13760677575081a1555681c143374702045bd795",
+      "size": 3178,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/orchestration/SKILL.md": {
+      "sha256": "3af1965b1fd831c75cc9489c4776117cfa5f9751ee04b2f30eeb87391673a795",
+      "size": 12550,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/project-knowledge/SKILL.md": {
+      "sha256": "5ad44d7ee75006eda38b995267cbbd9b7e4e72859c767842e385d4285274fc27",
+      "size": 7188,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/swarm-delivery/SKILL.md": {
+      "sha256": "682d55b0d46696f0a8c935d0fb0d64f72f70c12623c3f5d0207169e43a77458e",
+      "size": 22842,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/track/SKILL.md": {
+      "sha256": "6a578f30a7921ca6e2ff6cfa2b08d26ec9ae502db34f5222c52ed32a64399e2e",
+      "size": 3925,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/ui-visual-capture/SKILL.md": {
+      "sha256": "8e106f2ccbf9f4be7e95c933bb79a9bc56fdf0fa5ca56cf55cc189a71d4e79cb",
+      "size": 41197,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/ui-visual-capture/scripts/lib/args.mjs": {
+      "sha256": "1b38b252b7681bba8609bfc7a05d6b83017f2defea0fdeb03b383a44ecbdecb2",
+      "size": 4897,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/ui-visual-capture/scripts/lib/capture.mjs": {
+      "sha256": "b5bb1ff84db62ae0e70531f5f59965fb65d3705bf7f76dbc671cb1eb2e9437bf",
+      "size": 2044,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/ui-visual-capture/scripts/lib/dev-server-daemon.mjs": {
+      "sha256": "4f737601666a43f1a26682308d220faa51704d7883cb921965bf2de13cdab8ba",
+      "size": 6030,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/ui-visual-capture/scripts/lib/dev-server.mjs": {
+      "sha256": "fe8575ae6213dd6ac35db166331feffb26184d1157bcc2817386cf40c3520cd6",
+      "size": 15500,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/ui-visual-capture/scripts/lib/help.mjs": {
+      "sha256": "102fe68a82526ec07d27a04c31287902ec6a7cca50382034de5effef4595228a",
+      "size": 9264,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/ui-visual-capture/scripts/lib/paths.mjs": {
+      "sha256": "e4d4e8f757cc1a8109f9a5ff1b1b01c0504265ee70c033dbbc5aa7401448b93b",
+      "size": 9211,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/ui-visual-capture/scripts/lib/resolution.mjs": {
+      "sha256": "bcedda6457494c84319584991613fbfab08fc47598cb11328dc9430b96267756",
+      "size": 482,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/ui-visual-capture/scripts/lib/viewports.mjs": {
+      "sha256": "03489b7a0bf36e5d07567339b228bc9dd057fca62636e4a2cf678199ae1fa16d",
+      "size": 1973,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/ui-visual-capture/scripts/lib/webm-contact-sheet.py": {
+      "sha256": "8e8dd580899a1162d0c812c0e17f76ae35d784c409cd9dd343efbf6ed644c816",
+      "size": 3234,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/ui-visual-capture/scripts/playwright-screenshot.mjs": {
+      "sha256": "1b9eb5c307ca51a85d128684aade0968be8385240c16151d934b5d25610c7ccc",
+      "size": 13193,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/ui-visual-capture/scripts/timezone_reference.py": {
+      "sha256": "f852b9e99bbcdab969d83d4a2e4844b7e985c20e737f7b3504eb6a9bf7f3c069",
+      "size": 11182,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/ui-visual-capture/tests/args.test.mjs": {
+      "sha256": "d42e282c9e8cf7f01704b65dc28d8aa14cf00588383a6f120806f5188ce898e1",
+      "size": 5847,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/ui-visual-capture/tests/capture.test.mjs": {
+      "sha256": "16df0519a1573a46245bc48214609a1045d3e2d67a20dbe07d4ec6a9552e2de9",
+      "size": 5017,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/ui-visual-capture/tests/cli.test.mjs": {
+      "sha256": "d2169dd60a98c5428b1b9d6ab511033f8b5f4496c7a92ace646d5b3e8d2d732e",
+      "size": 2029,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/ui-visual-capture/tests/daemon.test.mjs": {
+      "sha256": "1140f64b46ad7c0ae69b9bbf228c968533aee5f044b3582fdce2b5035e091096",
+      "size": 8794,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/ui-visual-capture/tests/dev-server.test.mjs": {
+      "sha256": "2931d09d7511d92bf50cc60409a1a63da9481f36cd666afe279db80d5717e7ce",
+      "size": 19925,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/ui-visual-capture/tests/fixtures/bad-script.mjs": {
+      "sha256": "11d13771f323265f281c1484e5db2290017a6e5efdc076e4659aed1761db127b",
+      "size": 33,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/ui-visual-capture/tests/fixtures/noop-script.mjs": {
+      "sha256": "f9b0f10f61d00aaa688f0fccf4136ec4bc3f3c29e6e1059e6ebd978d30dcd74f",
+      "size": 83,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/ui-visual-capture/tests/help.test.mjs": {
+      "sha256": "29e89772799d3b4d3cc53e7ab79c2e62352923a82180ec5b6a82aed9863fae38",
+      "size": 1554,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/ui-visual-capture/tests/paths.test.mjs": {
+      "sha256": "f083d9a586ae1b3850b77f77adca4ec0dd773940e50109ae3253e1b212cbeb07",
+      "size": 15580,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/ui-visual-capture/tests/resolution.test.mjs": {
+      "sha256": "ced89d6f58d33c86c1bf1a64d44ee5be715efc008730fd118c85fdfebdfcfa2a",
+      "size": 1150,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/ui-visual-capture/tests/viewports.test.mjs": {
+      "sha256": "62afb698b817fb7bbaaafbbe102ad1b2b0627cfa6bd2f0018197a9961bfc4573",
+      "size": 3691,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/use-workflow/SKILL.md": {
+      "sha256": "f78bf8f48dd14b164b8e5ea6d9303c29aa84b1eb8e1feb4dff823430b2fb5420",
+      "size": 11265,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    "workflows/begin-session.yaml": {
+      "sha256": "316b69b60f037e9cf97330970f1974388733faa95c410e8f1c1de64bae79db58",
+      "size": 10088,
+      "owner": "adapter:beads",
+      "source_package": "",
+      "source_version": ""
+    },
+    "workflows/commit.yaml": {
+      "sha256": "4adbb269e16b888356d915031256b37a0066e36cab734ec5b4a1159844531f34",
+      "size": 6352,
+      "owner": "adapter:beads",
+      "source_package": "",
+      "source_version": ""
+    },
+    "workflows/default.yaml": {
+      "sha256": "13ab92c803333ad7425563f1928d1ff64df566bdba11daeafaa3e5d758a3d2d1",
+      "size": 671,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    "workflows/end-session.yaml": {
+      "sha256": "7e8da46ea44e2eeb6aa866704ff1dee7b27772c8d071afd4f20c5bb0b371bb89",
+      "size": 2740,
+      "owner": "adapter:beads",
+      "source_package": "",
+      "source_version": ""
+    },
+    "workflows/grind.yaml": {
+      "sha256": "c11bb138269d6988095fd7d14358f04d32ee6b9030f07b22d04bbf4e3395f343",
+      "size": 10963,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    "workflows/implement.yaml": {
+      "sha256": "6cb8429f2e326b19601fc85513bbaa668c7561204bd9f12b436605764cfbaf98",
+      "size": 21903,
+      "owner": "adapter:beads",
+      "source_package": "",
+      "source_version": ""
+    },
+    "workflows/orchestrate-swarm.yaml": {
+      "sha256": "fa5e09e8475ccc65ec84c7aeba2195b6fa7c03a802c9babcd9d921ce94df2c3b",
+      "size": 27618,
+      "owner": "adapter:beads",
+      "source_package": "",
+      "source_version": ""
+    },
+    "workflows/orchestrate.yaml": {
+      "sha256": "e1d4952343b1dbd7246a8d5367d3f77b85502e195993f7056dd7c81f138f38a4",
+      "size": 20507,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    "workflows/queue-orchestrate.yaml": {
+      "sha256": "bed53e6ffe5aa45cc1a8119ac679443e5f830515054a19f1f0a6815bd4a4773b",
+      "size": 16776,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    "workflows/review-implementation.yaml": {
+      "sha256": "827bfd5358600a147ed297d11fbb65a2456046bf9905ea34a211ffb906cc542f",
+      "size": 11480,
+      "owner": "adapter:beads",
+      "source_package": "",
+      "source_version": ""
+    },
+    "workflows/track.yaml": {
+      "sha256": "4df82da136de970c45bf34dff22a87eb3525b2aeac98fc6861076fc44e69e535",
+      "size": 14639,
+      "owner": "adapter:beads",
+      "source_package": "",
+      "source_version": ""
+    },
+    "workflows/workflow-wrapper.yaml": {
+      "sha256": "5633b410a9b83f909f100381684a75201dd18d9bc779a76df715cd3030359121",
+      "size": 5522,
+      "owner": "adapter:beads",
+      "source_package": "",
+      "source_version": ""
+    },
+    "workflows/zero-problems.yaml": {
+      "sha256": "7fd00dd13b27d3097419c76ac8711d4e0d0af2f0e6114ec6920f51a8910b69d5",
+      "size": 5393,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    }
+  }
+}

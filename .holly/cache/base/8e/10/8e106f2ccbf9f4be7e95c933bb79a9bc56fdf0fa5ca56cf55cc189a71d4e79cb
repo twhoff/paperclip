@@ -1,0 +1,842 @@
+---
+name: ui-visual-capture
+description: >
+  Visual feedback loop for ALL frontend UI work — app routes, Storybook stories,
+  and any localhost target. Captures responsive screenshots and video,
+  including 60fps animation evidence when timing/easing is under review,
+  via the bundled `playwright-screenshot` CLI and stores them in agent-fs
+  session scratch. REQUIRED for every agent working on UI: engineers must
+  build → look → adjust → look again before moving to in_review. Reviewers and
+  QA must visually verify before approving. Tickets that change visible UI
+  CANNOT be closed without screenshots/video captured and reviewed for all
+  required viewports. Local-only tracker workflows do not require upload.
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - ctx_execute
+  - ctx_batch_execute
+---
+
+# Visual Capture — UI Work Lifecycle
+
+> **Mandatory for ALL UI work — engineers, QA, and reviewers alike.** Any ticket
+> that touches visible UI must include before screenshots at mobile + desktop
+> minimum and after screenshots at all four project viewports before it can
+> move to `in_review`. If the change involves animation or multi-step
+> interaction, a video recording is also required. **No visual review = no close.**
+
+This skill covers two workflows:
+
+1. **Build → Look → Adjust → Look Again** (for engineers implementing UI):
+   capture before, build, capture after, iterate until correct at all viewports.
+2. **Visual Verification** (for QA, reviewers, and non-engineering agents):
+   open the running app, capture proof, and report findings with the exact
+   scratch path.
+
+Targets: the running app at `localhost:3000`, Storybook at `localhost:6006`,
+or any other URL.
+
+---
+
+## MANDATORY pre-capture gate — do this BEFORE any capture (both workflows)
+
+This skill captures and validates pixels. It does **not** carry product design
+judgement, and it does **not** know what this UI is supposed to look like. Both
+of those live elsewhere, and you MUST pull them in first — whether you are
+building UI or reviewing it:
+
+1. **Load the project's design-guide skill.** Expect one to exist (e.g.
+   `tizzi-design-guide`, or a `<project>-design-system` skill). If you have not
+   already loaded it this session, load it now and review through its lens
+   (visual hierarchy, design tokens, accessibility, calm / low-cognitive-load —
+   whatever that project defines). If you genuinely cannot find a design-guide
+   skill, say so to the user before continuing — do **not** invent design
+   judgement of your own.
+2. **Find the wireframe for the UI piece you are capturing.** Expect a wireframe
+   to exist (commonly under `docs/wireframes/`). Review your captures against its
+   intended states, information density, and breakpoint behaviour, and reference
+   it in your findings. If **no** wireframe exists for this piece, STOP and flag
+   it with the user — a missing wireframe is a gap to raise, not to improvise
+   past.
+
+Neither step is optional and neither is satisfied by a smoke test. A capture
+without the design lens and the wireframe is just pixels nobody judged — which is
+exactly how UI drifts while every automated check still "passes".
+
+## What this skill can do (know these exist, and use them)
+
+The bundled `playwright-screenshot` CLI gives every agent these capabilities — do
+not hand-roll browser tooling that reinvents them:
+
+| Capability                                     | How                                                                                                                   |
+| ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| **Simultaneous multi-viewport capture**        | All five project viewports in parallel in one run (subset/override with `--viewports`).                               |
+| **Storybook capture**                          | Point at an `iframe.html?id=<story-id>` URL (use `--wait-until=domcontentloaded`).                                     |
+| **Scripted interaction prep**                  | `--script <file.mjs>` runs your flow (open a sheet, fill a form, switch a tab) before the shot.                        |
+| **Live-interaction recording + contact sheet** | With `--script`, records WebM, extracts frames, and builds a labelled contact sheet (`--video-fps=60` for animation). |
+| **Crop to a single component**                 | `--clip-to=<selector>` captures only that element's bounding box (precise); or size a tight viewport for crops.        |
+
+Each is documented in detail below and in `playwright-screenshot --help`.
+
+> **NOT for live third-party sites or authenticated external sessions.** This
+> skill drives a fresh Playwright Chromium against URLs you control (your dev
+> server, Storybook, a localhost preview). It does **not** reuse a user's
+> existing logged-in browser session and it does **not** know how to attach to
+> an already-running Chrome. For authenticated state of a third-party site
+> (Woolworths cart, bank balance, ticket booking), use **`live-session-capture`**.
+
+---
+
+## The CLI: `playwright-screenshot`
+
+From the project or task-worktree root, every capture in this skill is a single
+invocation of:
+
+```bash
+node .agents/skills/ui-visual-capture/scripts/playwright-screenshot.mjs <url> [output-path] [flags]
+```
+
+The script auto-detects the project root (walking up looking for `.git`),
+finds `playwright` in your project's `node_modules` (including monorepo
+subdirs like `frontend/node_modules/playwright`), captures all five viewports
+in parallel, and prints a JSON summary on stdout.
+
+Run it once with `--help` for the full reference. The most-used flags:
+
+| Flag                                     | Effect                                                 |
+| ---------------------------------------- | ------------------------------------------------------ |
+| `--theme=light\|dark\|system`            | Force color scheme (default `system`)                  |
+| `--viewport-only`                        | Visible region only (default: full page)               |
+| `--scroll-to=SELECTOR`                   | Scroll element into view before capture                |
+| `--scroll-y=N`                           | Scroll N pixels before capture                         |
+| `--clip-to=SELECTOR`                     | Crop to one component: shoot only that element's bounding box |
+| `--script PATH`                          | Run an interaction script then capture (enables video) |
+| `--no-video`                             | Disable video even when `--script` is set              |
+| `--wait-until=load\|domcontentloaded\|networkidle` | Navigation readiness; use `domcontentloaded` for Storybook iframes |
+| `--storage-state PATH`                   | Use saved Playwright auth state                        |
+| `--auth-token TOKEN`                     | Send `Authorization: Bearer TOKEN`                     |
+| `--header K=V` (repeatable)              | Extra HTTP header                                      |
+| `--resolution=low\|medium\|high\|native` | low/medium = JPEG, smaller; default `native` = PNG @2x |
+| `--viewports=mobile,desktop`             | Subset, width override `mobile=375`, or exact size `mobile=390x40` |
+| `--video-fps=N`                          | WebM frame extraction FPS; animation review minimum is `60` |
+| `--contact-sheet-columns=N`              | Override contact sheet column count                    |
+| `--contact-sheet-thumb-width=N`          | Override contact sheet thumbnail width                 |
+| `--attach-existing`                      | Reuse a dev server started from a different worktree   |
+
+Default output location must come from the **`agent-fs`** skill:
+
+- Issue-scoped captures:
+  `CAPTURES="$("$AGENT_FS_BIN" scratch "ui-visual-capture-$ISSUE")"`
+- Anonymous captures:
+  `CAPTURES="$("$AGENT_FS_BIN" scratch visual-capture)"`
+
+Screenshots always default to session scratch. With a local-only tracker, do not
+upload them and do not treat a missing attachment as a close blocker. Record the
+exact scratch path in the structured issue comment. An attachment-capable
+workflow may explicitly promote selected artifacts for upload,
+but publication is separate from the default capture path.
+
+Never write captures or helper scripts to ad hoc temp paths. On Claude Code with
+`agent-fs init --runtime claude-code`, the PreToolUse hook blocks unsanctioned
+temporary writes; other runtimes follow the same project rule by policy.
+
+This is always outside the project root.
+
+At the end, you MUST output a full folder path to the foder which contains your
+captures in your agent scratch folder.
+
+Example:
+
+```bash
+Visual captures can be viewed here: `/Users/twhoffmann/.agent-scratch/sess-59fe522d-6de1-48bd-b197-8658e8c91815/scratch/ui-visual-capture-TIZA-1006-journey-review`
+```
+
+IMPORTANT: The path must be EXACT. DO NOT ellipsise any part of it or use line breaks.
+
+---
+
+## Project Viewports
+
+The CLI's five canonical viewports — used for **all** captures. Aligned with
+Tailwind v3 default breakpoints, plus one Safari-constrained sibling for the
+overlays / sheets / drawers / modals class of UI.
+
+| Name            | Width × Height | Tailwind range | Purpose                                                              |
+| --------------- | -------------- | -------------- | -------------------------------------------------------------------- |
+| `mobile`        | 390 × 844      | below `sm`     | iPhone 14 logical viewport with no browser chrome (fantasy ideal)    |
+| `mobile_safari` | 390 × 664      | below `sm`     | iPhone Safari with top + bottom browser chrome (real visible region) |
+| `tablet_p`      | 768 × 1024     | `md`           | iPad portrait                                                        |
+| `tablet_l`      | 1024 × 768     | `lg`           | iPad landscape                                                       |
+| `desktop`       | 1280 × 900     | `xl`           | Standard laptop / desktop                                            |
+
+`mobile` and `mobile_safari` share the same logical width. The height difference
+is what surfaces bugs that hide behind the "no browser chrome" assumption — most
+visibly: modal close buttons clipped under the Safari header, sticky footers
+fighting the Safari toolbar, sheets that resolve at the bottom of `100vh` but
+not `100svh`.
+
+**`mobile_safari` is mandatory** for every ticket that introduces or modifies a
+fixed-position, sticky-positioned, or full-screen overlay. That includes:
+modals, dialogs, bottom sheets, drawers, action sheets, app nav bars, toasts,
+banners, snackbars, and any other layer that pins to a viewport edge.
+
+If a particular ticket needs a different width or exact component viewport,
+override per-call: `--viewports=mobile=375,desktop=1440` or
+`--viewports=mobile=390x40`.
+
+For tiny component animations, prefer an exact component-sized viewport or tight
+crop over a full phone/desktop frame. The WebM and contact sheet must make the
+moving pixels easy to inspect.
+
+---
+
+## Required workflow for UI tickets
+
+```text
+0. GATE        → MANDATORY: load the project design-guide skill + locate the
+                  wireframe and compare against it (flag with the user if missing)
+1. ALIGN       → restate target as "route + viewport rule + expected behavior"
+2. SOURCE      → run a dedicated app server on a unique port for this ticket
+3. PRE-WORK    → capture current state at mobile + desktop minimum (before)
+4. BUILD       → implement the change
+5. LOOK        → open the browser, visually inspect at all viewports (design-guide lens)
+6. ADJUST      → fix what doesn't look right
+7. LOOK AGAIN  → repeat 5–6 until the UI is correct at ALL viewports
+8. TEST        → Playwright interaction test of the changed flow (use --script)
+9. CAPTURE     → final state, all five viewports (after, only after data settles);
+                  `mobile_safari` is non-negotiable for fixed/sticky/overlay UI
+10. REPORT     → post findings + exact scratch path; publish selected artifacts
+                  only when an attachment-capable workflow explicitly requires it
+```
+
+**Steps 3–5 are the critical feedback loop.** Tests passing is necessary but
+NOT sufficient for UI work.
+
+### Alignment and source lock (mandatory)
+
+Before any capture, write a one-line check in your notes or issue comment:
+
+- `Target: /route | Rule: breakpoint/behavior | Expectation: what must happen`
+
+Then lock capture provenance to one server instance:
+
+- Start a dedicated app server on a unique port from the active worktree
+  (example `3101`).
+- Capture evidence only against that exact base URL and port.
+- Include the full tested URL in the review comment (for example
+  `http://localhost:3101/dashboard`).
+
+This prevents mixed-localhost evidence from different checkouts.
+
+### For QA and reviewers
+
+```text
+0. GATE        → MANDATORY: load the project design-guide skill + locate the
+                  wireframe for this UI piece (flag with the user if missing)
+1. OPEN        → ensure the dev server is running
+2. INSPECT     → run the CLI against the changed route at all five viewports;
+                  reject UI tickets that omit `mobile_safari` when the change
+                  introduces or modifies a fixed/sticky/overlay layer
+3. CAPTURE     → review the resulting PNGs (read them with the image viewer),
+                  judged through the design-guide lens and against the wireframe
+4. ASSERT      → for any sheet/modal/drawer/overlay, verify the geometry
+                  assertion (see "Sheet/modal geometry assertions" below)
+5. REPORT      → post findings and the exact scratch path; local-only trackers need no upload
+```
+
+---
+
+## Sheet/modal geometry assertions
+
+Any test or visual review that exercises a sheet, modal, drawer, or other
+fixed-position overlay must include a geometry assertion against `mobile_safari`
+(390 × 664). Visual screenshots alone are insufficient — they can be cropped,
+scaled, or interpreted as "looks fine" when the layout is actually clipped.
+
+### Why this exists
+
+Before 2026-05-16, the default `mobile` viewport (390 × 844) hid a class of
+real iPhone Safari regressions: modal close buttons clipped under the browser
+header, sticky footers fighting the toolbar, sheets that resolve at the bottom
+of `100vh` but not `100svh`. The recipe modal (`RecipeDrawer`, GRO-934) was
+the canary that triggered this rule. The `mobile_safari` viewport surfaces
+the bug class; the assertion below proves it is fixed.
+
+### The assertion
+
+```js
+// At a viewport with browser chrome active (mobile_safari = 390 × 664):
+const sheetBox = await page.locator('[role="dialog"]').boundingBox()
+expect(sheetBox).not.toBeNull()
+// Top of sheet is at least 8px below the viewport top edge (room for header
+// chrome, drag handle, etc. — never flush against the chrome).
+expect(sheetBox.y).toBeGreaterThanOrEqual(8)
+// Sheet never overflows the viewport vertically.
+expect(sheetBox.height).toBeLessThanOrEqual(await page.evaluate(() => window.innerHeight))
+// Bottom of sheet aligns with the bottom of the viewport, within 2px tolerance
+// for sub-pixel rounding. If the sheet stops short of the bottom, the app
+// bottom-nav is leaking through.
+expect(
+  Math.abs(sheetBox.y + sheetBox.height - (await page.evaluate(() => window.innerHeight)))
+).toBeLessThanOrEqual(2)
+```
+
+Selector note: if the overlay does not yet expose `[role="dialog"]`, fix that
+first — `role="dialog"` + `aria-modal="true"` are required for screen-reader
+correctness and are the canonical hook for this assertion.
+
+### What the assertion does NOT cover
+
+- Drag-to-dismiss gesture geometry (covered by interaction tests).
+- Background scroll lock (verify separately with `page.evaluate(() => document.body.scrollTop)`).
+- Focus trap behaviour (verify with `page.keyboard.press('Tab')` and accessibility tree assertions).
+- Reduced-motion respect (verify with `page.emulateMedia({ reducedMotion: 'reduce' })`).
+
+These belong in a separate test alongside the geometry assertion, not as
+replacements for it.
+
+### Where to put it
+
+- Inside the component's own Playwright test (preferred — runs on every CI).
+- Inside the interaction script passed to `playwright-screenshot --script`
+  when capturing visual evidence (acts as a guard against accepting a
+  visibly-broken capture).
+
+---
+
+## Prerequisites
+
+| Dependency                        | Check                                                                                           | Install                                 |
+| --------------------------------- | ----------------------------------------------------------------------------------------------- | --------------------------------------- |
+| Dev server (app)                  | Auto-started from worktree cwd; or check `curl -sf http://localhost:3000 >/dev/null && echo OK` | `pnpm dev` (or automatic in worktrees)  |
+| Storybook (components)            | `curl -sf http://localhost:6006 >/dev/null && echo OK \|\| echo DOWN`                           | `pnpm storybook`                        |
+| Playwright + browsers             | `pnpm exec playwright --version`                                                                | `pnpm exec playwright install chromium` |
+| ffmpeg (frame extraction)         | `ffmpeg -version`                                                                               | `brew install ffmpeg` (macOS)           |
+| python3 + Pillow (contact sheets) | `python3 -c "import PIL; print(PIL.__version__)"`                                               | `pip3 install Pillow`                   |
+
+> **Auto-server behavior:** when the URL is `localhost:<port>` and cwd is a git worktree,
+> the CLI automatically finds the frontend package and starts a dev server on that port,
+> with a 5-minute idle watchdog. From the main checkout, the server must already be running.
+> See **AUTO-SERVER BEHAVIOR** in `--help` for details.
+
+---
+
+## Step 1 — Pre-work baseline (BEFORE screenshots)
+
+Before making any change, capture the current state. From a worktree, the dev
+server is started automatically if not already running.
+
+```bash
+# From a worktree (server auto-starts on the given port):
+node .agents/skills/ui-visual-capture/scripts/playwright-screenshot.mjs \
+  http://localhost:3000/YOUR_ROUTE \
+  --viewports=mobile,desktop
+
+# From the main checkout (server must already be running):
+node .agents/skills/ui-visual-capture/scripts/playwright-screenshot.mjs \
+  http://localhost:3000/YOUR_ROUTE \
+  --viewports=mobile,desktop
+```
+
+For a Storybook story:
+
+```bash
+node .agents/skills/ui-visual-capture/scripts/playwright-screenshot.mjs \
+  'http://localhost:6006/iframe.html?id=flows-quick-capture--closed-state'
+```
+
+> **Tip — authentication:** if the route requires a logged-in session, pass
+> `--storage-state /path/to/state.json` (capture state once with
+> `pnpm exec playwright codegen --save-storage`).
+
+---
+
+## Step 2 — Carry out the work
+
+Implement the change. While iterating, point your browser (or run the CLI)
+at the route as often as you need to visually verify.
+
+---
+
+## Step 3 — Interaction testing with Playwright
+
+For changes that involve clicks, modals, drawers, or multi-step flows, write
+an interaction script that performs the user flow, then run the CLI with
+`--script`. The script is called once per viewport with `{ page, viewport,
+context }`.
+
+```javascript
+// $CAPTURES/interactions/open-meal-edit.mjs
+export default async function ({ page, viewport }) {
+  await page.getByRole('button', { name: /open/i }).click()
+  await page.waitForSelector('[role="dialog"]', { state: 'visible' })
+
+  if (viewport.name === 'mobile') {
+    await page.getByLabel('Task name').fill('Buy groceries')
+    await page.getByRole('button', { name: /save/i }).click()
+    await page.waitForSelector('text=Buy groceries', { state: 'visible' })
+  }
+}
+```
+
+Selector preference order (WCAG-aligned):
+
+1. `page.getByRole('button', { name: /label/i })` — role + accessible name
+2. `page.getByLabel('Field label')` — for form inputs
+3. `page.getByText('Visible text')` — for content elements
+4. `page.locator('[data-testid="..."]')` — last resort
+
+The CLI takes the screenshot **after** the interaction script returns, so
+finish the script with the page in the state you want to capture.
+
+---
+
+## Step 4 — Post-work capture (AFTER screenshots, all viewports)
+
+```bash
+CAPTURES="$("$AGENT_FS_BIN" scratch "ui-visual-capture-$ISSUE")"
+
+node .agents/skills/ui-visual-capture/scripts/playwright-screenshot.mjs \
+  http://localhost:3000/YOUR_ROUTE \
+  "$CAPTURES/after/"
+```
+
+This produces `mobile.png`, `tablet_p.png`, `tablet_l.png`, `desktop.png` in
+the after directory.
+
+### Settled-state capture for async routes
+
+If a route loads async data, use `--script` with a short wait helper so proof
+captures are not stuck on loading spinners.
+
+```javascript
+// $CAPTURES/wait-settled.mjs
+export default async function ({ page }) {
+  await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {})
+  await page.waitForTimeout(3000)
+}
+```
+
+```bash
+CAPTURES="$("$AGENT_FS_BIN" scratch "ui-visual-capture-$ISSUE")"
+
+node .agents/skills/ui-visual-capture/scripts/playwright-screenshot.mjs \
+  http://localhost:3101/YOUR_ROUTE \
+  "$CAPTURES/after/" \
+  --script "$CAPTURES/wait-settled.mjs" \
+  --no-video
+```
+
+If a capture still shows loading placeholders, it is not valid proof. Re-capture
+after extending settle time.
+
+---
+
+## Step 5 — Video recording (for interaction-heavy changes)
+
+For animations, transitions, drawers, modals, multi-step forms, or drag-and-drop,
+add `--script` to record video. Default is mobile + desktop only — override
+with `--viewports=...` if needed.
+
+Do not apply animation precision rules to ordinary journey capture. Journey
+capture proves states and outcomes, so it can use the default/lower frame
+sampling and fewer contact sheets unless animation timing, easing, or
+frame-by-frame motion is the review target.
+
+```bash
+CAPTURES="$("$AGENT_FS_BIN" scratch "ui-visual-capture-$ISSUE")"
+
+node .agents/skills/ui-visual-capture/scripts/playwright-screenshot.mjs \
+  http://localhost:3000/YOUR_ROUTE \
+  "$CAPTURES/<capture-name>/" \
+  --script "$CAPTURES/interactions/open-meal-edit.mjs" \
+  --viewports=mobile,desktop
+```
+
+The CLI automatically produces the full capture package for each viewport:
+
+| File              | Location                                                     |
+| ----------------- | ------------------------------------------------------------ |
+| Settled-state PNG | `<capture-dir>/mobile.png`                                   |
+| Source WebM       | `<capture-dir>/mobile.webm`                                  |
+| Extracted frames  | `<capture-dir>/frames/mobile-webm/frame-001.png` …           |
+| Contact sheet     | `<capture-dir>/contact-sheets/mobile-webm-contact-sheet.png` |
+| Capture manifest  | `<capture-dir>/manifests/capture-manifest.json`              |
+
+Use `--no-video` to skip the WebM (and all derivative captures) when you only
+want the post-interaction PNG.
+
+### Animation-specific capture (60fps minimum)
+
+Apply this subsection only when reviewing animation, microinteraction,
+transition timing, easing, or frame-by-frame motion.
+
+For animation evidence:
+
+- extract frames at **at least 60fps** with `--video-fps=60`,
+- capture real browser pixels from the WebM; do not reconstruct motion from DOM
+  styles, sampled widths, screenshots, or synthetic renders,
+- use the actual app route or Storybook iframe URL and record the full URL,
+- set the viewport to the actual component area or a tight viewport/crop (for
+  example `--viewports=mobile=390x40`),
+- trigger the real state change after the initial story/component has visibly
+  settled.
+
+Example Storybook animation capture:
+
+```bash
+SCRATCH="$("$AGENT_FS_BIN" scratch onboardingprogress-animation)"
+
+node .agents/skills/ui-visual-capture/scripts/playwright-screenshot.mjs \
+  'http://localhost:6007/iframe.html?id=atoms-onboardingprogress--welcome&viewMode=story&args=totalStages%3A5%3BactiveStage%3A3&globals=viewport.value%3Aphone' \
+  "$SCRATCH/actual-390x40-60fps/" \
+  --script "$SCRATCH/active-stage-3-to-4.mjs" \
+  --viewports=mobile=390x40 \
+  --viewport-only \
+  --wait-until=domcontentloaded \
+  --video-fps=60 \
+  --contact-sheet-columns=10 \
+  --contact-sheet-thumb-width=390 \
+  --attach-existing
+```
+
+### Animated evidence rules
+
+GIF output is deprecated and must not be generated. GIFs distort colour
+palettes, can misrepresent timing, and are larger than their source WebM.
+
+The WebM is the source of truth. The contact sheet is the mandatory
+reviewer-friendly inspection artifact. The manifest records validity.
+For animation review, generate the contact sheet from 60fps frame extraction.
+For journey review, lower sampling is acceptable when it still proves the
+states and final outcome.
+
+Evidence is only valid when:
+
+- the WebM and contact sheet reach the intended final UI state,
+- the final frame matches the settled-state PNG,
+- the evidence does not stop at a spinner (unless loading is the review target),
+- all files remain inside `<capture-dir>/`.
+
+### Publishing animation artifacts (conditional)
+
+For local-only trackers, retain the entire package in scratch and report its exact path; no
+upload is required. If an attachment-capable workflow explicitly requires
+publication, publish the contact sheet PNG and settled-state PNG instead of the
+WebM. Retain the WebM locally inside the scratch capture directory as the source
+of truth.
+
+The review comment must include:
+
+- the settled-state PNG,
+- the WebM contact sheet PNG,
+- the capture output directory path,
+- the manifest path,
+- whether the final frame matches the settled screenshot.
+
+---
+
+## Step 6 — Report; publish only when explicitly required
+
+Always post the structured visual-review comment with the exact absolute scratch
+path.
+
+**Local-only tracker adapters:** stop there. Screenshots remain in session scratch. Do not call
+`agent-fs evidence upload` or `agent-fs evidence post`, and do not block
+`in_review` or issue closure because no attachment exists.
+
+**Attachment-capable tracker adapters:** only when the workflow or
+user explicitly requires publication, promote selected supported files from
+scratch into a deliberate issue evidence bundle, then upload that bundle:
+
+```bash
+PUBLISH="$("$AGENT_FS_BIN" evidence --issue "$ISSUE" visual-capture-after)"
+cp "$CAPTURES/after/mobile.png" "$PUBLISH/mobile.png"
+cp "$CAPTURES/after/desktop.png" "$PUBLISH/desktop.png"
+agent-fs evidence manifest --issue "$ISSUE" visual-capture-after
+agent-fs evidence upload --issue "$ISSUE" visual-capture-after
+
+# Or upload and post the explicit bundle in one call.
+agent-fs evidence post --issue "$ISSUE" visual-capture-after \
+  --comment "Visual proof — after, all viewports."
+```
+
+`evidence post` embeds attachment markdown. This publication branch is not part
+of a local-only tracker workflow.
+
+### Allowed publication file types
+
+| Type | MIME              | Notes                                                      |
+| ---- | ----------------- | ---------------------------------------------------------- |
+| PNG  | `image/png`       | ✅ Screenshots and contact sheets                          |
+| JPEG | `image/jpeg`      | ✅ Compressed screenshots                                  |
+| GIF  | `image/gif`       | ✅ Allowed but not used for animation evidence             |
+| PDF  | `application/pdf` | ✅ Reports                                                 |
+| WebM | `video/webm`      | ❌ Not accepted — retain locally, upload contact sheet PNG |
+| MP4  | `video/mp4`       | ❌ Not accepted                                            |
+
+---
+
+## Storybook-specific: story URLs
+
+When the target is a Storybook story, use the **iframe URL** (no sidebar/chrome):
+
+| Pattern                                           | Use for                                |
+| ------------------------------------------------- | -------------------------------------- |
+| `http://localhost:6006/iframe.html?id={story-id}` | Screenshots and video — bare component |
+| `http://localhost:6006/?path=/story/{story-id}`   | Browsing only                          |
+
+Story IDs use kebab-case: `{category}-{component}--{story-name}` (e.g.
+`flows-quick-capture--closed-state`). Discover them by browsing Storybook or
+grepping `*.stories.tsx` for `title` + story export names.
+
+Use URL `args` and `globals` to set the starting state. If a prop-only state
+change must be triggered for video, run an interaction script that emits
+Storybook's args update after the iframe story is visible:
+
+```javascript
+export default async function ({ page }) {
+  await page.waitForTimeout(500)
+
+  await page.evaluate(() => {
+    const events = window.__STORYBOOK_MODULE_CORE_EVENTS__
+    const channel = window.__STORYBOOK_ADDONS_CHANNEL__
+    const storyId =
+      window.__STORYBOOK_PREVIEW__?.currentSelection?.storyId ??
+      new URLSearchParams(window.location.search).get('id')
+
+    channel.emit(events.UPDATE_STORY_ARGS, {
+      storyId,
+      updatedArgs: { activeStage: 4 },
+    })
+  })
+
+  await page.waitForTimeout(1200)
+}
+```
+
+Prefer real UI input when the story exposes controls inside the iframe. Use
+`UPDATE_STORY_ARGS` when the state is only reachable through Storybook args.
+Because Storybook dev servers often keep websocket connections open, use
+`--wait-until=domcontentloaded` if `networkidle` delays or fails capture.
+
+---
+
+## Post-work comment template
+
+Post a single structured comment on the issue after capture and review. This is
+the **mandatory closing comment** for all UI tickets. For local-only trackers, use local
+scratch paths and state that upload is not required. For an explicitly
+attachment-capable publication flow, add the returned attachment URLs.
+
+```markdown
+## Visual Review — {Ticket title}
+
+**URL tested:** `http://localhost:3000/{route}` (or Storybook `{story-id}`)
+**Phase:** Before → After comparison
+**Viewports:** mobile, tablet_p, tablet_l, desktop
+**Capture directory:** `/absolute/agent-fs/session/scratch/path`
+**Publication:** not required (local-only tracker) / explicitly published ({adapter})
+
+---
+
+### Before
+
+| Viewport             | Local screenshot path               |
+| -------------------- | ----------------------------------- |
+| Mobile (390 × 844)   | `<capture-dir>/before/mobile.png`   |
+| Desktop (1280 × 900) | `<capture-dir>/before/desktop.png`  |
+
+### After — all viewports
+
+| Viewport             | Local screenshot path               |
+| -------------------- | ----------------------------------- |
+| Mobile (390 × 844)   | `<capture-dir>/after/mobile.png`    |
+| Tablet portrait      | `<capture-dir>/after/tablet_p.png`  |
+| Tablet landscape     | `<capture-dir>/after/tablet_l.png`  |
+| Desktop (1280 × 900) | `<capture-dir>/after/desktop.png`   |
+
+### Interaction recording (if applicable)
+
+| Viewport | Local contact-sheet path                                      |
+| -------- | ------------------------------------------------------------- |
+| Mobile   | `<capture-dir>/contact-sheets/mobile-webm-contact-sheet.png`  |
+| Desktop  | `<capture-dir>/contact-sheets/desktop-webm-contact-sheet.png` |
+
+**WebM retained locally:** `<capture-dir>/mobile.webm`
+**Manifest:** `<capture-dir>/manifests/capture-manifest.json`
+**Final frame matches settled PNG:** yes / no
+
+---
+
+### Per-viewport findings
+
+#### Mobile (390 × 844)
+
+- ✅ / ⚠️ / ❌ Layout
+- ✅ / ⚠️ / ❌ Touch targets ≥ 44px
+- ✅ / ⚠️ / ❌ Typography / spacing
+- ✅ / ⚠️ / ❌ Colour contrast
+
+#### Desktop (1280 × 900)
+
+- ✅ / ⚠️ / ❌ ...
+
+### Cross-viewport notes
+
+- Breakpoint transitions
+- Content reflow
+- Navigation consistency
+
+### Recommendations
+
+- Priority fixes
+- Nice-to-have improvements
+
+### Provenance
+
+- Capture source server: `http://localhost:<port>` (single dedicated instance)
+- Route checked: `{route}`
+- Rule checked: `{breakpoint/behavior expectation}`
+```
+
+---
+
+## Date/Time Validation Gate (Mandatory)
+
+If a screenshot contains **any visible date or time**, validate it with
+`timezone_reference.py` before accepting the screenshot as evidence.
+
+Use:
+
+```bash
+python3 scripts/timezone_reference.py
+python3 scripts/timezone_reference.py --what-day "YYYY-MM-DD"
+```
+
+For automation or structured notes, use JSON mode:
+
+```bash
+python3 scripts/timezone_reference.py --json
+python3 scripts/timezone_reference.py --what-day "YYYY-MM-DD" --json
+```
+
+### What must be validated
+
+- Day label matches actual calendar day (example: `Sun, 10 May 2026` really is Sunday).
+- Time shown matches displayed timezone and offset.
+- 12-hour/24-hour conversion is correct.
+- Relative timezone math is correct against UTC reference.
+
+### Example check
+
+- Tool says UTC is `Sun, 10 May 2026 06:19:00 UTC (UTC+0000)`.
+- UI shows `Sunday, 10 May 2026 6:14 PM GMT+10`.
+- Expected local time at UTC+10 for 06:19 UTC is 16:19 (`4:19 PM`).
+- Therefore `6:14 PM GMT+10` is invalid and the screenshot fails validation.
+
+### Reviewer requirement
+
+In the visual review comment, include a **Date/Time validation** subsection with:
+
+- every visible date/time extracted from the screenshot,
+- the reference command output used,
+- a pass/fail result for each value.
+
+Do not mark a screenshot as approved until all visible date/time values are checked off as valid.
+
+---
+
+## Acceptance criteria checklist for UI tickets
+
+Before marking any UI ticket `in_review`, confirm:
+
+- [ ] **Design-guide skill loaded** and the work reviewed through its lens (see "MANDATORY pre-capture gate")
+- [ ] **Wireframe located and compared** against the captures — or its absence explicitly flagged to the user
+- [ ] **Before screenshots** captured and reviewed (minimum: mobile + desktop)
+- [ ] **After screenshots** captured and reviewed for all five viewports (incl. `mobile_safari`)
+- [ ] **`mobile_safari` (390 × 664) capture** reviewed for any change that introduces or modifies a fixed/sticky/overlay layer (modal, sheet, drawer, nav, toast, banner)
+- [ ] **Geometry assertion** included in the component test for any sheet/modal/drawer (see "Sheet/modal geometry assertions" section)
+- [ ] **Interaction recording** captured as WebM for animation or multi-step flows
+- [ ] Animation review captured with at least `--video-fps=60`; journey review uses sampling appropriate to state/outcome proof
+- [ ] WebM retained locally inside the capture output directory
+- [ ] WebM frames extracted inside `frames/<viewport>-webm/`
+- [ ] WebM contact sheet generated inside `contact-sheets/` (60fps extraction for animation review)
+- [ ] Capture manifest generated inside `manifests/`
+- [ ] Contact sheet reaches the intended final UI state
+- [ ] Final WebM frame verified against the settled-state PNG
+- [ ] No spinner-only or blank loading-state evidence unless the ticket is specifically about loading
+- [ ] All screenshots and derivative captures remain under the `agent-fs` session scratch directory
+- [ ] **Structured visual review comment** posted on the issue
+- [ ] Exact absolute scratch path included in the structured review comment
+- [ ] For local-only trackers, no screenshot upload or attachment used as an `in_review` or close gate
+- [ ] For attachment-capable adapters, any publication was explicitly required and used a deliberate evidence bundle
+- [ ] Target statement recorded as `route + viewport rule + expected behavior`
+- [ ] Evidence captured from one dedicated server instance (single base URL/port)
+- [ ] Keyboard-only flow verified: logical focus order, visible focus indicators, no keyboard traps
+- [ ] Reduced-motion behaviour verified for motion-heavy UI (`prefers-reduced-motion` respected)
+- [ ] Touch targets ≥ 44px on mobile viewports
+- [ ] No visible layout overflow or truncation at any breakpoint
+- [ ] Colour contrast passes WCAG AA (4.5:1 text, 3:1 UI components)
+- [ ] All visible date/time values in screenshots validated against `timezone_reference.py`
+- [ ] Day-label/date pairing validated (for example, `Sun, 10 May 2026` => Sunday)
+- [ ] Displayed time/zone validated against UTC reference and offset math
+
+---
+
+## Output JSON — what the CLI prints
+
+The CLI emits a single JSON object on stdout. Parse it to confirm captures
+succeeded before reporting the result or entering an explicitly requested
+publication branch.
+
+```json
+{
+  "status": "ok",
+  "outputDir": "$CAPTURES",
+  "manifestPath": "$CAPTURES/manifests/capture-manifest.json",
+  "captures": [
+    { "viewport": "mobile", "status": "ok", "path": "/abs/.../mobile.png" },
+    { "viewport": "mobile_safari", "status": "ok", "path": "/abs/.../mobile_safari.png" },
+    { "viewport": "tablet_p", "status": "ok", "path": "/abs/.../tablet_p.png" },
+    { "viewport": "tablet_l", "status": "ok", "path": "/abs/.../tablet_l.png" },
+    {
+      "viewport": "desktop",
+      "status": "ok",
+      "path": "/abs/.../desktop.png",
+      "videoPath": "/abs/.../desktop.webm",
+      "framesDir": "/abs/.../frames/desktop-webm",
+      "contactSheetPath": "/abs/.../contact-sheets/desktop-webm-contact-sheet.png"
+    }
+  ]
+}
+```
+
+Top-level `status` is one of `ok`, `partial` (some viewports failed), or
+`error` (all failed). Exit codes: `0` ok, `1` partial/all-failed, `2` bad
+arguments, `3` playwright not found, `4` server error (auto-start or port conflict).
+
+---
+
+## Troubleshooting
+
+| Problem                                         | Solution                                                                                                                                       |
+| ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Dev server not running                          | From a worktree, just run the CLI — it auto-starts the dev server. From the main checkout: `pnpm dev` then retry.                              |
+| Port belongs to a different worktree            | Add `--attach-existing` to reuse it, or use a different port number.                                                                           |
+| Storybook not running                           | `pnpm storybook` — wait for port 6006                                                                                                          |
+| App route is down but Storybook is up           | Switch to a Storybook `iframe.html?id=...` target and continue the visual workflow there                                                       |
+| Route requires auth                             | Use `--storage-state /path/to/state.json` from `pnpm exec playwright codegen --save-storage`                                                   |
+| Captures contradict each other across runs      | You likely captured from different localhost servers/checkouts. Run one dedicated server on a unique port and capture only from that base URL. |
+| Screenshot is blank / white                     | Increase `--stable-timeout=20000` for async-data routes                                                                                        |
+| Screenshot shows spinner/loading state          | Use a wait script (`--script`) with networkidle + short settle delay, then re-capture                                                          |
+| Story loads blank                               | Use `/iframe.html?id=...` not `/?path=/story/...`                                                                                              |
+| CLI reports `playwright not found` (exit 3)     | Run from a project subtree where `node_modules/playwright` exists, or `pnpm exec playwright install`                                           |
+| `chromium.launch failed`                        | `pnpm exec playwright install chromium` from the workspace                                                                                     |
+| ffmpeg not found                                | `brew install ffmpeg` (macOS)                                                                                                                  |
+| Explicit attachment upload 400                  | Attachment-capable flow only: publish contact sheet PNG, not the WebM                                                                          |
+| Explicit attachment upload 401                  | Attachment-capable flow only: check tracker credentials; this is not a local-only-tracker close blocker                                         |
+| Contact sheet missing / blank                   | Check `python3 -c "import PIL"` — install with `pip3 install Pillow` if missing                                                                |
+| Contact sheet shows only spinner                | Evidence is invalid — re-capture with a longer wait in the interaction script before closing                                                   |
+| Need screenshots in chat instead of on an issue | Save under a workspace path, then open with the image viewer to render inline                                                                  |

@@ -1,0 +1,150 @@
+# Architecture
+
+## Registry — append-only ndjson event log
+
+Every path-getter, bless, upload, pin, and clean writes a single JSON event to
+`<session>/registry.ndjson`. Each line is one event. No mutable rows;
+state is derived by replaying events.
+
+### Event schema
+
+```json
+{
+  "ts": 1700000000000,
+  "verb": "scratch | evidence | session | path | bless | upload | pin | unpin | clean | adopt",
+  "path": "/absolute/path",
+  "issue": "GRO-881 | null",
+  "agent": "head-chef | null",
+  "runtime": "claude-code | codex | warp | shell | <adapter-native>",
+  "meta": { "blessType": "evidence", "uploadReceipt": "...", ... }
+}
+```
+
+Append is atomic up to `PIPE_BUF` (4096 bytes on macOS/Linux), well above
+any event size. Concurrent agents writing to the same session log are safe
+in practice.
+
+### Why ndjson and not SQLite?
+
+The plan originally specified SQLite. Switched during implementation because
+SQLite requires `better-sqlite3` native bindings → `pnpm install` after
+`npx skills add` → no longer a zero-install skill. ndjson is:
+
+- Pure Node, no native dependencies
+- Append-only by construction (matches the "event log" design)
+- Trivially readable with `cat ... | jq`
+- Replayable, no race conditions on row updates
+
+Trade-off: O(n) queries scale linearly with session log size. Per-session
+logs are bounded (sessions don't last forever), so this is fine in
+practice.
+
+### Derived state
+
+Computed on demand by `lib/registry.mjs`:
+
+- `tracked_paths` — every path referenced by `scratch | evidence | session | path | bless | adopt`
+- `pinned_paths` — paths with `pin` events not subsequently `unpin`ned (week 3+)
+- `uploaded_evidence` — paths with `upload` events including receipt meta (week 2+)
+
+## Session resolution
+
+`lib/session-id.mjs` resolves the session ID at every CLI invocation. The
+resolution is cached for the duration of the process, so child calls within
+one invocation share the same ID.
+
+Resolution chain:
+
+1. `AGENT_FS_SESSION_ID` (explicit override; takes precedence)
+2. the active adapter's native runtime session-ID env var (set by the adapter spawn)
+3. `CLAUDE_SESSION_ID` (Claude Code)
+4. `CODEX_SESSION_ID` (Codex CLI)
+5. `WARP_SESSION_ID` (Warp)
+6. the active adapter's emulation state probe (read-only query for the current run/session id)
+7. `git-<repo-hash-8>-<ppid>` (deterministic fallback)
+
+The fallback is intentionally tied to `ppid` so a child shell shares the
+session with its parent (no proliferation of sess- dirs from subshells)
+while two distinct top-level shells get distinct sessions.
+
+To disable the adapter state probe entirely, set `AGENT_FS_DISABLE_PCLI=1`.
+
+## Runtime detection
+
+`lib/runtime.mjs` returns one of: `claude-code | codex | warp | copilot |
+vscode | shell` (plus the active adapter's native runtime label). Detection is env-var sniffing only — no process
+introspection, no parent walking, no API calls.
+
+| Runtime    | Sniff signature                                              |
+| ---------- | ------------------------------------------------------------ |
+| (adapter)  | adapter-native runtime env var (set by the adapter spawn)    |
+| claude-code| `CLAUDE_SESSION_ID` or `CLAUDE_CODE`                         |
+| codex      | `CODEX_SESSION_ID` or `CODEX_CLI`                            |
+| warp       | `WARP_SESSION_ID` or `WARP_IS_LOCAL_SHELL_SESSION`           |
+| copilot    | `COPILOT_CLI_SESSION_ID`                                     |
+| vscode     | `VSCODE_PID` or `VSCODE_IPC_HOOK_CLI`                        |
+| shell      | none of the above                                            |
+
+## Allowlist matching
+
+`lib/allowlist.mjs` exposes a matcher built from four rule kinds:
+
+1. `exact` — string equality
+2. `prefix` — `target.startsWith(rule)`
+3. `glob` — simple glob (`*`, `?`) against full path OR basename
+4. `regex` — full RegExp match against the path
+
+Default allowlist (`<root>/_meta/allowlist.json` when missing) covers:
+
+- macOS system: `/private/tmp/com.apple.`, `/var/folders/`
+- Adobe IPC: `/tmp/com.adobe.`
+- Claude Code state: `/tmp/claude-502/`
+- MCP framework: `/tmp/context-mode-mcp-ready-`, `/tmp/context-mode-hook-`
+- MCP browser bridge: `/tmp/claude-mcp-browser-bridge-twhoffmann`
+- adapter working dirs (e.g. a tracker's `/tmp/<tracker>-circuit/`)
+- Sockets: `*.sock`, `/tmp/*.sock`
+- macOS launchd UUID dirs: `^/(?:private/)?tmp/[A-F0-9]{8}-...$`
+
+Users can edit `<root>/_meta/allowlist.json` directly; the file ships with
+defaults on first `init` and is never overwritten.
+
+## check-path decision tree
+
+For a target path `p`:
+
+1. If `p` is **not** under `/tmp/` or `/private/tmp/`: **sanctioned** (out of scope).
+2. If `p` is under `AGENT_FS_ROOT`: **sanctioned** (sanctioned root).
+3. If `p` matches the allowlist: **sanctioned** (system path).
+4. If `p` is a descendant of any tracked path (across all sessions under the
+   root): **sanctioned** (registered).
+5. Otherwise: **not sanctioned**.
+
+Aggregating tracked paths across sessions means a path created by one session
+is sanctioned for subsequent sessions too — important when a long-running
+agent session creates a scratch dir, gets restarted, and resumes against the
+same dir.
+
+## File-system invariants
+
+- Directories are created with `mkdir -p` semantics; race-free.
+- The registry file is created lazily on first event.
+- Config file (`~/.config/agent-fs/config.json`) is created with defaults on
+  first `init` and never overwritten.
+- env.sh (`~/.config/agent-fs/env.sh`) is overwritten on every `init` — it
+  is idempotent and only contains a path to the binary plus the eval line.
+- Shell rc is appended once (idempotent via marker comment).
+
+## Performance characteristics
+
+| Operation                  | Cost                                                |
+| -------------------------- | --------------------------------------------------- |
+| `scratch` / `evidence`     | mkdir + 1 appendFileSync. ~5ms cold.                |
+| `check-path` (in registry) | readAll across all session ndjsons. O(events).      |
+| `check-path` (out-of-tmp)  | string compare. ~1ms.                               |
+| `doctor`                   | scan `/tmp` once (1-2 readdir). ~50ms.              |
+| `orphans /tmp`             | scan `/tmp` + readAll all session logs. ~100-500ms.|
+
+If `check-path` ever becomes a hot path inside the PreToolUse hook chain,
+add a `~/.agent-scratch/_meta/tracked-paths.cache.txt` snapshot generated
+on every scratch/evidence call and invalidated by mtime check. Not needed
+in MVP.

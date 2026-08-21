@@ -1,0 +1,73 @@
+// Paperclip uploader — delegates to `pcli attachments upload`.
+//
+// pcli handles the auth and multipart form-data; we just shell out and
+// normalise its --json response into the receipt schema.
+
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import { findPcli } from '../pcli.mjs';
+
+export const paperclipUploader = {
+  name: 'paperclip',
+
+  probe() {
+    const bin = findPcli();
+    if (!bin) {
+      return {
+        available: false,
+        reason:
+          'pcli not found on PATH or PCLI_BIN env. Install pcli, run `pcli prime --company <prefix>`, and `pcli assume <handle>`.',
+      };
+    }
+    return { available: true, bin };
+  },
+
+  /**
+   * @param {{issue: string, files: Array<{name: string, path: string}>, commentId?: string, ctx: object}} args
+   */
+  upload({ issue, files, commentId }) {
+    const probe = this.probe();
+    if (!probe.available) {
+      return { attachments: [], failures: files.map((f) => ({ name: f.name, error: probe.reason })) };
+    }
+    const bin = probe.bin;
+
+    const attachments = [];
+    const failures = [];
+
+    for (const f of files) {
+      if (!fs.existsSync(f.path)) {
+        failures.push({ name: f.name, error: `file missing: ${f.path}` });
+        continue;
+      }
+      const cliArgs = ['--json', 'attachments', 'upload', issue, f.path];
+      if (commentId) cliArgs.push('--comment-id', commentId);
+
+      const result = spawnSync(bin, cliArgs, { encoding: 'utf8', timeout: 120_000 });
+      if (result.status !== 0) {
+        failures.push({
+          name: f.name,
+          error: (result.stderr || result.stdout || `pcli exit ${result.status}`).trim().slice(0, 800),
+        });
+        continue;
+      }
+      try {
+        const att = JSON.parse(result.stdout);
+        attachments.push({
+          name: f.name,
+          attachmentId: att.id,
+          contentPath: att.contentPath,
+          byteSize: att.byteSize,
+          sha256: att.sha256,
+          contentType: att.contentType,
+          originalFilename: att.originalFilename,
+          uploadedAt: att.createdAt,
+        });
+      } catch (err) {
+        failures.push({ name: f.name, error: `json parse failed: ${err.message}` });
+      }
+    }
+
+    return { attachments, failures };
+  },
+};

@@ -1,0 +1,178 @@
+# Migration cookbook
+
+How to port a skill or script from hard-coded `/tmp/...` paths to agent-fs.
+
+## Principles
+
+1. **Always fall through gracefully.** A skill that requires agent-fs to be
+   installed before it works will fail on machines without agent-fs. Wrap the
+   resolution in a check.
+
+2. **Use `spawnSync` with args array, not shell exec.** The agent-fs CLI never
+   needs shell parsing; calling with `spawnSync(bin, ['verb', ...args])` is
+   safe by construction.
+
+3. **Preserve the existing argument shape.** If a skill takes an output path
+   as a flag, keep it. Just default the value to the agent-fs path when the
+   flag is unset.
+
+4. **Screenshots default to session scratch.** An issue key may be included in
+   the scratch name for discoverability, but it does not turn a screenshot into
+   uploadable evidence. Local-only trackers do not require screenshot attachments.
+
+## Pattern 1: replace a fixed publishable-artifact directory
+
+Use this evidence pattern only for an explicitly publishable, non-screenshot
+issue artifact. Screenshot and visual-capture migrations use Pattern 2 or 3.
+
+Before:
+
+```js
+const OUT_DIR = '/tmp/my-skill/' + issueKey;
+fs.mkdirSync(OUT_DIR, { recursive: true });
+```
+
+After:
+
+```js
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+
+function resolveOutputDir(issue, name) {
+  const bin = process.env.AGENT_FS_BIN;
+  if (bin && fs.existsSync(bin)) {
+    const result = spawnSync(bin, ['evidence', '--issue', issue, name], {
+      encoding: 'utf8',
+    });
+    if (result.status === 0) return result.stdout.trim();
+  }
+  // Fall-through: legacy /tmp path for machines without agent-fs.
+  const legacy = path.join('/tmp/my-skill', issue, name);
+  fs.mkdirSync(legacy, { recursive: true });
+  return legacy;
+}
+
+const OUT_DIR = resolveOutputDir(issueKey, captureName);
+```
+
+## Pattern 2: replace `mktemp` / `os.tmpdir()` for scratch
+
+Before:
+
+```js
+import os from 'node:os';
+const SCRATCH = fs.mkdtempSync(path.join(os.tmpdir(), 'my-skill-'));
+```
+
+After:
+
+```js
+function resolveScratch(name) {
+  const bin = process.env.AGENT_FS_BIN;
+  if (bin && fs.existsSync(bin)) {
+    const result = spawnSync(bin, ['scratch', name], { encoding: 'utf8' });
+    if (result.status === 0) return result.stdout.trim();
+  }
+  // Fall-through.
+  return fs.mkdtempSync(path.join(os.tmpdir(), name + '-'));
+}
+
+const SCRATCH = resolveScratch(`my-skill-${Date.now()}`);
+```
+
+Note: `os.tmpdir()` already respects `TMPDIR`, so when env.sh is sourced this
+path also lands under the sanctioned root for free. The explicit agent-fs call
+adds the registry event (auditability) on top.
+
+## Pattern 3: configurable output flag with agent-fs default
+
+Many existing scripts accept `--output <path>` and default to a `/tmp/...`
+value. Keep the flag; change the default:
+
+```js
+function defaultOutputDir(issue) {
+  const bin = process.env.AGENT_FS_BIN;
+  if (bin && fs.existsSync(bin)) {
+    const slug = issue ? `capture-${issue}-${Date.now()}` : `capture-${Date.now()}`;
+    const result = spawnSync(bin, ['scratch', slug], {
+      encoding: 'utf8',
+    });
+    if (result.status === 0) return result.stdout.trim();
+  }
+  return path.join('/tmp/my-skill', issue ?? 'anon', 'capture');
+}
+
+const outputDir = opts.output ?? defaultOutputDir(detectedIssue);
+```
+
+The flag override still wins. Users who pass `--output /tmp/something/` will
+trip the hook on Claude Code (good — they're bypassing the system). Users who
+pass `--output ~/scratch/something/` skip the hook entirely (their choice).
+
+## Pattern 4: shell scripts
+
+For Python/Bash/other-language scripts that produce explicitly publishable
+non-screenshot issue artifacts:
+
+```bash
+# Resolve evidence directory via agent-fs if available; fall through otherwise.
+if [ -n "${AGENT_FS_BIN:-}" ] && [ -x "$AGENT_FS_BIN" ]; then
+  OUT_DIR="$("$AGENT_FS_BIN" evidence --issue "$ISSUE" "$NAME")"
+else
+  OUT_DIR="/tmp/my-skill/$ISSUE/$NAME"
+  mkdir -p "$OUT_DIR"
+fi
+```
+
+For screenshots, use `scratch` even when an issue ID is known:
+
+```bash
+if [ -n "${AGENT_FS_BIN:-}" ] && [ -x "$AGENT_FS_BIN" ]; then
+  OUT_DIR="$("$AGENT_FS_BIN" scratch "ui-visual-capture-$ISSUE-$NAME")"
+else
+  OUT_DIR="/tmp/ui-visual-capture/$ISSUE/$NAME"
+  mkdir -p "$OUT_DIR"
+fi
+```
+
+Or, simpler, just use the existing path with TMPDIR redirect:
+
+```bash
+# Honour TMPDIR. agent-fs's env script sets TMPDIR to the sanctioned tmp dir,
+# so this is automatically sanctioned when agent-fs is installed.
+OUT_DIR="$(mktemp -d -t my-skill)"
+```
+
+## Migrating ui-visual-capture (worked example)
+
+The skill at `agent-skills-library/ui-visual-capture/` writes screenshots to
+`/tmp/ui-visual-capture/<issue>/` (issue-scoped) or
+`/tmp/ui-visual-capture/<date>-<letter>/` (anon, daily auto-suffix). The path
+computation lives in `scripts/lib/paths.mjs` → `resolveOutputPaths`. It already
+takes a `tmpBase` parameter for testability.
+
+Migration steps:
+
+1. In `resolveOutputPaths`, detect `process.env.AGENT_FS_BIN`.
+2. If set, call `spawnSync(bin, ['scratch', issueSlug])` for issue-scoped
+   captures, or `spawnSync(bin, ['scratch', dailySlug])` for anonymous runs.
+3. Use the returned path as the base; viewport-named files are written inside.
+4. Fall through to the existing legacy logic when `AGENT_FS_BIN` is unset
+   (preserves backward compatibility on machines without agent-fs).
+5. Update `ui-visual-capture/SKILL.md` to document the new sanctioned paths
+   and note the env var dependency. For local-only trackers, record the scratch path in the
+   issue comment when useful; do not require upload or attachment before close.
+
+The migration is implemented in the MVP and committed alongside this skill —
+see `git log -- ui-visual-capture/`.
+
+## Skills queued for migration
+
+- `ui-visual-capture` — MVP (week 1)
+- `rich-cli-capture` — week 2 (writes to `/tmp/cli-screenshots/`)
+- `live-session-capture` — week 2 (hard-codes `/tmp/live-session-capture/woolies-cart.png`)
+- `tui-testing` — no migration needed (in-process)
+
+When migrating a new skill, add it to this list and update the table in
+`SKILL.md`.

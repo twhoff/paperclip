@@ -256,3 +256,85 @@ bd close <id>         # Complete work
 - NEVER say "ready to push when you are" - YOU must push
 - If push fails, resolve and retry until it succeeds
 <!-- END BEADS INTEGRATION -->
+
+<!-- BEGIN HOLLY INTEGRATION -->
+
+## Holly Integration
+
+Holly is the public coordination surface for sessions, task intent, tracker
+work, issue worktrees, Git lifecycle, chat, skills, agents, workflows, hooks,
+and project memory. Use `holly ...` for those operations. Backend CLIs and raw
+Git lifecycle commands are private plumbing.
+
+### Source of truth
+
+- Active adapter: `beads`
+- Holly config: `.holly/config.toml`
+- Skills and authoritative procedures: `.agents/skills/`
+- Reusable Holly agents: `.agents/agents/`
+- Project-runtime agents: `agents/` (a separate runtime contract)
+- Workflows: `workflows/`
+
+Load `.agents/skills/holly/SKILL.md` before Holly work. It owns the current
+skill floor and lifecycle procedure. Read `.agents/skills/issue-tracker/SKILL.md`
+and `.agents/skills/issue-tracker/addendum-beads.md` for tracker semantics.
+Load task-specific skills normally. Treat inventories in `.holly/config.toml`
+and live command output as current; do not copy them into project prose.
+
+### Hard invariants
+
+- `HOLLY_SESSION_ID` is runtime-owned. Never generate, replace, export, or
+  backfill it. Confirm identity with `holly doctor` in the real shell.
+- If context-mode runs a Holly command, first resolve the real-shell identity
+  and pass that literal value into the sandbox. A sandbox-only identity result
+  is not authoritative.
+- Use `holly tracker ...`, `holly task ...`, `holly chat ...`, and
+  `holly memory ...`. Do not call raw `bd`, `pcli`, `git` lifecycle,
+  `chat`, `session`, or backend APIs for ordinary agent work.
+- Read-only work may use an intent-only task on the main checkout. Every file
+  change requires a real issue and its sibling worktree; never edit `main`.
+- Inspect `holly task status --json` after start/resume. A non-null
+  `worktree_path` is required before editing or committing.
+- Run Git commands only through
+  `holly task exec_in_current_task_worktree -- git ...`.
+- Commit and verify before `holly task finish`. With a real worktree, finish
+  lands and pushes the branch/main, closes the issue, syncs tracker state,
+  removes the worktree, and clears task state.
+- With `worktree_path: null`, finish is summary-only recovery. Do not wrap that
+  path in `eval`, and do not claim landing, push, close, sync, or cleanup.
+- Source checkout, installed Holly, and consumer-generated assets are separate
+  surfaces. Source changes are not active until installation and consumer sync
+  are deliberately updated and verified.
+- Read every hook message and act on warnings/errors. Run `holly doctor` when
+  lifecycle, hooks, installation, or generated docs disagree.
+
+### Minimal lifecycle
+
+```bash
+holly tracker ready
+holly tracker show <id>
+holly tracker create "Title" --type task --priority 2 --description "Context"
+
+# Read-only, no worktree
+holly task start --intent '<what>'
+
+# File changes: claim issue, create/reuse worktree, and enter it
+eval "$(holly task start --id <id> --intent '<what>')"
+holly task status --json
+eval "$(holly task resume)"
+holly task exec_in_current_task_worktree -- <command>
+
+# After review-ready work is committed and verified
+eval "$(holly task finish --completion-summary '<what changed; checks run>')"
+```
+
+Lifecycle events post to `all-agents`. Use `holly chat ...` for deliberate
+coordination and `holly tracker comment ...` for durable issue context.
+
+### Adapter notes (`beads`)
+
+- `holly tracker sync` syncs Dolt-backed issue data.
+- Reopen an issue: `holly tracker reopen <id>`.
+- Read `.agents/skills/issue-tracker/addendum-beads.md`.
+
+<!-- END HOLLY INTEGRATION -->

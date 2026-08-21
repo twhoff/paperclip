@@ -1,0 +1,257 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+
+export function toBase26Suffix(n) {
+  let s = '';
+  let x = n;
+  while (true) {
+    s = String.fromCharCode(97 + (x % 26)) + s;
+    x = Math.floor(x / 26) - 1;
+    if (x < 0) break;
+  }
+  return s;
+}
+
+function walkUp(startDir, ceiling) {
+  const out = [];
+  let dir = path.resolve(startDir);
+  const top = ceiling ? path.resolve(ceiling) : null;
+  while (true) {
+    out.push(dir);
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    if (top && dir === top) break;
+    dir = parent;
+  }
+  return out;
+}
+
+export function findProjectRoot(startDir, opts = {}) {
+  for (const dir of walkUp(startDir, opts.ceiling)) {
+    if (fs.existsSync(path.join(dir, '.git'))) return dir;
+  }
+  return null;
+}
+
+/**
+ * Resolve the `playwright` package's ESM entry inside ONE node_modules dir.
+ * Handles the two layouts a project can present:
+ *   1. Flat — `node_modules/playwright/index.mjs`. This is npm/yarn, pnpm with
+ *      hoisting, and pnpm when `playwright` is a *direct* dependency it links to
+ *      the top level.
+ *   2. pnpm virtual store — `node_modules/.pnpm/playwright@<version>[(peers)]/node_modules/playwright/index.mjs`.
+ *      pnpm only symlinks a package into the top-level `node_modules` when it is
+ *      a *direct* dependency. `playwright` is frequently transitive (pulled in by
+ *      `@playwright/test`, `@storybook/test-runner`, etc.), so the only copy on
+ *      disk lives in the store with no top-level symlink — which is why callers
+ *      used to need a hand-made `node_modules/playwright` symlink to capture.
+ *
+ * The `playwright@` prefix is matched exactly: it deliberately excludes the
+ * `playwright-core@…` and `@playwright+test@…` siblings that share the store.
+ *
+ * Returns the absolute index path, or null when this node_modules has no
+ * `playwright`.
+ */
+function playwrightInNodeModules(nodeModulesDir) {
+  const flat = path.join(nodeModulesDir, 'playwright', 'index.mjs');
+  if (fs.existsSync(flat)) return flat;
+
+  const store = path.join(nodeModulesDir, '.pnpm');
+  let storeEntries;
+  try {
+    storeEntries = fs.readdirSync(store, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  // Sorted for deterministic resolution if a store ever holds more than one
+  // playwright version (pathological, but possible with peer-dep variants).
+  const versions = storeEntries
+    .filter((e) => e.isDirectory() && e.name.startsWith('playwright@'))
+    .map((e) => e.name)
+    .sort();
+  for (const name of versions) {
+    const candidate = path.join(store, name, 'node_modules', 'playwright', 'index.mjs');
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
+export function findPlaywrightModule(startDir, opts = {}) {
+  for (const dir of walkUp(startDir, opts.ceiling)) {
+    // This level's own node_modules (flat install or the pnpm store).
+    const here = playwrightInNodeModules(path.join(dir, 'node_modules'));
+    if (here) return here;
+
+    // First-level subdirs only (monorepo root: frontend/node_modules, etc.).
+    // Deeper installs are intentionally not probed.
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const e of entries) {
+      if (!e.isDirectory()) continue;
+      if (e.name === 'node_modules' || e.name.startsWith('.')) continue;
+      const sub = playwrightInNodeModules(path.join(dir, e.name, 'node_modules'));
+      if (sub) return sub;
+    }
+  }
+  return null;
+}
+
+export function nextDailySuffix(parentDir, dateStr) {
+  let entries;
+  try {
+    entries = fs.readdirSync(parentDir);
+  } catch {
+    return 'a';
+  }
+  const prefix = `${dateStr}-`;
+  const used = new Set();
+  for (const e of entries) {
+    if (e.startsWith(prefix)) {
+      const tail = e.slice(prefix.length);
+      if (/^[a-z]+$/.test(tail)) used.add(tail);
+    }
+  }
+  for (let i = 0; ; i++) {
+    const s = toBase26Suffix(i);
+    if (!used.has(s)) return s;
+  }
+}
+
+// Auto-detect issue key from the project's worktree convention.
+// Worktrees live as siblings of the project, named <project>-worktrees/,
+// containing one folder per issue (e.g. groceries-system-worktrees/gro-829/,
+// pcli-worktrees/pcli-8ms/). Tracker-agnostic — whatever the tracker emits is
+// the issue key.
+const ISSUE_PARENT_SUFFIX = '-worktrees';
+
+/**
+ * Walk the path segments of `dir` from deepest to root. Return the first
+ * segment whose immediate parent's basename ends with `-worktrees`. Preserves
+ * casing so the tracker's canonical form is used on disk (for example,
+ * lowercase `example-8ms` or uppercase `EX-829`). Returns null when no
+ * `-worktrees` ancestor is found — e.g. when invoked from the main checkout.
+ *
+ * Works for arbitrary cwd depth inside the worktree: a call from
+ * `<project>-worktrees/gro-829/frontend/src/` still returns `gro-829`.
+ */
+export function detectIssueKey(dir) {
+  const segments = path.resolve(dir).split(path.sep);
+  for (let i = segments.length - 1; i > 0; i--) {
+    if (segments[i - 1].endsWith(ISSUE_PARENT_SUFFIX)) {
+      return segments[i];
+    }
+  }
+  return null;
+}
+
+/**
+ * Try to resolve the capture root via agent-fs. Returns the absolute path or
+ * null when agent-fs is unavailable. All screenshot captures land under
+ * session scratch. Issue-scoped runs use
+ * `scratch/ui-visual-capture-<issue>-<today>/` (preserving the issue key's
+ * casing); anonymous runs use `scratch/<today>-<suffix>/`.
+ */
+function resolveViaAgentFs({ issueKey, today }) {
+  const bin = process.env.AGENT_FS_BIN;
+  if (!bin || !fs.existsSync(bin)) return null;
+  if (issueKey) {
+    const r = spawnSync(bin, ['scratch', `ui-visual-capture-${issueKey}-${today}`], {
+      encoding: 'utf8',
+    });
+    if (r.status === 0) return r.stdout.trim();
+    return null;
+  }
+  // Anonymous: discover the sanctioned scratch root first so the daily suffix
+  // counter respects existing siblings.
+  const pathRes = spawnSync(bin, ['path', 'scratch'], { encoding: 'utf8' });
+  if (pathRes.status !== 0) return null;
+  const scratchRoot = pathRes.stdout.trim();
+  const suffix = nextDailySuffix(scratchRoot, today);
+  const r = spawnSync(bin, ['scratch', `${today}-${suffix}`], { encoding: 'utf8' });
+  if (r.status === 0) return r.stdout.trim();
+  return null;
+}
+
+/**
+ * Resolve the output directory and per-viewport paths for screenshot captures.
+ *
+ * Issue-key detection: when invoked from inside a worktree (cwd is somewhere
+ * under `<project>-worktrees/<issue-key>/`), the issue key is read from the
+ * path automatically. From the main checkout (or any cwd without a
+ * `-worktrees` ancestor) the run is anonymous. Override by passing an
+ * explicit output path as `arg`.
+ *
+ * When `arg` is omitted the default is selected in this order:
+ *   1. `tmpBase` (when supplied — for testing).
+ *   2. `$AGENT_FS_BIN`: issue-scoped →
+ *      `scratch/ui-visual-capture-<issue>-<today>/` (case preserved), anonymous
+ *      → `scratch/<today>-<suffix>/`.
+ *   3. Legacy `/tmp/ui-visual-capture/<issue-key>/` (or `<date>-<suffix>/`).
+ *
+ * `projectRoot` is kept in the signature for backward compatibility but is
+ * no longer used for the default path decision.
+ */
+export function resolveOutputPaths({ arg, projectRoot, viewports, ext, today, cwd, tmpBase }) {
+  if (arg && arg.includes('{viewport}')) {
+    const paths = new Map();
+    const hasExt = path.extname(arg) !== '';
+    for (const vp of viewports) {
+      let p = arg.replaceAll('{viewport}', vp.name);
+      if (!hasExt) p += `.${ext}`;
+      paths.set(vp.name, p);
+    }
+    return { outputDir: path.dirname(arg.replaceAll('{viewport}', viewports[0].name)), paths };
+  }
+
+  let parentDir;
+  const isDirHint =
+    arg &&
+    (arg.endsWith('/') ||
+      arg.endsWith(path.sep) ||
+      (fs.existsSync(arg) && fs.statSync(arg).isDirectory()));
+
+  if (!arg) {
+    const issueKey = cwd !== undefined ? detectIssueKey(cwd) : null;
+
+    // agent-fs path — preferred when available and no test tmpBase override.
+    if (!tmpBase) {
+      const sanctioned = resolveViaAgentFs({ issueKey, today });
+      if (sanctioned) {
+        parentDir = sanctioned;
+      }
+    }
+
+    // Legacy fall-through (agent-fs unavailable, or tmpBase injected for tests).
+    if (!parentDir) {
+      const base = tmpBase ?? path.join('/tmp', 'ui-visual-capture');
+      if (issueKey) {
+        parentDir = path.join(base, issueKey);
+      } else {
+        const suffix = nextDailySuffix(base, today);
+        parentDir = path.join(base, `${today}-${suffix}`);
+      }
+    }
+  } else if (isDirHint) {
+    parentDir = arg.endsWith('/') || arg.endsWith(path.sep) ? arg.slice(0, -1) : arg;
+  } else {
+    if (viewports.length > 1) {
+      throw new Error(
+        `output path must be a directory or contain {viewport} when capturing multiple viewports (got "${arg}")`,
+      );
+    }
+    const paths = new Map();
+    paths.set(viewports[0].name, arg);
+    return { outputDir: path.dirname(arg), paths };
+  }
+
+  const paths = new Map();
+  for (const vp of viewports) {
+    paths.set(vp.name, path.join(parentDir, `${vp.name}.${ext}`));
+  }
+  return { outputDir: parentDir, paths };
+}
