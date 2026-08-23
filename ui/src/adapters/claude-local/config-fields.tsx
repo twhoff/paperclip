@@ -147,7 +147,7 @@ export function ClaudeLocalAdvancedFields({
           }
           immediate
           className={inputClass}
-          placeholder="claude-opus-4-8"
+          placeholder="claude-opus-5"
         />
       </Field>
       <Field label="Max budget per run (USD)" hint={help.maxBudgetUsd}>

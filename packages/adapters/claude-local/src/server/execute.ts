@@ -33,6 +33,7 @@ import {
 } from './parse.js'
 import { resolveClaudeDesiredSkillNames } from './skills.js'
 import { shouldUseBatch, serializeToBatchRequest, generateCustomId } from './batch.js'
+import { claudeModelSupportsEffort } from './model-capabilities.js'
 
 const __moduleDir = path.dirname(fileURLToPath(import.meta.url))
 
@@ -377,7 +378,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   // Default reasoning effort is 'high' when unset (matches the Claude CLI's own
   // default). Operators can still pick low/medium/xhigh/max/ultracode; the UI
   // "Auto" option persists no effort and resolves to this default at run time.
-  const effort = asString(config.effort, 'high')
+  const effort = claudeModelSupportsEffort(model) ? asString(config.effort, 'high') : ''
   const chrome = asBoolean(config.chrome, false)
   const maxTurns = asNumber(config.maxTurnsPerRun, 0)
   const dangerouslySkipPermissions = asBoolean(config.dangerouslySkipPermissions, false)

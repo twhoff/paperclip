@@ -4,17 +4,21 @@ import os from "node:os";
 import path from "node:path";
 import { isClaudeMaxTurnsResult } from "@paperclipai/adapter-claude-local/server";
 import { execute } from "@paperclipai/adapter-claude-local/server";
+import { estimateCostUsd } from "../../../packages/adapters/claude-local/src/server/batch.js";
 
 async function writeFakeClaudeCommand(commandPath: string): Promise<void> {
   const script = `#!/usr/bin/env node
 const fs = require("node:fs");
 
 fs.readFileSync(0, "utf8");
+if (process.env.PAPERCLIP_CAPTURE_ARGS_PATH) {
+  fs.writeFileSync(process.env.PAPERCLIP_CAPTURE_ARGS_PATH, JSON.stringify(process.argv.slice(2)));
+}
 console.log(JSON.stringify({
   type: "system",
   subtype: "init",
   session_id: "claude-session-1",
-  model: "claude-sonnet-4-6",
+  model: "claude-sonnet-5",
 }));
 console.log(JSON.stringify({
   type: "assistant",
@@ -113,5 +117,65 @@ describe("claude_local max-turn detection", () => {
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("does not pass an effort flag to Haiku", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-claude-haiku-"));
+    const workspace = path.join(root, "workspace");
+    const commandPath = path.join(root, "claude");
+    const argsPath = path.join(root, "args.json");
+
+    await fs.mkdir(workspace, { recursive: true });
+    await writeFakeClaudeCommand(commandPath);
+
+    try {
+      const result = await execute({
+        runId: "run-claude-haiku",
+        agent: {
+          id: "agent-haiku",
+          companyId: "company-1",
+          name: "Claude Haiku",
+          adapterType: "claude_local",
+          adapterConfig: {},
+        },
+        runtime: {
+          sessionId: null,
+          sessionParams: null,
+          sessionDisplayId: null,
+          taskKey: null,
+        },
+        config: {
+          command: commandPath,
+          cwd: workspace,
+          skipSkills: true,
+          model: "claude-haiku-4-5",
+          effort: "ultracode",
+          promptTemplate: "Continue the Paperclip task.",
+          env: { PAPERCLIP_CAPTURE_ARGS_PATH: argsPath },
+        },
+        context: {},
+        authToken: "run-jwt-token",
+        onLog: async () => {},
+      });
+
+      const args = JSON.parse(await fs.readFile(argsPath, "utf8")) as string[];
+      expect(result.exitCode).toBe(0);
+      expect(args).toContain("claude-haiku-4-5");
+      expect(args).not.toContain("--effort");
+      expect(args).not.toContain("ultracode");
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("claude_local batch pricing", () => {
+  it("uses Haiku 4.5 pricing for the current CLI model ID", () => {
+    expect(
+      estimateCostUsd("claude-haiku-4-5", {
+        input_tokens: 1_000_000,
+        output_tokens: 1_000_000,
+      }),
+    ).toBe(2.4);
   });
 });

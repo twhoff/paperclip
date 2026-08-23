@@ -2,13 +2,11 @@ export const type = 'claude_local'
 export const label = 'Claude Code (local)'
 
 export const models = [
-  { id: 'claude-opus-4-8[1m]', label: 'Claude Opus 4.8 (1M context)' },
-  { id: 'claude-opus-4-8', label: 'Claude Opus 4.8' },
-  { id: 'claude-opus-4-7[1m]', label: 'Claude Opus 4.7 (1M context)' },
-  { id: 'claude-opus-4-7', label: 'Claude Opus 4.7' },
-  { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
-  { id: 'claude-sonnet-4-6[1m]', label: 'Claude Sonnet 4.6 (1M context)' },
-  { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5' }
+  { id: 'claude-opus-5', label: 'Claude Opus 5' },
+  { id: 'claude-opus-5[1m]', label: 'Claude Opus 5 (1M context)' },
+  { id: 'claude-fable-5', label: 'Claude Fable 5' },
+  { id: 'claude-sonnet-5', label: 'Claude Sonnet 5' },
+  { id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5' }
 ]
 
 export const agentConfigurationDoc = `# claude_local agent configuration
@@ -19,7 +17,7 @@ Core fields:
 - cwd (string, optional): default absolute working directory fallback for the agent process (created if missing when possible)
 - instructionsFilePath (string, optional): absolute path to a markdown instructions file injected at runtime
 - model (string, optional): Claude model id
-- effort (string, optional): reasoning effort passed via --effort (low|medium|high|xhigh|max|ultracode). Default when unset: high. Use ultracode for dynamic workflow generation and long, complex, multi-file coding tasks (e.g. large cross-file refactors).
+- effort (string, optional): reasoning effort passed via --effort. Opus 5, Opus 5 (1M), Fable 5, and Sonnet 5 accept low|medium|high|xhigh|max|ultracode. Default when unset: high. Haiku 4.5 does not support effort, so the adapter omits --effort for that model.
 - chrome (boolean, optional): pass --chrome when running Claude
 - promptTemplate (string, optional): run prompt template
 - maxTurnsPerRun (number, optional): max turns for one run
@@ -54,7 +52,6 @@ Advanced CLI flags:
 Notes:
 - When Paperclip realizes a workspace/runtime for a run, it injects PAPERCLIP_WORKSPACE_* and PAPERCLIP_RUNTIME_* env vars for agent-side tooling.
 - Batch API mode is single-turn (no multi-turn agentic loops or tool callbacks). Best for analysis, reports, summarization, data processing.
-- claude-opus-4-8 is the recommended top model. claude-opus-4-8[1m] is the 1M-context variant. Pair with effort high (default) for normal work, or ultracode for long, complex, multi-file coding tasks.
-- claude-opus-4-7 is a BURST-MODE-ONLY model. It must be switched off immediately after the task is successfully delivered.
-  Use only for: critical-priority tasks, highly complex reasoning, or agents struggling to pass review gates.
+- claude-opus-5 is the default top model. claude-opus-5[1m] is its 1M-context variant.
+- Use effort high (default) for normal work or ultracode for dynamic workflow generation and long, complex, multi-file coding tasks. Leave effort unset for claude-haiku-4-5.
 `

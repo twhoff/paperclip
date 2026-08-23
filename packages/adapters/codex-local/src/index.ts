@@ -1,15 +1,16 @@
 export const type = "codex_local";
 export const label = "Codex (local)";
-export const DEFAULT_CODEX_LOCAL_MODEL = "gpt-5.5";
+export const DEFAULT_CODEX_LOCAL_MODEL = "gpt-5.6-sol";
 export const DEFAULT_CODEX_LOCAL_BYPASS_APPROVALS_AND_SANDBOX = true;
 
 export const models = [
+  { id: "gpt-5.6-sol", label: "gpt-5.6-sol" },
+  { id: "gpt-5.6-terra", label: "gpt-5.6-terra" },
+  { id: "gpt-5.6-luna", label: "gpt-5.6-luna" },
   { id: "gpt-5.5", label: "gpt-5.5" },
   { id: "gpt-5.4", label: "gpt-5.4" },
   { id: "gpt-5.4-mini", label: "gpt-5.4-mini" },
-  { id: "gpt-5.3-codex", label: "gpt-5.3-codex" },
   { id: "gpt-5.3-codex-spark", label: "gpt-5.3-codex-spark" },
-  { id: "gpt-5.2", label: "gpt-5.2" },
 ];
 
 export const agentConfigurationDoc = `# codex_local agent configuration
@@ -21,10 +22,10 @@ Core fields:
 - instructionsFilePath (string, optional): absolute path to a markdown instructions file prepended to stdin prompt at runtime
 - model (string, optional): Codex model id
 - effort (string, optional): reasoning effort override passed via -c model_reasoning_effort=...
-  - gpt-5.5, gpt-5.4, gpt-5.4-mini, gpt-5.2: none|low|medium|high|xhigh
-  - gpt-5.3-codex: low|medium|high|xhigh
-  - gpt-5.3-codex-spark: effort support is undocumented; leave unset
-  Legacy aliases "modelReasoningEffort" and "reasoningEffort" are still accepted as read-only fallbacks until the pcli-b9o migration deletes them. Legacy saved values such as "minimal" remain readable but are not curated choices.
+  - gpt-5.6-sol, gpt-5.6-terra: low|medium|high|xhigh|ultra
+  - gpt-5.6-luna: low|medium|high|xhigh|max
+  - gpt-5.5, gpt-5.4, gpt-5.4-mini, gpt-5.3-codex-spark: low|medium|high|xhigh
+  Legacy aliases "modelReasoningEffort" and "reasoningEffort" are still accepted as read-only fallbacks until the pcli-b9o migration deletes them. Legacy saved values such as "none" and "minimal" remain readable but are not curated choices.
 - promptTemplate (string, optional): run prompt template
 - search (boolean, optional): run codex with --search
 - dangerouslyBypassApprovalsAndSandbox (boolean, optional): run with bypass flag

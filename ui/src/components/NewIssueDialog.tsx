@@ -48,6 +48,7 @@ import {
 } from "lucide-react";
 import { cn } from "../lib/utils";
 import { extractProviderIdWithFallback } from "../lib/model-utils";
+import { getAllowedEffortLevels, resolveCanonicalModel } from "../lib/canonical-models";
 import { issueStatusText, issueStatusTextDefault, priorityColor, priorityColorDefault } from "../lib/status-colors";
 import { MarkdownEditor, type MarkdownEditorRef, type MentionOption } from "./MarkdownEditor";
 import { AgentIcon } from "./AgentIconPicker";
@@ -106,10 +107,12 @@ const ISSUE_THINKING_EFFORT_OPTIONS = {
   ],
   codex_local: [
     { value: "", label: "Default" },
-    { value: "minimal", label: "Minimal" },
     { value: "low", label: "Low" },
     { value: "medium", label: "Medium" },
     { value: "high", label: "High" },
+    { value: "xhigh", label: "Extra High" },
+    { value: "max", label: "Max" },
+    { value: "ultra", label: "Ultra" },
   ],
   opencode_local: [
     { value: "", label: "Default" },
@@ -135,14 +138,10 @@ function buildAssigneeAdapterOverrides(input: {
   const adapterConfig: Record<string, unknown> = {};
   if (input.modelOverride) adapterConfig.model = input.modelOverride;
   if (input.thinkingEffortOverride) {
-    if (adapterType === "codex_local") {
-      adapterConfig.modelReasoningEffort = input.thinkingEffortOverride;
-    } else if (adapterType === "opencode_local") {
+    if (adapterType === "opencode_local") {
       adapterConfig.variant = input.thinkingEffortOverride;
-    } else if (adapterType === "claude_local") {
+    } else {
       adapterConfig.effort = input.thinkingEffortOverride;
-    } else if (adapterType === "opencode_local") {
-      adapterConfig.variant = input.thinkingEffortOverride;
     }
   }
   if (adapterType === "claude_local" && input.chrome) {
@@ -365,7 +364,10 @@ export function NewIssueDialog() {
   const selectedAssigneeAgentId = selectedAssignee.assigneeAgentId;
   const selectedAssigneeUserId = selectedAssignee.assigneeUserId;
 
-  const assigneeAdapterType = (agents ?? []).find((agent) => agent.id === selectedAssigneeAgentId)?.adapterType ?? null;
+  const selectedAssigneeAgent = (agents ?? []).find(
+    (agent) => agent.id === selectedAssigneeAgentId,
+  );
+  const assigneeAdapterType = selectedAssigneeAgent?.adapterType ?? null;
   const supportsAssigneeOverrides = Boolean(
     assigneeAdapterType && ISSUE_OVERRIDE_ADAPTER_TYPES.has(assigneeAdapterType),
   );
@@ -401,6 +403,28 @@ export function NewIssueDialog() {
     queryFn: () => agentsApi.adapterModels(effectiveCompanyId!, assigneeAdapterType!),
     enabled: Boolean(effectiveCompanyId) && newIssueOpen && supportsAssigneeOverrides,
   });
+  const assigneeModelId =
+    assigneeModelOverride ||
+    (typeof selectedAssigneeAgent?.adapterConfig.model === "string"
+      ? selectedAssigneeAgent.adapterConfig.model
+      : "") ||
+    assigneeAdapterModels?.[0]?.id ||
+    "";
+  const thinkingEffortOptions = useMemo(() => {
+    const options =
+      assigneeAdapterType === "codex_local"
+        ? ISSUE_THINKING_EFFORT_OPTIONS.codex_local
+        : assigneeAdapterType === "opencode_local"
+          ? ISSUE_THINKING_EFFORT_OPTIONS.opencode_local
+          : ISSUE_THINKING_EFFORT_OPTIONS.claude_local;
+    if (!assigneeAdapterType || assigneeAdapterType === "opencode_local") return options;
+
+    const canonicalModel = assigneeModelId
+      ? resolveCanonicalModel(assigneeAdapterType, assigneeModelId)
+      : undefined;
+    const allowed = new Set(getAllowedEffortLevels(assigneeAdapterType, canonicalModel));
+    return options.filter((option) => !option.value || allowed.has(option.value));
+  }, [assigneeAdapterType, assigneeModelId]);
 
   const createIssue = useMutation({
     mutationFn: async ({
@@ -579,16 +603,10 @@ export function NewIssueDialog() {
       return;
     }
 
-    const validThinkingValues =
-      assigneeAdapterType === "codex_local"
-        ? ISSUE_THINKING_EFFORT_OPTIONS.codex_local
-        : assigneeAdapterType === "opencode_local"
-          ? ISSUE_THINKING_EFFORT_OPTIONS.opencode_local
-          : ISSUE_THINKING_EFFORT_OPTIONS.claude_local;
-    if (!validThinkingValues.some((option) => option.value === assigneeThinkingEffort)) {
+    if (!thinkingEffortOptions.some((option) => option.value === assigneeThinkingEffort)) {
       setAssigneeThinkingEffort("");
     }
-  }, [supportsAssigneeOverrides, assigneeAdapterType, assigneeThinkingEffort]);
+  }, [supportsAssigneeOverrides, assigneeThinkingEffort, thinkingEffortOptions]);
 
   // Cleanup timer on unmount
   useEffect(() => {
@@ -786,12 +804,6 @@ export function NewIssueDialog() {
         : assigneeAdapterType === "opencode_local"
           ? "OpenCode options"
         : "Agent options";
-  const thinkingEffortOptions =
-    assigneeAdapterType === "codex_local"
-      ? ISSUE_THINKING_EFFORT_OPTIONS.codex_local
-      : assigneeAdapterType === "opencode_local"
-        ? ISSUE_THINKING_EFFORT_OPTIONS.opencode_local
-      : ISSUE_THINKING_EFFORT_OPTIONS.claude_local;
   const recentAssigneeIds = useMemo(() => getRecentAssigneeIds(), [newIssueOpen]);
   const assigneeOptions = useMemo<InlineEntityOption[]>(
     () => [
@@ -1193,23 +1205,25 @@ export function NewIssueDialog() {
                     onChange={setAssigneeModelOverride}
                   />
                 </div>
-                <div className="space-y-1.5">
-                  <div className="text-xs text-muted-foreground">Thinking effort</div>
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    {thinkingEffortOptions.map((option) => (
-                      <button
-                        key={option.value || "default"}
-                        className={cn(
-                          "px-2 py-1 rounded-md text-xs border border-border hover:bg-accent/50 transition-colors",
-                          assigneeThinkingEffort === option.value && "bg-accent"
-                        )}
-                        onClick={() => setAssigneeThinkingEffort(option.value)}
-                      >
-                        {option.label}
-                      </button>
-                    ))}
+                {thinkingEffortOptions.length > 1 && (
+                  <div className="space-y-1.5">
+                    <div className="text-xs text-muted-foreground">Thinking effort</div>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {thinkingEffortOptions.map((option) => (
+                        <button
+                          key={option.value || "default"}
+                          className={cn(
+                            "px-2 py-1 rounded-md text-xs border border-border hover:bg-accent/50 transition-colors",
+                            assigneeThinkingEffort === option.value && "bg-accent"
+                          )}
+                          onClick={() => setAssigneeThinkingEffort(option.value)}
+                        >
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                </div>
+                )}
                 {assigneeAdapterType === "claude_local" && (
                   <div className="flex items-center justify-between rounded-md border border-border px-2 py-1.5">
                     <div className="text-xs text-muted-foreground">Enable Chrome (--chrome)</div>

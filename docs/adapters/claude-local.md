@@ -15,13 +15,28 @@ The `claude_local` adapter runs Anthropic's Claude Code CLI locally. It supports
 | Field                        | Type    | Required | Description                                                                                                      |
 | ---------------------------- | ------- | -------- | ---------------------------------------------------------------------------------------------------------------- |
 | `cwd`                        | string  | Yes      | Working directory for the agent process (absolute path; created automatically if missing when permissions allow) |
-| `model`                      | string  | No       | Claude model to use (e.g. `claude-opus-4-6`)                                                                     |
+| `model`                      | string  | No       | Claude model to use (e.g. `claude-opus-5`)                                                                        |
+| `effort`                     | string  | No       | Reasoning effort override; omitted automatically for Haiku 4.5                                                    |
 | `promptTemplate`             | string  | No       | Prompt used for all runs                                                                                         |
 | `env`                        | object  | No       | Environment variables (supports secret refs)                                                                     |
 | `timeoutSec`                 | number  | No       | Process timeout (0 = no timeout)                                                                                 |
 | `graceSec`                   | number  | No       | Grace period before force-kill                                                                                   |
 | `maxTurnsPerRun`             | number  | No       | Max agentic turns per heartbeat (defaults to `300`)                                                              |
 | `dangerouslySkipPermissions` | boolean | No       | Skip permission prompts (dev only)                                                                               |
+
+## Models And Effort
+
+Curated Claude Local choices:
+
+| Model | Effort choices |
+|-------|----------------|
+| `claude-opus-5` | `low`, `medium`, `high`, `xhigh`, `max`, `ultracode` |
+| `claude-opus-5[1m]` | `low`, `medium`, `high`, `xhigh`, `max`, `ultracode` |
+| `claude-fable-5` | `low`, `medium`, `high`, `xhigh`, `max`, `ultracode` |
+| `claude-sonnet-5` | `low`, `medium`, `high`, `xhigh`, `max`, `ultracode` |
+| `claude-haiku-4-5` | None; leave effort unset |
+
+When effort is unset, supported models run at the adapter default of `high`. Haiku ignores stale saved effort values and runs without an `--effort` flag.
 
 ## Prompt Templates
 

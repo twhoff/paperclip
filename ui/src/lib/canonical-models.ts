@@ -40,38 +40,57 @@ export interface CanonicalEffortLevel {
  */
 export const CANONICAL_MODELS: Record<string, CanonicalModel> = {
   // ── Claude ──────────────────────────────────────────────────────────────
+  "claude-opus-5": {
+    label: "Claude Opus 5",
+    adapters: {
+      claude_local: "claude-opus-5",
+    },
+  },
+  "claude-opus-5-1m": {
+    label: "Claude Opus 5 (1M)",
+    adapters: {
+      claude_local: "claude-opus-5[1m]",
+    },
+  },
+  "claude-fable-5": {
+    label: "Claude Fable 5",
+    adapters: {
+      claude_local: "claude-fable-5",
+    },
+  },
+  "claude-sonnet-5": {
+    label: "Claude Sonnet 5",
+    adapters: {
+      claude_local: "claude-sonnet-5",
+    },
+  },
   "claude-opus-4.8": {
     label: "Claude Opus 4.8",
     adapters: {
-      claude_local: "claude-opus-4-8",
       copilot_cli: "claude-opus-4.8",
     },
   },
   "claude-opus-4.8-1m": {
     label: "Claude Opus 4.8 (1M)",
     adapters: {
-      claude_local: "claude-opus-4-8",
       copilot_cli: "claude-opus-4.8-1m",
     },
   },
   "claude-opus-4.7": {
     label: "Claude Opus 4.7",
     adapters: {
-      claude_local: "claude-opus-4-7",
       copilot_cli: "claude-opus-4.7",
     },
   },
   "claude-opus-4.7-1m": {
     label: "Claude Opus 4.7 (1M)",
     adapters: {
-      claude_local: "claude-opus-4-7",
       copilot_cli: "claude-opus-4.7-1m",
     },
   },
   "claude-sonnet-4.6": {
     label: "Claude Sonnet 4.6",
     adapters: {
-      claude_local: "claude-sonnet-4-6",
       copilot_cli: "claude-sonnet-4.6",
       cursor: "sonnet-4.6",
     },
@@ -79,14 +98,7 @@ export const CANONICAL_MODELS: Record<string, CanonicalModel> = {
   "claude-sonnet-4.6-1m": {
     label: "Claude Sonnet 4.6 (1M)",
     adapters: {
-      claude_local: "claude-sonnet-4-6",
       copilot_cli: "claude-sonnet-4.6-1m",
-    },
-  },
-  "claude-haiku-4.6": {
-    label: "Claude Haiku 4.6",
-    adapters: {
-      claude_local: "claude-haiku-4-6",
     },
   },
   "claude-opus-4.5": {
@@ -99,7 +111,6 @@ export const CANONICAL_MODELS: Record<string, CanonicalModel> = {
   "claude-sonnet-4.5": {
     label: "Claude Sonnet 4.5",
     adapters: {
-      claude_local: "claude-sonnet-4-5-20250929",
       copilot_cli: "claude-sonnet-4.5",
       cursor: "sonnet-4.5",
       oz_local: "claude-4-5-sonnet",
@@ -108,7 +119,7 @@ export const CANONICAL_MODELS: Record<string, CanonicalModel> = {
   "claude-haiku-4.5": {
     label: "Claude Haiku 4.5",
     adapters: {
-      claude_local: "claude-haiku-4-5-20251001",
+      claude_local: ["claude-haiku-4-5", "claude-haiku-4-5-20251001"],
       copilot_cli: "claude-haiku-4.5",
       oz_local: "claude-4-5-haiku",
     },
@@ -121,6 +132,24 @@ export const CANONICAL_MODELS: Record<string, CanonicalModel> = {
   },
 
   // ── GPT ─────────────────────────────────────────────────────────────────
+  "gpt-5.6-sol": {
+    label: "GPT-5.6 Sol",
+    adapters: {
+      codex_local: "gpt-5.6-sol",
+    },
+  },
+  "gpt-5.6-terra": {
+    label: "GPT-5.6 Terra",
+    adapters: {
+      codex_local: "gpt-5.6-terra",
+    },
+  },
+  "gpt-5.6-luna": {
+    label: "GPT-5.6 Luna",
+    adapters: {
+      codex_local: "gpt-5.6-luna",
+    },
+  },
   "gpt-5.5": {
     label: "GPT-5.5",
     adapters: {
@@ -138,7 +167,6 @@ export const CANONICAL_MODELS: Record<string, CanonicalModel> = {
   "gpt-5.3-codex": {
     label: "GPT-5.3 Codex",
     adapters: {
-      codex_local: "gpt-5.3-codex",
       copilot_cli: "gpt-5.3-codex",
       cursor: "gpt-5.3-codex",
     },
@@ -178,14 +206,12 @@ export const CANONICAL_MODELS: Record<string, CanonicalModel> = {
   "gpt-5-mini": {
     label: "GPT-5 Mini",
     adapters: {
-      codex_local: "gpt-5-mini",
       copilot_cli: "gpt-5-mini",
     },
   },
   "gpt-5.2": {
     label: "GPT-5.2",
     adapters: {
-      codex_local: "gpt-5.2",
       copilot_cli: "gpt-5.2",
       cursor: "gpt-5.2",
     },
@@ -314,7 +340,14 @@ export const CANONICAL_EFFORT_LEVELS: Record<string, CanonicalEffortLevel> = {
     label: "Max",
     adapters: {
       claude_local: { field: "effort", value: "max" },
+      codex_local: { field: "effort", value: "max" },
       opencode_local: { field: "variant", value: "max" },
+    },
+  },
+  ultra: {
+    label: "Ultra",
+    adapters: {
+      codex_local: { field: "effort", value: "ultra" },
     },
   },
   ultracode: {
@@ -354,13 +387,21 @@ export const CANONICAL_EFFORT_LEVELS: Record<string, CanonicalEffortLevel> = {
 export const ALLOWED_EFFORT_LEVELS: Partial<
   Record<AdapterType, Record<string, readonly string[]>>
 > = {
+  claude_local: {
+    "claude-opus-5": ["low", "medium", "high", "xhigh", "max", "ultracode"],
+    "claude-opus-5-1m": ["low", "medium", "high", "xhigh", "max", "ultracode"],
+    "claude-fable-5": ["low", "medium", "high", "xhigh", "max", "ultracode"],
+    "claude-sonnet-5": ["low", "medium", "high", "xhigh", "max", "ultracode"],
+    "claude-haiku-4.5": [],
+  },
   codex_local: {
-    "gpt-5.5": ["none", "low", "medium", "high", "xhigh"],
-    "gpt-5.4": ["none", "low", "medium", "high", "xhigh"],
-    "gpt-5.4-mini": ["none", "low", "medium", "high", "xhigh"],
-    "gpt-5.3-codex": ["low", "medium", "high", "xhigh"],
-    "gpt-5.3-codex-spark": [],
-    "gpt-5.2": ["none", "low", "medium", "high", "xhigh"],
+    "gpt-5.6-sol": ["low", "medium", "high", "xhigh", "ultra"],
+    "gpt-5.6-terra": ["low", "medium", "high", "xhigh", "ultra"],
+    "gpt-5.6-luna": ["low", "medium", "high", "xhigh", "max"],
+    "gpt-5.5": ["low", "medium", "high", "xhigh"],
+    "gpt-5.4": ["low", "medium", "high", "xhigh"],
+    "gpt-5.4-mini": ["low", "medium", "high", "xhigh"],
+    "gpt-5.3-codex-spark": ["low", "medium", "high", "xhigh"],
   },
   copilot_cli: {
     // GPT-5.x models on Copilot CLI accept up to xhigh.
@@ -394,10 +435,10 @@ export const ALLOWED_EFFORT_LEVELS: Partial<
  * that take the same effort surface regardless of model).
  */
 export const DEFAULT_ALLOWED_EFFORT_LEVELS: Partial<Record<AdapterType, readonly string[]>> = {
-  // claude_local: every shipped Claude model accepts the full canonical Claude surface.
+  // claude_local: fallback for legacy saved models; current Haiku is overridden above.
   claude_local: ["low", "medium", "high", "xhigh", "max", "ultracode"],
   // codex_local: fallback for legacy saved models that remain readable.
-  codex_local: ["none", "low", "medium", "high", "xhigh"],
+  codex_local: ["low", "medium", "high", "xhigh"],
   // copilot_cli: see per-model entries above; the default is the GPT-5.x surface
   // for any model that ALLOWED_EFFORT_LEVELS doesn't enumerate.
   copilot_cli: ["low", "medium", "high", "xhigh"],
@@ -567,6 +608,7 @@ export function translateEffort(
   if (
     canonicalLevel === "xhigh" ||
     canonicalLevel === "max" ||
+    canonicalLevel === "ultra" ||
     canonicalLevel === "ultracode"
   ) {
     return CANONICAL_EFFORT_LEVELS["high"]?.adapters[toAdapter as AdapterType];

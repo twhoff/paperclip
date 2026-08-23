@@ -17,28 +17,39 @@ import {
   translateModel,
 } from "./canonical-models";
 
-describe("Claude Opus 4.8 canonical model", () => {
-  it("is registered with both base and 1M canonical keys", () => {
-    expect(CANONICAL_MODELS["claude-opus-4.8"]).toBeDefined();
-    expect(CANONICAL_MODELS["claude-opus-4.8-1m"]).toBeDefined();
+const CLAUDE_FULL_EFFORT = ["low", "medium", "high", "xhigh", "max", "ultracode"];
+
+const CLAUDE_LOCAL_MODEL_CASES = [
+  ["claude-opus-5", "claude-opus-5"],
+  ["claude-opus-5[1m]", "claude-opus-5-1m"],
+  ["claude-fable-5", "claude-fable-5"],
+  ["claude-sonnet-5", "claude-sonnet-5"],
+  ["claude-haiku-4-5", "claude-haiku-4.5"],
+] as const;
+
+describe("Claude Local model catalogue", () => {
+  it("uses the provider-current curated model choices", () => {
+    expect(claudeLocalModels.map((model) => model.id)).toEqual(
+      CLAUDE_LOCAL_MODEL_CASES.map(([modelId]) => modelId),
+    );
   });
 
-  it("reverse-resolves the copilot adapter model ids", () => {
-    expect(resolveCanonicalModel("copilot_cli", "claude-opus-4.8")).toBe(
-      "claude-opus-4.8",
-    );
-    expect(resolveCanonicalModel("copilot_cli", "claude-opus-4.8-1m")).toBe(
-      "claude-opus-4.8-1m",
-    );
-  });
+  it.each(CLAUDE_LOCAL_MODEL_CASES)(
+    "round-trips %s through canonical model %s",
+    (modelId, canonicalId) => {
+      expect(CANONICAL_MODELS[canonicalId]).toBeDefined();
+      expect(resolveCanonicalModel("claude_local", modelId)).toBe(canonicalId);
+      expect(translateModel(canonicalId, "claude_local")).toBe(modelId);
+    },
+  );
 
-  it("translates to the claude_local kebab model id", () => {
-    expect(translateModel("claude-opus-4.8", "claude_local")).toBe(
-      "claude-opus-4-8",
-    );
-    expect(translateModel("claude-opus-4.8-1m", "claude_local")).toBe(
-      "claude-opus-4-8",
-    );
+  it("offers the full effort surface for every current model except Haiku", () => {
+    for (const [, canonicalId] of CLAUDE_LOCAL_MODEL_CASES.slice(0, -1)) {
+      expect(getAllowedEffortLevels("claude_local", canonicalId)).toEqual(
+        CLAUDE_FULL_EFFORT,
+      );
+    }
+    expect(getAllowedEffortLevels("claude_local", "claude-haiku-4.5")).toEqual([]);
   });
 });
 
@@ -74,23 +85,6 @@ describe("ultracode canonical effort level", () => {
   });
 });
 
-describe("allowed effort levels for Opus 4.8", () => {
-  it("offers high/xhigh/max/ultracode on claude_local", () => {
-    const levels = getAllowedEffortLevels("claude_local", "claude-opus-4.8");
-    expect(levels).toContain("high");
-    expect(levels).toContain("xhigh");
-    expect(levels).toContain("max");
-    expect(levels).toContain("ultracode");
-  });
-
-  it("caps at xhigh on copilot_cli (no max, no ultracode)", () => {
-    const levels = getAllowedEffortLevels("copilot_cli", "claude-opus-4.8");
-    expect(levels).toContain("xhigh");
-    expect(levels).not.toContain("max");
-    expect(levels).not.toContain("ultracode");
-  });
-});
-
 const targetDefaultModel = {
   codex_local: DEFAULT_CODEX_LOCAL_MODEL,
   copilot_cli: copilotCliModels[0]?.id ?? "",
@@ -116,14 +110,15 @@ function scopedRemap(input: {
 
 describe("Codex Local model catalogue", () => {
   it("uses the verified Codex default and curated model choices", () => {
-    expect(DEFAULT_CODEX_LOCAL_MODEL).toBe("gpt-5.5");
+    expect(DEFAULT_CODEX_LOCAL_MODEL).toBe("gpt-5.6-sol");
     expect(codexLocalModels.map((model) => model.id)).toEqual([
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna",
       "gpt-5.5",
       "gpt-5.4",
       "gpt-5.4-mini",
-      "gpt-5.3-codex",
       "gpt-5.3-codex-spark",
-      "gpt-5.2",
     ]);
   });
 
@@ -132,23 +127,45 @@ describe("Codex Local model catalogue", () => {
     expect(resolveCanonicalEffort("codex_local", "minimal")).toBe("minimal");
     expect(codexLocalModels.map((model) => model.id)).not.toContain("gpt-5");
     expect(getAllowedEffortLevels("codex_local", "gpt-5.5")).not.toContain("minimal");
+    expect(getAllowedEffortLevels("codex_local", "gpt-5.5")).not.toContain("none");
   });
 
   it("models Codex effort support per verified model", () => {
+    expect(getAllowedEffortLevels("codex_local", "gpt-5.6-sol")).toEqual([
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "ultra",
+    ]);
+    expect(getAllowedEffortLevels("codex_local", "gpt-5.6-terra")).toEqual([
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "ultra",
+    ]);
+    expect(getAllowedEffortLevels("codex_local", "gpt-5.6-luna")).toEqual([
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+    ]);
     expect(getAllowedEffortLevels("codex_local", "gpt-5.5")).toEqual([
-      "none",
       "low",
       "medium",
       "high",
       "xhigh",
     ]);
-    expect(getAllowedEffortLevels("codex_local", "gpt-5.3-codex")).toEqual([
-      "low",
-      "medium",
-      "high",
-      "xhigh",
-    ]);
-    expect(getAllowedEffortLevels("codex_local", "gpt-5.3-codex-spark")).toEqual([]);
+    for (const model of ["gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark"]) {
+      expect(getAllowedEffortLevels("codex_local", model)).toEqual([
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+      ]);
+    }
   });
 
   it("translates Codex-only effort levels through canonical helpers", () => {
@@ -160,6 +177,16 @@ describe("Codex Local model catalogue", () => {
     expect(translateEffort("xhigh", "codex_local")).toEqual({
       field: "effort",
       value: "xhigh",
+    });
+    expect(resolveCanonicalEffort("codex_local", "max")).toBe("max");
+    expect(translateEffort("max", "codex_local")).toEqual({
+      field: "effort",
+      value: "max",
+    });
+    expect(resolveCanonicalEffort("codex_local", "ultra")).toBe("ultra");
+    expect(translateEffort("ultra", "codex_local")).toEqual({
+      field: "effort",
+      value: "ultra",
     });
   });
 });
@@ -179,7 +206,7 @@ describe("scoped Codex Local adapter switching remapping", () => {
     });
   });
 
-  it("preserves shared Copilot to Codex model and effort equivalents", () => {
+  it("does not introduce retired Codex choices when switching from Copilot", () => {
     expect(
       scopedRemap({
         fromAdapter: "copilot_cli",
@@ -188,7 +215,7 @@ describe("scoped Codex Local adapter switching remapping", () => {
         effort: "high",
       }),
     ).toEqual({
-      model: "gpt-5.3-codex",
+      model: targetDefaultModel.codex_local,
       effort: { field: "effort", value: "high" },
     });
   });
@@ -209,10 +236,10 @@ describe("scoped Codex Local adapter switching remapping", () => {
       scopedRemap({
         fromAdapter: "codex_local",
         toAdapter: "copilot_cli",
-        model: "gpt-5.2",
-        effort: "xhigh",
+        model: "gpt-5.6-sol",
+        effort: "ultra",
       }),
-    ).toEqual({ model: "gpt-5.2" });
+    ).toEqual({ model: targetDefaultModel.copilot_cli });
     expect(
       scopedRemap({
         fromAdapter: "codex_local",
@@ -239,8 +266,30 @@ describe("scoped Codex Local adapter switching remapping", () => {
       scopedRemap({
         fromAdapter: "claude_local",
         toAdapter: "codex_local",
-        model: "claude-opus-4-8",
+        model: "claude-opus-5",
         effort: "ultracode",
+      }),
+    ).toEqual({ model: targetDefaultModel.codex_local });
+  });
+
+  it("preserves max only when the target model supports it", () => {
+    expect(
+      scopedRemap({
+        fromAdapter: "codex_local",
+        toAdapter: "claude_local",
+        model: "gpt-5.6-luna",
+        effort: "max",
+      }),
+    ).toEqual({
+      model: targetDefaultModel.claude_local,
+      effort: { field: "effort", value: "max" },
+    });
+    expect(
+      scopedRemap({
+        fromAdapter: "claude_local",
+        toAdapter: "codex_local",
+        model: "claude-opus-5",
+        effort: "max",
       }),
     ).toEqual({ model: targetDefaultModel.codex_local });
   });
@@ -288,7 +337,7 @@ describe("scoped Codex Local adapter switching remapping", () => {
       scopedRemap({
         fromAdapter: "claude_local",
         toAdapter: "copilot_cli",
-        model: "claude-opus-4-8",
+        model: "claude-opus-5",
         effort: "high",
       }),
     ).toBeUndefined();

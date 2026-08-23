@@ -124,7 +124,7 @@ export function serializeToBatchRequest(
   bootstrapPromptTemplate: string,
   templateData: Record<string, unknown>,
 ): AnthropicMessageParams {
-  const model = asString(config.model, "claude-sonnet-4-6");
+  const model = asString(config.model, "claude-sonnet-5");
   const maxTokens = asNumber(config.batchMaxTokens, 8192);
 
   // Render the system prompt using the same template as CLI mode
@@ -184,6 +184,7 @@ export function estimateCostUsd(
     "claude-sonnet-4-6": 3.0,
     "claude-haiku-4-6": 0.8,
     "claude-sonnet-4-5-20250929": 3.0,
+    "claude-haiku-4-5": 0.8,
     "claude-haiku-4-5-20251001": 0.8,
   };
 
@@ -193,6 +194,7 @@ export function estimateCostUsd(
     "claude-sonnet-4-6": 15.0,
     "claude-haiku-4-6": 4.0,
     "claude-sonnet-4-5-20250929": 15.0,
+    "claude-haiku-4-5": 4.0,
     "claude-haiku-4-5-20251001": 4.0,
   };
 

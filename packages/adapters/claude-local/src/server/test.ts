@@ -16,6 +16,7 @@ import {
 } from "@paperclipai/adapter-utils/server-utils";
 import path from "node:path";
 import { CLAUDE_BASE_ARGS } from "./base-args.js";
+import { claudeModelSupportsEffort } from "./model-capabilities.js";
 import { detectClaudeLoginRequired, parseClaudeStreamJson } from "./parse.js";
 
 function summarizeStatus(checks: AdapterEnvironmentCheck[]): AdapterEnvironmentTestResult["status"] {
@@ -129,7 +130,9 @@ export async function testEnvironment(
       });
     } else {
       const model = asString(config.model, "").trim();
-      const effort = asString(config.effort, "").trim();
+      const effort = claudeModelSupportsEffort(model)
+        ? asString(config.effort, "").trim()
+        : "";
       const chrome = asBoolean(config.chrome, false);
       const maxTurns = asNumber(config.maxTurnsPerRun, 0);
       const dangerouslySkipPermissions = asBoolean(config.dangerouslySkipPermissions, false);

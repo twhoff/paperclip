@@ -152,11 +152,12 @@ function formatArgList(value: unknown): string {
 
 const codexThinkingEffortOptions = [
   { id: "", label: "Auto" },
-  { id: "none", label: "None" },
   { id: "low", label: "Low" },
   { id: "medium", label: "Medium" },
   { id: "high", label: "High" },
   { id: "xhigh", label: "Extra High" },
+  { id: "max", label: "Max" },
+  { id: "ultra", label: "Ultra" },
 ] as const;
 
 function getScopedSwitchTargetDefaultModel(adapterType: string): string {
@@ -473,7 +474,9 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
       ? false
       : adapterType === "copilot_cli"
         ? Boolean(!currentModelId || copilotModelEffort)
-        : true;
+        : adapterType === "claude_local"
+          ? Boolean(!currentModelId || allowedEffortIds?.size)
+          : true;
   const codexSearchEnabled = adapterType === "codex_local"
     ? (isCreate ? Boolean(val!.search) : eff("adapterConfig", "search", Boolean(config.search)))
     : false;
