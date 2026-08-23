@@ -800,8 +800,8 @@ export function AgentDetail() {
   return (
     <div className={cn("space-y-6", isMobile && showConfigActionBar && "pb-24")}>
       {/* Header */}
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-3 min-w-0">
+      <div className="flex flex-col items-stretch gap-3 xl:flex-row xl:items-center xl:justify-between">
+        <div className="flex w-full min-w-0 flex-1 items-center gap-3 xl:w-auto">
           <AgentIconPicker
             value={agent.icon}
             onChange={(icon) => updateIcon.mutate(icon)}
@@ -816,9 +816,17 @@ export function AgentDetail() {
               {roleLabels[agent.role] ?? agent.role}
               {agent.title ? ` - ${agent.title}` : ""}
             </p>
+            <div className="mt-1 flex items-center gap-1.5 sm:hidden">
+              <StatusBadge status={agent.status} />
+              {agent.status === "under_emulation" && agent.nativeStatus && (
+                <span className="text-[11px] text-muted-foreground shrink-0">
+                  native: {agent.nativeStatus.replaceAll("_", " ")}
+                </span>
+              )}
+            </div>
           </div>
         </div>
-        <div className="flex items-center gap-1 sm:gap-2 shrink-0">
+        <div className="flex w-full max-w-full flex-wrap items-center justify-end gap-1 sm:gap-2 xl:w-auto">
           <Button
             variant="outline"
             size="sm"
@@ -829,16 +837,23 @@ export function AgentDetail() {
           </Button>
           <RunButton
             onClick={() => agentAction.mutate("invoke")}
-            disabled={agentAction.isPending || isPendingApproval}
-            label="Run Heartbeat"
+            disabled={agentAction.isPending || isPendingApproval || agent.status === "under_emulation"}
+            label={agent.status === "under_emulation" ? "Emulating" : "Run Heartbeat"}
           />
           <PauseResumeButton
-            isPaused={agent.status === "paused"}
+            isPaused={agent.status === "paused" || agent.nativeStatus === "paused"}
             onPause={() => agentAction.mutate("pause")}
             onResume={() => agentAction.mutate("resume")}
-            disabled={agentAction.isPending || isPendingApproval}
+            disabled={agentAction.isPending || isPendingApproval || agent.status === "under_emulation"}
           />
-          <span className="hidden sm:inline"><StatusBadge status={agent.status} /></span>
+          <span className="hidden sm:flex items-center gap-1.5">
+            <StatusBadge status={agent.status} />
+            {agent.status === "under_emulation" && agent.nativeStatus && (
+              <span className="text-xs text-muted-foreground">
+                native: {agent.nativeStatus.replaceAll("_", " ")}
+              </span>
+            )}
+          </span>
           {mobileLiveRun && (
             <Link
               to={`/agents/${canonicalAgentRef}/runs/${mobileLiveRun.id}`}

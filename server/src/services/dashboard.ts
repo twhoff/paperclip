@@ -1,6 +1,6 @@
-import { and, eq, gte, sql } from "drizzle-orm";
+import { and, eq, gt, gte, inArray, isNull, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { agents, approvals, companies, costEvents, issues } from "@paperclipai/db";
+import { agentEmulationSessions, agents, approvals, companies, costEvents, issues } from "@paperclipai/db";
 import { notFound } from "../errors.js";
 import { budgetService } from "./budgets.js";
 
@@ -22,6 +22,23 @@ export function dashboardService(db: Db) {
         .where(eq(agents.companyId, companyId))
         .groupBy(agents.status);
 
+      const activeEmulationRows = await db
+        .select({ agentId: agentEmulationSessions.agentId })
+        .from(agentEmulationSessions)
+        .where(
+          and(
+            eq(agentEmulationSessions.companyId, companyId),
+            isNull(agentEmulationSessions.endedAt),
+            gt(agentEmulationSessions.expiresAt, new Date()),
+          ),
+        );
+      const emulatedAgentRows = activeEmulationRows.length > 0
+        ? await db
+            .select({ id: agents.id, status: agents.status })
+            .from(agents)
+            .where(inArray(agents.id, activeEmulationRows.map((row) => row.agentId)))
+        : [];
+
       const taskRows = await db
         .select({ status: issues.status, count: sql<number>`count(*)` })
         .from(issues)
@@ -37,6 +54,7 @@ export function dashboardService(db: Db) {
       const agentCounts: Record<string, number> = {
         active: 0,
         running: 0,
+        emulating: 0,
         paused: 0,
         error: 0,
       };
@@ -45,6 +63,11 @@ export function dashboardService(db: Db) {
         // "idle" agents are operational — count them as active
         const bucket = row.status === "idle" ? "active" : row.status;
         agentCounts[bucket] = (agentCounts[bucket] ?? 0) + count;
+      }
+      for (const row of emulatedAgentRows) {
+        const nativeBucket = row.status === "idle" ? "active" : row.status;
+        agentCounts[nativeBucket] = Math.max(0, (agentCounts[nativeBucket] ?? 0) - 1);
+        agentCounts.emulating += 1;
       }
 
       const taskCounts: Record<string, number> = {
@@ -87,6 +110,7 @@ export function dashboardService(db: Db) {
         agents: {
           active: agentCounts.active,
           running: agentCounts.running,
+          emulating: agentCounts.emulating,
           paused: agentCounts.paused,
           error: agentCounts.error,
         },

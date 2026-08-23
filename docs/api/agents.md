@@ -75,6 +75,47 @@ PATCH /api/agents/{agentId}
 }
 ```
 
+`status: "under_emulation"` is not accepted here. Use the lease endpoints so
+Paperclip can preserve the agent's native status.
+
+## Start or Refresh External Emulation
+
+```
+POST /api/agents/{agentId}/emulation
+{
+  "runId": "pcli-run-1",
+  "ttlSec": 43200,
+  "metadata": { "source": "pcli", "pid": 12345 }
+}
+```
+
+Creates one active external-emulation lease per agent. A retry with the same
+`runId` refreshes that lease; another run receives `409 Conflict`. Paperclip
+also rejects a new lease while a native heartbeat is running. While leased,
+agent responses expose `status: "under_emulation"` plus `nativeStatus`,
+`emulationSessionId`, `emulationRunId`, `emulationStartedAt`, and
+`emulationExpiresAt`.
+
+Native timer and manual wakeups are blocked during the lease. Native runs that
+were already queued remain queued and can be claimed after the lease ends or
+expires. Expiry is the universal recovery path. Local pcli clients may also
+send a numeric `metadata.pid`; the heartbeat reaper ends the lease when that
+same-host process no longer exists.
+
+## End External Emulation
+
+```
+POST /api/agents/{agentId}/emulation/end
+{
+  "runId": "pcli-run-1",
+  "reason": "finished"
+}
+```
+
+Only the matching active run can end the lease. Retrying an already completed
+end is idempotent and returns `ended: false` without writing a second activity
+event. The agent's native status becomes effective again.
+
 ## Pause Agent
 
 ```

@@ -68,6 +68,11 @@ export interface Agent {
   title: string | null;
   icon: string | null;
   status: AgentStatus;
+  nativeStatus: AgentStatus | null;
+  emulationSessionId: string | null;
+  emulationRunId: string | null;
+  emulationStartedAt: Date | null;
+  emulationExpiresAt: Date | null;
   reportsTo: string | null;
   capabilities: string | null;
   adapterType: AgentAdapterType;

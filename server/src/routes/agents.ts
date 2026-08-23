@@ -2,8 +2,8 @@ import { Router, type Request } from "express";
 import { generateKeyPairSync, randomUUID } from "node:crypto";
 import path from "node:path";
 import type { Db } from "@paperclipai/db";
-import { agents as agentsTable, companies, heartbeatRuns } from "@paperclipai/db";
-import { and, desc, eq, inArray, not, sql } from "drizzle-orm";
+import { agentEmulationSessions, agents as agentsTable, companies, heartbeatRuns } from "@paperclipai/db";
+import { and, desc, eq, gt, inArray, isNull, not, sql } from "drizzle-orm";
 import {
   agentSkillSyncSchema,
   createAgentKeySchema,
@@ -12,6 +12,7 @@ import {
   deriveAgentUrlKey,
   isUuidLike,
   resetAgentSessionSchema,
+  startAgentEmulationSchema,
   testAdapterEnvironmentSchema,
   type AgentSkillSnapshot,
   type InstanceSchedulerHeartbeatAgent,
@@ -20,6 +21,7 @@ import {
   updateAgentPermissionsSchema,
   updateAgentInstructionsPathSchema,
   wakeAgentSchema,
+  endAgentEmulationSchema,
   updateAgentSchema,
 } from "@paperclipai/shared";
 import {
@@ -912,10 +914,29 @@ export function agentRoutes(db: Db) {
       .where(accessConditions.length > 0 ? and(...accessConditions) : undefined)
       .orderBy(companies.name, agentsTable.name);
 
+    const activeEmulationAgentIds = rows.length === 0
+      ? new Set<string>()
+      : new Set(
+          (
+            await db
+              .select({ agentId: agentEmulationSessions.agentId })
+              .from(agentEmulationSessions)
+              .where(
+                and(
+                  inArray(agentEmulationSessions.agentId, rows.map((row) => row.id)),
+                  isNull(agentEmulationSessions.endedAt),
+                  gt(agentEmulationSessions.expiresAt, new Date()),
+                ),
+              )
+          ).map((row) => row.agentId),
+        );
+
     const items: InstanceSchedulerHeartbeatAgent[] = rows
       .map((row) => {
         const policy = parseSchedulerHeartbeatPolicy(row.runtimeConfig);
+        const underEmulation = activeEmulationAgentIds.has(row.id);
         const statusEligible =
+          !underEmulation &&
           row.status !== "paused" &&
           row.status !== "terminated" &&
           row.status !== "pending_approval";
@@ -929,7 +950,7 @@ export function agentRoutes(db: Db) {
           agentUrlKey: deriveAgentUrlKey(row.agentName, row.id),
           role: row.role as InstanceSchedulerHeartbeatAgent["role"],
           title: row.title,
-          status: row.status as InstanceSchedulerHeartbeatAgent["status"],
+          status: (underEmulation ? "under_emulation" : row.status) as InstanceSchedulerHeartbeatAgent["status"],
           adapterType: row.adapterType,
           intervalSec: policy.intervalSec,
           heartbeatEnabled: policy.enabled,
@@ -939,6 +960,7 @@ export function agentRoutes(db: Db) {
       })
       .filter((item) =>
         item.intervalSec > 0 &&
+        item.status !== "under_emulation" &&
         item.status !== "paused" &&
         item.status !== "terminated" &&
         item.status !== "pending_approval",
@@ -1825,6 +1847,78 @@ export function agentRoutes(db: Db) {
     });
 
     res.json(agent);
+  });
+
+  router.post("/agents/:id/emulation", validate(startAgentEmulationSchema), async (req, res) => {
+    const id = req.params.id as string;
+    const existing = await svc.getById(id);
+    if (!existing) {
+      res.status(404).json({ error: "Agent not found" });
+      return;
+    }
+    await assertCanUpdateAgent(req, existing);
+
+    const result = await svc.startEmulation(id, req.body);
+    if (!result?.agent) {
+      res.status(404).json({ error: "Agent not found" });
+      return;
+    }
+
+    const actor = getActorInfo(req);
+    await logActivity(db, {
+      companyId: result.agent.companyId,
+      actorType: actor.actorType,
+      actorId: actor.actorId,
+      agentId: actor.agentId,
+      runId: actor.runId,
+      action: "agent.emulation_started",
+      entityType: "agent",
+      entityId: result.agent.id,
+      details: {
+        runId: result.emulation.runId,
+        emulationSessionId: result.emulation.id,
+        nativeStatus: result.agent.nativeStatus,
+      },
+    });
+
+    res.json(result);
+  });
+
+  router.post("/agents/:id/emulation/end", validate(endAgentEmulationSchema), async (req, res) => {
+    const id = req.params.id as string;
+    const existing = await svc.getById(id);
+    if (!existing) {
+      res.status(404).json({ error: "Agent not found" });
+      return;
+    }
+    await assertCanUpdateAgent(req, existing);
+
+    const result = await svc.endEmulation(id, req.body);
+    if (!result?.agent) {
+      res.status(404).json({ error: "Agent not found" });
+      return;
+    }
+
+    if (result.ended) {
+      const actor = getActorInfo(req);
+      await logActivity(db, {
+        companyId: result.agent.companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
+        runId: actor.runId,
+        action: "agent.emulation_ended",
+        entityType: "agent",
+        entityId: result.agent.id,
+        details: {
+          runId: req.body.runId,
+          reason: req.body.reason ?? "ended",
+          emulationSessionId: result.emulation?.id ?? null,
+        },
+      });
+    }
+
+    res.json(result);
   });
 
   router.post("/agents/:id/pause", async (req, res) => {

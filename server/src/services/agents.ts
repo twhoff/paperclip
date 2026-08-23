@@ -1,8 +1,9 @@
 import { createHash, randomBytes } from "node:crypto";
-import { and, desc, eq, gte, inArray, lt, ne, sql } from "drizzle-orm";
+import { and, desc, eq, gt, gte, inArray, isNull, lt, lte, ne, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   agents,
+  agentEmulationSessions,
   agentConfigRevisions,
   agentApiKeys,
   agentRuntimeState,
@@ -16,6 +17,10 @@ import { isUuidLike, normalizeAgentUrlKey } from "@paperclipai/shared";
 import { conflict, notFound, unprocessable } from "../errors.js";
 import { normalizeAgentPermissions } from "./agent-permissions.js";
 import { REDACTED_EVENT_VALUE, sanitizeRecord } from "../redaction.js";
+import { publishLiveEvent } from "./live-events.js";
+
+const UNDER_EMULATION_STATUS = "under_emulation";
+const DEFAULT_EMULATION_TTL_SEC = 12 * 60 * 60;
 
 function hashToken(token: string) {
   return createHash("sha256").update(token).digest("hex");
@@ -199,11 +204,65 @@ export function agentService(db: Db) {
     };
   }
 
-  function normalizeAgentRow(row: typeof agents.$inferSelect) {
-    return withUrlKey({
+  function normalizeAgentRow(
+    row: typeof agents.$inferSelect,
+    activeEmulation?: typeof agentEmulationSessions.$inferSelect,
+  ) {
+    const base = withUrlKey({
       ...row,
       permissions: normalizeAgentPermissions(row.permissions, row.role),
+      nativeStatus: null,
+      emulationSessionId: null,
+      emulationRunId: null,
+      emulationStartedAt: null,
+      emulationExpiresAt: null,
     });
+    if (!activeEmulation) return base;
+    return {
+      ...base,
+      status: UNDER_EMULATION_STATUS,
+      nativeStatus: row.status,
+      emulationSessionId: activeEmulation.id,
+      emulationRunId: activeEmulation.runId,
+      emulationStartedAt: activeEmulation.startedAt,
+      emulationExpiresAt: activeEmulation.expiresAt,
+    };
+  }
+
+  async function getActiveEmulationsByAgentIds(agentIds: string[]) {
+    if (agentIds.length === 0) {
+      return new Map<string, typeof agentEmulationSessions.$inferSelect>();
+    }
+    const rows = await db
+      .select()
+      .from(agentEmulationSessions)
+      .where(
+        and(
+          inArray(agentEmulationSessions.agentId, agentIds),
+          isNull(agentEmulationSessions.endedAt),
+          gt(agentEmulationSessions.expiresAt, new Date()),
+        ),
+      );
+    return new Map(rows.map((row) => [row.agentId, row]));
+  }
+
+  async function normalizeAgentRows(rows: Array<typeof agents.$inferSelect>) {
+    const hydrated = await hydrateAgentSpend(rows);
+    const emulations = await getActiveEmulationsByAgentIds(hydrated.map((row) => row.id));
+    return hydrated.map((row) => normalizeAgentRow(row, emulations.get(row.id)));
+  }
+
+  async function normalizeAgentRowAsync(row: typeof agents.$inferSelect) {
+    const [normalized] = await normalizeAgentRows([row]);
+    return normalized ?? null;
+  }
+
+  async function getNativeById(id: string) {
+    return db
+      .select()
+      .from(agents)
+      .where(eq(agents.id, id))
+      .then((rows) => rows[0] ?? null);
   }
 
   async function getMonthlySpendByAgentIds(companyId: string, agentIds: string[]) {
@@ -239,14 +298,46 @@ export function agentService(db: Db) {
   }
 
   async function getById(id: string) {
-    const row = await db
-      .select()
-      .from(agents)
-      .where(eq(agents.id, id))
-      .then((rows) => rows[0] ?? null);
+    const row = await getNativeById(id);
     if (!row) return null;
-    const [hydrated] = await hydrateAgentSpend([row]);
-    return normalizeAgentRow(hydrated);
+    return normalizeAgentRowAsync(row);
+  }
+
+  function emulationExpiresAt(ttlSec?: number | null) {
+    const seconds = Math.max(1, Math.min(ttlSec ?? DEFAULT_EMULATION_TTL_SEC, 24 * 60 * 60));
+    return new Date(Date.now() + seconds * 1000);
+  }
+
+  function publishAgentStatus(agent: Awaited<ReturnType<typeof getById>>) {
+    if (!agent) return;
+    publishLiveEvent({
+      companyId: agent.companyId,
+      type: "agent.status",
+      payload: {
+        agentId: agent.id,
+        status: agent.status,
+        nativeStatus: agent.nativeStatus,
+        emulationSessionId: agent.emulationSessionId,
+        emulationRunId: agent.emulationRunId,
+        lastHeartbeatAt: agent.lastHeartbeatAt
+          ? new Date(agent.lastHeartbeatAt).toISOString()
+          : null,
+      },
+    });
+  }
+
+  function metadataPid(metadata: Record<string, unknown> | null): number | null {
+    const value = metadata?.pid;
+    return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : null;
+  }
+
+  function processIsAlive(pid: number) {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   async function ensureManager(companyId: string, managerId: string) {
@@ -300,8 +391,12 @@ export function agentService(db: Db) {
     data: Partial<typeof agents.$inferInsert>,
     options?: UpdateAgentOptions,
   ) {
-    const existing = await getById(id);
+    const existing = await getNativeById(id);
     if (!existing) return null;
+
+    if (data.status === UNDER_EMULATION_STATUS) {
+      throw conflict("Use the emulation lifecycle endpoint to enter under_emulation status");
+    }
 
     if (existing.status === "terminated" && data.status && data.status !== "terminated") {
       throw conflict("Terminated agents cannot be resumed");
@@ -356,7 +451,7 @@ export function agentService(db: Db) {
       .where(eq(agents.id, id))
       .returning()
       .then((rows) => rows[0] ?? null);
-    const normalizedUpdated = updated ? normalizeAgentRow(updated) : null;
+    const normalizedUpdated = updated ? await normalizeAgentRowAsync(updated) : null;
 
     if (normalizedUpdated && shouldRecordRevision && beforeConfig) {
       const afterConfig = buildConfigSnapshot(normalizedUpdated);
@@ -386,11 +481,175 @@ export function agentService(db: Db) {
         conditions.push(ne(agents.status, "terminated"));
       }
       const rows = await db.select().from(agents).where(and(...conditions));
-      const hydrated = await hydrateAgentSpend(rows);
-      return hydrated.map(normalizeAgentRow);
+      return normalizeAgentRows(rows);
     },
 
     getById,
+
+    startEmulation: async (
+      id: string,
+      data: { runId: string; ttlSec?: number; metadata?: Record<string, unknown> | null },
+    ) => {
+      const expiresAt = emulationExpiresAt(data.ttlSec);
+      const session = await db.transaction(async (tx) => {
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${id}, 0))`);
+
+        const existing = await tx
+          .select()
+          .from(agents)
+          .where(eq(agents.id, id))
+          .then((rows) => rows[0] ?? null);
+        if (!existing) return null;
+        if (existing.status === "terminated") throw conflict("Cannot emulate terminated agent");
+        if (existing.status === "pending_approval") {
+          throw conflict("Cannot emulate pending approval agent");
+        }
+
+        const now = new Date();
+        await tx
+          .update(agentEmulationSessions)
+          .set({ endedAt: now, endedReason: "expired", updatedAt: now })
+          .where(
+            and(
+              eq(agentEmulationSessions.agentId, id),
+              isNull(agentEmulationSessions.endedAt),
+              lte(agentEmulationSessions.expiresAt, now),
+            ),
+          );
+
+        const active = await tx
+          .select()
+          .from(agentEmulationSessions)
+          .where(
+            and(
+              eq(agentEmulationSessions.agentId, id),
+              isNull(agentEmulationSessions.endedAt),
+            ),
+          )
+          .limit(1)
+          .then((rows) => rows[0] ?? null);
+        if (active) {
+          if (active.runId !== data.runId) {
+            throw conflict("Agent is already under external emulation", {
+              emulationRunId: active.runId,
+              emulationSessionId: active.id,
+            });
+          }
+          return tx
+            .update(agentEmulationSessions)
+            .set({
+              lastSeenAt: now,
+              expiresAt,
+              metadata: data.metadata === undefined ? active.metadata : data.metadata,
+              updatedAt: now,
+            })
+            .where(eq(agentEmulationSessions.id, active.id))
+            .returning()
+            .then((rows) => rows[0] ?? active);
+        }
+
+        const runningNative = await tx
+          .select({ id: heartbeatRuns.id })
+          .from(heartbeatRuns)
+          .where(
+            and(eq(heartbeatRuns.agentId, id), eq(heartbeatRuns.status, "running")),
+          )
+          .limit(1)
+          .then((rows) => rows[0] ?? null);
+        if (runningNative) {
+          throw conflict("Cannot start external emulation while a native heartbeat is running", {
+            heartbeatRunId: runningNative.id,
+          });
+        }
+
+        return tx
+          .insert(agentEmulationSessions)
+          .values({
+            companyId: existing.companyId,
+            agentId: existing.id,
+            runId: data.runId,
+            nativeStatus: existing.status,
+            metadata: data.metadata ?? null,
+            expiresAt,
+          })
+          .returning()
+          .then((rows) => rows[0]);
+      });
+
+      if (!session) return null;
+      const agent = await getById(id);
+      publishAgentStatus(agent);
+      return { agent, emulation: session };
+    },
+
+    endEmulation: async (id: string, data: { runId: string; reason?: string | null }) => {
+      const existing = await getNativeById(id);
+      if (!existing) return null;
+      const now = new Date();
+      const ended = await db
+        .update(agentEmulationSessions)
+        .set({
+          endedAt: now,
+          endedReason: data.reason ?? "ended",
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(agentEmulationSessions.agentId, id),
+            eq(agentEmulationSessions.runId, data.runId),
+            isNull(agentEmulationSessions.endedAt),
+            gt(agentEmulationSessions.expiresAt, now),
+          ),
+        )
+        .returning()
+        .then((rows) => rows[0] ?? null);
+      const agent = await getById(id);
+      if (ended) publishAgentStatus(agent);
+      return { agent, emulation: ended, ended: Boolean(ended) };
+    },
+
+    reapEmulations: async (options?: {
+      now?: Date;
+      isProcessAlive?: (pid: number) => boolean;
+    }) => {
+      const now = options?.now ?? new Date();
+      const isProcessAlive = options?.isProcessAlive ?? processIsAlive;
+      const activeRows = await db
+        .select()
+        .from(agentEmulationSessions)
+        .where(isNull(agentEmulationSessions.endedAt));
+      let expired = 0;
+      let deadClients = 0;
+
+      for (const row of activeRows) {
+        const pid = metadataPid(row.metadata);
+        const reason =
+          row.expiresAt <= now
+            ? "expired"
+            : pid !== null && !isProcessAlive(pid)
+              ? "client_process_exited"
+              : null;
+        if (!reason) continue;
+
+        const ended = await db
+          .update(agentEmulationSessions)
+          .set({ endedAt: now, endedReason: reason, updatedAt: now })
+          .where(
+            and(
+              eq(agentEmulationSessions.id, row.id),
+              isNull(agentEmulationSessions.endedAt),
+            ),
+          )
+          .returning({ id: agentEmulationSessions.id })
+          .then((rows) => rows[0] ?? null);
+        if (!ended) continue;
+        if (reason === "expired") expired += 1;
+        else deadClients += 1;
+        publishAgentStatus(await getById(row.agentId));
+      }
+
+      return { expired, deadClients };
+    },
 
     create: async (companyId: string, data: Omit<typeof agents.$inferInsert, "companyId">) => {
       if (data.reportsTo) {
@@ -411,7 +670,7 @@ export function agentService(db: Db) {
         .returning()
         .then((rows) => rows[0]);
 
-      return normalizeAgentRow(created);
+      return normalizeAgentRowAsync(created);
     },
 
     update: updateAgent,
@@ -420,7 +679,7 @@ export function agentService(db: Db) {
       id: string,
       reason: "manual" | "budget" | "system" | "shutdown" = "manual",
     ) => {
-      const existing = await getById(id);
+      const existing = await getNativeById(id);
       if (!existing) return null;
       if (existing.status === "terminated") throw conflict("Cannot pause terminated agent");
 
@@ -435,11 +694,11 @@ export function agentService(db: Db) {
         .where(eq(agents.id, id))
         .returning()
         .then((rows) => rows[0] ?? null);
-      return updated ? normalizeAgentRow(updated) : null;
+      return updated ? normalizeAgentRowAsync(updated) : null;
     },
 
     resume: async (id: string) => {
-      const existing = await getById(id);
+      const existing = await getNativeById(id);
       if (!existing) return null;
       if (existing.status === "terminated") throw conflict("Cannot resume terminated agent");
       if (existing.status === "pending_approval") {
@@ -457,11 +716,11 @@ export function agentService(db: Db) {
         .where(eq(agents.id, id))
         .returning()
         .then((rows) => rows[0] ?? null);
-      return updated ? normalizeAgentRow(updated) : null;
+      return updated ? normalizeAgentRowAsync(updated) : null;
     },
 
     terminate: async (id: string) => {
-      const existing = await getById(id);
+      const existing = await getNativeById(id);
       if (!existing) return null;
 
       await db
@@ -479,11 +738,16 @@ export function agentService(db: Db) {
         .set({ revokedAt: new Date() })
         .where(eq(agentApiKeys.agentId, id));
 
+      await db
+        .update(agentEmulationSessions)
+        .set({ endedAt: new Date(), endedReason: "terminated", updatedAt: new Date() })
+        .where(and(eq(agentEmulationSessions.agentId, id), isNull(agentEmulationSessions.endedAt)));
+
       return getById(id);
     },
 
     remove: async (id: string) => {
-      const existing = await getById(id);
+      const existing = await getNativeById(id);
       if (!existing) return null;
 
       return db.transaction(async (tx) => {
@@ -504,9 +768,9 @@ export function agentService(db: Db) {
     },
 
     activatePendingApproval: async (id: string) => {
-      const existing = await getById(id);
+      const existing = await getNativeById(id);
       if (!existing) return null;
-      if (existing.status !== "pending_approval") return existing;
+      if (existing.status !== "pending_approval") return normalizeAgentRowAsync(existing);
 
       const updated = await db
         .update(agents)
@@ -515,11 +779,11 @@ export function agentService(db: Db) {
         .returning()
         .then((rows) => rows[0] ?? null);
 
-      return updated ? normalizeAgentRow(updated) : null;
+      return updated ? normalizeAgentRowAsync(updated) : null;
     },
 
     updatePermissions: async (id: string, permissions: { canCreateAgents: boolean }) => {
-      const existing = await getById(id);
+      const existing = await getNativeById(id);
       if (!existing) return null;
 
       const updated = await db
@@ -532,7 +796,7 @@ export function agentService(db: Db) {
         .returning()
         .then((rows) => rows[0] ?? null);
 
-      return updated ? normalizeAgentRow(updated) : null;
+      return updated ? normalizeAgentRowAsync(updated) : null;
     },
 
     listConfigRevisions: async (id: string) =>
@@ -631,7 +895,7 @@ export function agentService(db: Db) {
         .select()
         .from(agents)
         .where(and(eq(agents.companyId, companyId), ne(agents.status, "terminated")));
-      const normalizedRows = rows.map(normalizeAgentRow);
+      const normalizedRows = await normalizeAgentRows(rows);
       const byManager = new Map<string | null, typeof normalizedRows>();
       for (const row of normalizedRows) {
         const key = row.reportsTo ?? null;
@@ -692,9 +956,10 @@ export function agentService(db: Db) {
       }
 
       const rows = await db.select().from(agents).where(eq(agents.companyId, companyId));
-      const matches = rows
-        .map(normalizeAgentRow)
-        .filter((agent) => agent.urlKey === urlKey && agent.status !== "terminated");
+      const normalizedRows = await normalizeAgentRows(rows);
+      const matches = normalizedRows.filter(
+        (agent) => agent.urlKey === urlKey && agent.status !== "terminated",
+      );
       if (matches.length === 1) {
         return { agent: matches[0] ?? null, ambiguous: false } as const;
       }

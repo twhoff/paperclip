@@ -3,6 +3,7 @@ export interface DashboardSummary {
   agents: {
     active: number;
     running: number;
+    emulating: number;
     paused: number;
     error: number;
   };

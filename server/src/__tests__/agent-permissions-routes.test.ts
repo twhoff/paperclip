@@ -35,6 +35,8 @@ const baseAgent = {
 const mockAgentService = vi.hoisted(() => ({
   getById: vi.fn(),
   create: vi.fn(),
+  startEmulation: vi.fn(),
+  endEmulation: vi.fn(),
   updatePermissions: vi.fn(),
   getChainOfCommand: vi.fn(),
   resolveByReference: vi.fn(),
@@ -144,6 +146,21 @@ describe("agent permission routes", () => {
     mockAgentService.getChainOfCommand.mockResolvedValue([]);
     mockAgentService.resolveByReference.mockResolvedValue({ ambiguous: false, agent: baseAgent });
     mockAgentService.create.mockResolvedValue(baseAgent);
+    mockAgentService.startEmulation.mockResolvedValue({
+      agent: {
+        ...baseAgent,
+        status: "under_emulation",
+        nativeStatus: "paused",
+        emulationSessionId: "session-1",
+        emulationRunId: "pcli-run-1",
+      },
+      emulation: { id: "session-1", runId: "pcli-run-1" },
+    });
+    mockAgentService.endEmulation.mockResolvedValue({
+      agent: { ...baseAgent, status: "paused", nativeStatus: "paused" },
+      emulation: { id: "session-1", runId: "pcli-run-1" },
+      ended: true,
+    });
     mockAgentService.updatePermissions.mockResolvedValue(baseAgent);
     mockAccessService.getMembership.mockResolvedValue({
       id: "membership-1",
@@ -247,6 +264,98 @@ describe("agent permission routes", () => {
     expect(res.status).toBe(200);
     expect(res.body.access.canAssignTasks).toBe(true);
     expect(res.body.access.taskAssignSource).toBe("explicit_grant");
+  });
+
+  it("starts external emulation and records the admitted lease", async () => {
+    const app = createApp({
+      type: "board",
+      userId: "board-user",
+      source: "local_implicit",
+      isInstanceAdmin: true,
+      companyIds: [companyId],
+    });
+
+    const res = await request(app)
+      .post(`/api/agents/${agentId}/emulation`)
+      .send({ runId: "pcli-run-1", ttlSec: 60, metadata: { source: "pcli", pid: 1234 } });
+
+    expect(res.status).toBe(200);
+    expect(res.body.agent.status).toBe("under_emulation");
+    expect(mockAgentService.startEmulation).toHaveBeenCalledWith(
+      agentId,
+      expect.objectContaining({ runId: "pcli-run-1", ttlSec: 60 }),
+    );
+    expect(mockLogActivity).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: "agent.emulation_started",
+        entityId: agentId,
+        details: expect.objectContaining({ runId: "pcli-run-1", nativeStatus: "paused" }),
+      }),
+    );
+  });
+
+  it("rejects invalid external emulation leases before calling the service", async () => {
+    const app = createApp({
+      type: "board",
+      userId: "board-user",
+      source: "local_implicit",
+      isInstanceAdmin: true,
+      companyIds: [companyId],
+    });
+
+    const res = await request(app)
+      .post(`/api/agents/${agentId}/emulation`)
+      .send({ runId: "", ttlSec: 0 });
+
+    expect(res.status).toBe(400);
+    expect(mockAgentService.startEmulation).not.toHaveBeenCalled();
+  });
+
+  it("ends only a matching external emulation lease and avoids false activity", async () => {
+    const app = createApp({
+      type: "board",
+      userId: "board-user",
+      source: "local_implicit",
+      isInstanceAdmin: true,
+      companyIds: [companyId],
+    });
+    mockAgentService.endEmulation.mockResolvedValueOnce({
+      agent: { ...baseAgent, status: "under_emulation", nativeStatus: "paused" },
+      emulation: null,
+      ended: false,
+    });
+
+    const wrongRun = await request(app)
+      .post(`/api/agents/${agentId}/emulation/end`)
+      .send({ runId: "other-run", reason: "finished" });
+
+    expect(wrongRun.status).toBe(200);
+    expect(wrongRun.body.ended).toBe(false);
+    expect(mockLogActivity).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ action: "agent.emulation_ended" }),
+    );
+
+    mockAgentService.endEmulation.mockResolvedValueOnce({
+      agent: { ...baseAgent, status: "paused", nativeStatus: "paused" },
+      emulation: { id: "session-1", runId: "pcli-run-1" },
+      ended: true,
+    });
+    const ended = await request(app)
+      .post(`/api/agents/${agentId}/emulation/end`)
+      .send({ runId: "pcli-run-1", reason: "finished" });
+
+    expect(ended.status).toBe(200);
+    expect(ended.body.ended).toBe(true);
+    expect(mockLogActivity).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: "agent.emulation_ended",
+        entityId: agentId,
+        details: expect.objectContaining({ runId: "pcli-run-1", reason: "finished" }),
+      }),
+    );
   });
 
   it("keeps task assignment enabled when agent creation privilege is enabled", async () => {

@@ -172,6 +172,7 @@ const dashboard: DashboardSummary = {
   agents: {
     active: 1,
     running: 0,
+    emulating: 0,
     paused: 0,
     error: 1,
   },

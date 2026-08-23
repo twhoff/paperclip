@@ -416,7 +416,7 @@ export function DesignGuide() {
         <SubSection title="StatusBadge (all statuses)">
           <div className="flex items-center gap-2 flex-wrap">
             {[
-              "active", "running", "paused", "idle", "archived", "planned",
+              "active", "running", "under_emulation", "paused", "idle", "archived", "planned",
               "achieved", "completed", "failed", "timed_out", "succeeded", "error",
               "pending_approval", "backlog", "todo", "in_progress", "in_review", "blocked",
               "done", "terminated", "cancelled", "pending", "revision_requested",

@@ -7,11 +7,12 @@ interface MetricCardProps {
   value: string | number;
   label: string;
   description?: ReactNode;
+  mobileDescription?: ReactNode;
   to?: string;
   onClick?: () => void;
 }
 
-export function MetricCard({ icon: Icon, value, label, description, to, onClick }: MetricCardProps) {
+export function MetricCard({ icon: Icon, value, label, description, mobileDescription, to, onClick }: MetricCardProps) {
   const isClickable = !!(to || onClick);
 
   const inner = (
@@ -24,6 +25,9 @@ export function MetricCard({ icon: Icon, value, label, description, to, onClick 
           <p className="text-xs sm:text-sm font-medium text-muted-foreground mt-1">
             {label}
           </p>
+          {mobileDescription && (
+            <div className="text-[11px] text-muted-foreground/70 mt-1 sm:hidden">{mobileDescription}</div>
+          )}
           {description && (
             <div className="text-xs text-muted-foreground/70 mt-1.5 hidden sm:block">{description}</div>
           )}

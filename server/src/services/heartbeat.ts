@@ -2,11 +2,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
-import { and, asc, desc, eq, gt, inArray, isNotNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import type { BillingType } from "@paperclipai/shared";
 import {
   agents,
+  agentEmulationSessions,
   agentRuntimeState,
   agentTaskSessions,
   agentWakeupRequests,
@@ -20,6 +21,7 @@ import {
 import { conflict, notFound } from "../errors.js";
 import { logger } from "../middleware/logger.js";
 import { publishLiveEvent } from "./live-events.js";
+import { agentService } from "./agents.js";
 import { getRunLogStore, type RunLogHandle } from "./run-log-store.js";
 import {
   runActivityRegistry,
@@ -881,6 +883,7 @@ export function heartbeatService(db: Db) {
   };
   const budgets = budgetService(db, budgetHooks);
   const adapterStatusSvc = adapterStatusService(db);
+  const agentsSvc = agentService(db);
 
   async function getAgent(agentId: string) {
     return db
@@ -1787,11 +1790,29 @@ export function heartbeatService(db: Db) {
     return Number(count ?? 0);
   }
 
+  async function hasActiveEmulation(agentId: string) {
+    return db
+      .select({ id: agentEmulationSessions.id })
+      .from(agentEmulationSessions)
+      .where(
+        and(
+          eq(agentEmulationSessions.agentId, agentId),
+          isNull(agentEmulationSessions.endedAt),
+          gt(agentEmulationSessions.expiresAt, new Date()),
+        ),
+      )
+      .limit(1)
+      .then((rows) => rows.length > 0);
+  }
+
   async function claimQueuedRun(run: typeof heartbeatRuns.$inferSelect) {
     if (run.status !== "queued") return run;
     const agent = await getAgent(run.agentId);
     if (!agent) {
       await cancelRunInternal(run.id, "Cancelled because the agent no longer exists");
+      return null;
+    }
+    if (await hasActiveEmulation(run.agentId)) {
       return null;
     }
     if (agent.status === "paused" || agent.status === "terminated" || agent.status === "pending_approval") {
@@ -1817,16 +1838,35 @@ export function heartbeatService(db: Db) {
     }
 
     const claimedAt = new Date();
-    const claimed = await db
-      .update(heartbeatRuns)
-      .set({
-        status: "running",
-        startedAt: run.startedAt ?? claimedAt,
-        updatedAt: claimedAt,
-      })
-      .where(and(eq(heartbeatRuns.id, run.id), eq(heartbeatRuns.status, "queued")))
-      .returning()
-      .then((rows) => rows[0] ?? null);
+    const claimed = await db.transaction(async (tx) => {
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtextextended(${run.agentId}, 0))`,
+      );
+      const activeEmulation = await tx
+        .select({ id: agentEmulationSessions.id })
+        .from(agentEmulationSessions)
+        .where(
+          and(
+            eq(agentEmulationSessions.agentId, run.agentId),
+            isNull(agentEmulationSessions.endedAt),
+            gt(agentEmulationSessions.expiresAt, new Date()),
+          ),
+        )
+        .limit(1)
+        .then((rows) => rows[0] ?? null);
+      if (activeEmulation) return null;
+
+      return tx
+        .update(heartbeatRuns)
+        .set({
+          status: "running",
+          startedAt: run.startedAt ?? claimedAt,
+          updatedAt: claimedAt,
+        })
+        .where(and(eq(heartbeatRuns.id, run.id), eq(heartbeatRuns.status, "queued")))
+        .returning()
+        .then((rows) => rows[0] ?? null);
+    });
     if (!claimed) return null;
 
     publishLiveEvent({
@@ -1857,6 +1897,9 @@ export function heartbeatService(db: Db) {
     if (!existing) return;
 
     if (existing.status === "paused" || existing.status === "terminated") {
+      return;
+    }
+    if (await hasActiveEmulation(agentId)) {
       return;
     }
 
@@ -2015,6 +2058,10 @@ export function heartbeatService(db: Db) {
     maxRunDurationMs?: number;
     eventSilenceThresholdMs?: number;
   }) {
+    const emulationReap = await agentsSvc.reapEmulations({ isProcessAlive });
+    if (emulationReap.expired > 0 || emulationReap.deadClients > 0) {
+      logger.warn(emulationReap, "reaped external agent emulation leases");
+    }
     const staleThresholdMs = opts?.staleThresholdMs ?? 0;
     const maxRunDurationMs = opts?.maxRunDurationMs ?? 0;
     const eventSilenceThresholdMs = opts?.eventSilenceThresholdMs ?? 0;
@@ -2308,6 +2355,7 @@ export function heartbeatService(db: Db) {
       if (agent.status === "paused" || agent.status === "terminated" || agent.status === "pending_approval") {
         return [];
       }
+      if (await hasActiveEmulation(agentId)) return [];
       const policy = parseHeartbeatPolicy(agent);
       const runningCount = await countRunningRunsForAgent(agentId);
       const availableSlots = Math.max(0, policy.maxConcurrentRuns - runningCount);
@@ -3341,9 +3389,25 @@ export function heartbeatService(db: Db) {
           .where(eq(agents.id, deferred.agentId))
           .then((rows) => rows[0] ?? null);
 
+        const deferredAgentEmulation = deferredAgent
+          ? await tx
+              .select({ id: agentEmulationSessions.id })
+              .from(agentEmulationSessions)
+              .where(
+                and(
+                  eq(agentEmulationSessions.agentId, deferredAgent.id),
+                  isNull(agentEmulationSessions.endedAt),
+                  gt(agentEmulationSessions.expiresAt, new Date()),
+                ),
+              )
+              .limit(1)
+              .then((rows) => rows[0] ?? null)
+          : null;
+
         if (
           !deferredAgent ||
           deferredAgent.companyId !== issue.companyId ||
+          deferredAgentEmulation ||
           deferredAgent.status === "paused" ||
           deferredAgent.status === "terminated" ||
           deferredAgent.status === "pending_approval"
@@ -3508,6 +3572,13 @@ export function heartbeatService(db: Db) {
       throw conflict(budgetBlock.reason, {
         scopeType: budgetBlock.scopeType,
         scopeId: budgetBlock.scopeId,
+      });
+    }
+
+    if (await hasActiveEmulation(agentId)) {
+      await writeSkippedRequest("agent.under_emulation");
+      throw conflict("Agent is currently under external emulation", {
+        status: "under_emulation",
       });
     }
 
@@ -4297,11 +4368,28 @@ export function heartbeatService(db: Db) {
         }
 
       const allAgents = await db.select().from(agents);
+      const activeEmulationAgentIds = allAgents.length === 0
+        ? new Set<string>()
+        : new Set(
+            (
+              await db
+                .select({ agentId: agentEmulationSessions.agentId })
+                .from(agentEmulationSessions)
+                .where(
+                  and(
+                    inArray(agentEmulationSessions.agentId, allAgents.map((agent) => agent.id)),
+                    isNull(agentEmulationSessions.endedAt),
+                    gt(agentEmulationSessions.expiresAt, new Date()),
+                  ),
+                )
+            ).map((row) => row.agentId),
+          );
       let checked = 0;
       let enqueued = 0;
       let skipped = 0;
 
       for (const agent of allAgents) {
+        if (activeEmulationAgentIds.has(agent.id)) continue;
         if (agent.status === "paused" || agent.status === "terminated" || agent.status === "pending_approval") continue;
         const policy = parseHeartbeatPolicy(agent);
         if (!policy.enabled || policy.intervalSec <= 0) continue;

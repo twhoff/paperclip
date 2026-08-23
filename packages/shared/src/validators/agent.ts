@@ -79,6 +79,21 @@ export const updateAgentSchema = createAgentSchema
 
 export type UpdateAgent = z.infer<typeof updateAgentSchema>;
 
+export const startAgentEmulationSchema = z.object({
+  runId: z.string().trim().min(1),
+  ttlSec: z.number().int().positive().max(24 * 60 * 60).optional(),
+  metadata: z.record(z.unknown()).optional().nullable(),
+});
+
+export type StartAgentEmulation = z.infer<typeof startAgentEmulationSchema>;
+
+export const endAgentEmulationSchema = z.object({
+  runId: z.string().trim().min(1),
+  reason: z.string().trim().min(1).max(200).optional(),
+});
+
+export type EndAgentEmulation = z.infer<typeof endAgentEmulationSchema>;
+
 export const updateAgentInstructionsPathSchema = z.object({
   path: z.string().trim().min(1).nullable(),
   adapterConfigKey: z.string().trim().min(1).optional(),
