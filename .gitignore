@@ -62,3 +62,6 @@ tests/release-smoke/playwright-report/
 *.db
 .beads-credential-key
 .agent-*.json
+
+# Holly runtime coordination state (machine-local sessions and caches)
+.holly/state/
