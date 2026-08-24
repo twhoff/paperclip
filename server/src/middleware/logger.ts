@@ -96,6 +96,10 @@ export const logger = pino(
   }),
 );
 
+function requestUrl(req: { originalUrl?: string; url?: string }): string {
+  return req.originalUrl || req.url || "";
+}
+
 export const httpLogger = pinoHttp({
   logger,
   serializers: {
@@ -110,18 +114,25 @@ export const httpLogger = pinoHttp({
       return { statusCode: res.statusCode };
     },
   },
-  customLogLevel(_req, res, err) {
+  customLogLevel(req, res, err) {
     if (err || res.statusCode >= 500) return "error";
     if (res.statusCode >= 400) return "warn";
+    if (
+      res.statusCode === 304 &&
+      req.method === "GET" &&
+      requestUrl(req) === "/api/system/shutdown"
+    ) {
+      return "debug";
+    }
     return "info";
   },
   customSuccessMessage(req, res) {
-    return `${req.method} ${req.url} ${res.statusCode}`;
+    return `${req.method} ${requestUrl(req)} ${res.statusCode}`;
   },
   customErrorMessage(req, res, err) {
     const ctx = (res as any).__errorContext;
     const errMsg = ctx?.error?.message || err?.message || (res as any).err?.message || "unknown error";
-    return `${req.method} ${req.url} ${res.statusCode} — ${errMsg}`;
+    return `${req.method} ${requestUrl(req)} ${res.statusCode} — ${errMsg}`;
   },
   customProps(req, res) {
     if (res.statusCode >= 400) {

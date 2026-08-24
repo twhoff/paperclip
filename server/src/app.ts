@@ -158,6 +158,8 @@ export async function createApp(
   api.use(instanceSettingsRoutes(db));
   api.use("/admin/batch", createBatchAdminRoutes(db));
   const shutdown = shutdownService(db);
+  // Agent pause markers survive process restarts; restore the control state before exposing routes.
+  await shutdown.recoverPersistedState();
   api.use("/system", systemRoutes(shutdown));
   const hostServicesDisposers = new Map<string, () => void>();
   const workerManager = createPluginWorkerManager();

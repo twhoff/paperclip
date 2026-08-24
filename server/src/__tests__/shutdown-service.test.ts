@@ -88,6 +88,53 @@ describe("shutdownService", () => {
     expect(state.inFlightAgentCount).toBe(0);
   });
 
+  it("recovers a drained shutdown from persisted shutdown-paused agents", async () => {
+    const state: ScenarioState = {
+      pausedRows: [],
+      inFlightRows: [],
+      shutdownPausedRows: [
+        { id: "agent-1", companyId: "co-1" },
+        { id: "agent-2", companyId: "co-2" },
+      ],
+    };
+    const svc = shutdownService(makeDb(state) as never);
+
+    const recovered = await svc.recoverPersistedState();
+
+    expect(recovered.phase).toBe("drained");
+    expect(recovered.inFlightAgentCount).toBe(0);
+    expect(svc.getState().phase).toBe("drained");
+  });
+
+  it("stays idle when no persisted shutdown-paused agents exist", async () => {
+    const svc = shutdownService(
+      makeDb({ pausedRows: [], inFlightRows: [], shutdownPausedRows: [] }) as never,
+    );
+
+    const recovered = await svc.recoverPersistedState();
+
+    expect(recovered.phase).toBe("idle");
+  });
+
+  it("can resume agents after recovering shutdown state", async () => {
+    const state: ScenarioState = {
+      pausedRows: [],
+      inFlightRows: [],
+      shutdownPausedRows: [{ id: "agent-1", companyId: "co-1" }],
+    };
+    const svc = shutdownService(makeDb(state) as never);
+
+    await svc.recoverPersistedState();
+    const result = await svc.resume({ actorId: "u", actorType: "user" });
+
+    expect(result.phase).toBe("idle");
+    expect(mockAgentService.resume).toHaveBeenCalledWith("agent-1");
+    expect(mockLogActivity).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ action: "system.shutdown.resumed", companyId: "co-1" }),
+    );
+  });
+
   it("initiate transitions to draining and pauses agents", async () => {
     const state: ScenarioState = {
       pausedRows: [

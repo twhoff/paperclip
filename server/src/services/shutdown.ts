@@ -131,6 +131,24 @@ export function shutdownService(db: Db) {
     return rows;
   }
 
+  async function recoverPersistedState(): Promise<ShutdownState> {
+    if (state.phase !== "idle") return snapshot();
+
+    const shutdownPaused = await listShutdownPausedAgents();
+    if (shutdownPaused.length === 0) return snapshot();
+
+    state = {
+      ...createIdleState(),
+      phase: "drained",
+      affectedCompanyIds: new Set(shutdownPaused.map((row) => row.companyId)),
+    };
+    logger.info(
+      { pausedAgentCount: shutdownPaused.length },
+      "Recovered drained shutdown state from persisted shutdown-paused agents",
+    );
+    return snapshot();
+  }
+
   async function pollInFlight(): Promise<Set<string>> {
     if (state.affectedCompanyIds.size === 0) return new Set();
     const rows = await db
@@ -311,6 +329,7 @@ export function shutdownService(db: Db) {
 
   return {
     setTargets,
+    recoverPersistedState,
     initiate,
     resume,
     getState,
