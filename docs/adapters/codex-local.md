@@ -7,7 +7,7 @@ The `codex_local` adapter runs OpenAI's Codex CLI locally. It supports session p
 
 ## Prerequisites
 
-- Codex CLI installed (`codex` command available)
+- Codex CLI installed (`codex` command available); version 0.143.0 or newer is required for `max` and `ultra`
 - `OPENAI_API_KEY` set in the environment or agent config
 
 ## Configuration Fields
@@ -29,8 +29,8 @@ Curated Codex Local choices:
 
 | Model | Effort choices |
 |-------|----------------|
-| `gpt-5.6-sol` | `low`, `medium`, `high`, `xhigh`, `ultra` |
-| `gpt-5.6-terra` | `low`, `medium`, `high`, `xhigh`, `ultra` |
+| `gpt-5.6-sol` | `low`, `medium`, `high`, `xhigh`, `max`, `ultra` |
+| `gpt-5.6-terra` | `low`, `medium`, `high`, `xhigh`, `max`, `ultra` |
 | `gpt-5.6-luna` | `low`, `medium`, `high`, `xhigh`, `max` |
 | `gpt-5.5` | `low`, `medium`, `high`, `xhigh` |
 | `gpt-5.4` | `low`, `medium`, `high`, `xhigh` |
@@ -44,7 +44,7 @@ Legacy saved values such as `gpt-5`, `none`, or `minimal` remain readable for ex
 When switching between `codex_local` and `copilot_cli`, `claude_local`, or `oz_local`, the UI uses canonical model and effort helpers. It preserves only real supported semantic equivalents and clears invalid combinations.
 
 - `codex_local` <-> `copilot_cli`: shared GPT models preserve where both adapters support them. Codex-only models and unsupported effort levels fall back or clear rather than introducing invalid combinations.
-- `codex_local` <-> `claude_local`: no model equivalence exists, so the target adapter default model is used. Shared effort levels preserve only when the target model supports them. Codex `ultra` and Claude `ultracode` are distinct and do not map; `max` can preserve between Claude and Codex Luna but is cleared for Codex Sol or Terra.
+- `codex_local` <-> `claude_local`: no model equivalence exists, so the target adapter default model is used. Shared effort levels preserve only when the target model supports them. Codex `ultra` and Claude `ultracode` are distinct and do not map; `max` can preserve between Claude and Codex Sol, Terra, or Luna.
 - `codex_local` <-> `oz_local`: only real Oz equivalents map. Codex `gpt-5.4` with `high` maps to Oz `gpt-5-4-high`, and back to Codex `gpt-5.4` with `high`. Oz has no separate effort field.
 
 Adapter pairs that do not involve `codex_local` are unchanged by this remapping.

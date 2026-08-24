@@ -22,9 +22,10 @@ Core fields:
 - instructionsFilePath (string, optional): absolute path to a markdown instructions file prepended to stdin prompt at runtime
 - model (string, optional): Codex model id
 - effort (string, optional): reasoning effort override passed via -c model_reasoning_effort=...
-  - gpt-5.6-sol, gpt-5.6-terra: low|medium|high|xhigh|ultra
+  - gpt-5.6-sol, gpt-5.6-terra: low|medium|high|xhigh|max|ultra
   - gpt-5.6-luna: low|medium|high|xhigh|max
   - gpt-5.5, gpt-5.4, gpt-5.4-mini, gpt-5.3-codex-spark: low|medium|high|xhigh
+  Codex CLI 0.143.0 or newer is required for max and ultra.
   Legacy aliases "modelReasoningEffort" and "reasoningEffort" are still accepted as read-only fallbacks until the pcli-b9o migration deletes them. Legacy saved values such as "none" and "minimal" remain readable but are not curated choices.
 - promptTemplate (string, optional): run prompt template
 - search (boolean, optional): run codex with --search

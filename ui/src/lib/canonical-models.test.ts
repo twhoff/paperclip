@@ -136,6 +136,7 @@ describe("Codex Local model catalogue", () => {
       "medium",
       "high",
       "xhigh",
+      "max",
       "ultra",
     ]);
     expect(getAllowedEffortLevels("codex_local", "gpt-5.6-terra")).toEqual([
@@ -143,6 +144,7 @@ describe("Codex Local model catalogue", () => {
       "medium",
       "high",
       "xhigh",
+      "max",
       "ultra",
     ]);
     expect(getAllowedEffortLevels("codex_local", "gpt-5.6-luna")).toEqual([
@@ -291,7 +293,10 @@ describe("scoped Codex Local adapter switching remapping", () => {
         model: "claude-opus-5",
         effort: "max",
       }),
-    ).toEqual({ model: targetDefaultModel.codex_local });
+    ).toEqual({
+      model: targetDefaultModel.codex_local,
+      effort: { field: "effort", value: "max" },
+    });
   });
 
   it("maps only real Codex and Oz semantic equivalents", () => {
