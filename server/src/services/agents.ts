@@ -548,12 +548,48 @@ export function agentService(db: Db) {
             .then((rows) => rows[0] ?? active);
         }
 
+        const suppliedHeartbeat = isUuidLike(data.runId)
+          ? await tx
+            .select({
+              id: heartbeatRuns.id,
+              companyId: heartbeatRuns.companyId,
+              agentId: heartbeatRuns.agentId,
+              status: heartbeatRuns.status,
+              contextSnapshot: heartbeatRuns.contextSnapshot,
+            })
+            .from(heartbeatRuns)
+            .where(eq(heartbeatRuns.id, data.runId))
+            .limit(1)
+            .then((rows) => rows[0] ?? null)
+          : null;
+        if (
+          suppliedHeartbeat &&
+          (suppliedHeartbeat.companyId !== existing.companyId || suppliedHeartbeat.agentId !== existing.id)
+        ) {
+          throw conflict("Heartbeat run does not belong to target agent", {
+            heartbeatRunId: suppliedHeartbeat.id,
+          });
+        }
+
+        // Only pcli's exact, validated running row may coexist with its lease.
+        // A native row or a run owned by another agent must never disable this guard.
+        const suppliedEmulatedRunId =
+          suppliedHeartbeat?.status === "running" &&
+          isPlainRecord(suppliedHeartbeat.contextSnapshot) &&
+          suppliedHeartbeat.contextSnapshot.emulated === true
+            ? suppliedHeartbeat.id
+            : null;
+        const runningConditions = [
+          eq(heartbeatRuns.agentId, id),
+          eq(heartbeatRuns.status, "running"),
+        ];
+        if (suppliedEmulatedRunId) {
+          runningConditions.push(ne(heartbeatRuns.id, suppliedEmulatedRunId));
+        }
         const runningNative = await tx
           .select({ id: heartbeatRuns.id })
           .from(heartbeatRuns)
-          .where(
-            and(eq(heartbeatRuns.agentId, id), eq(heartbeatRuns.status, "running")),
-          )
+          .where(and(...runningConditions))
           .limit(1)
           .then((rows) => rows[0] ?? null);
         if (runningNative) {

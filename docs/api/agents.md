@@ -91,7 +91,10 @@ POST /api/agents/{agentId}/emulation
 
 Creates one active external-emulation lease per agent. A retry with the same
 `runId` refreshes that lease; another run receives `409 Conflict`. Paperclip
-also rejects a new lease while a native heartbeat is running. While leased,
+also rejects a new lease while a native heartbeat is running. A matching
+running heartbeat row may coexist only when it belongs to the target
+agent/company and its context snapshot identifies it as emulated; supplying a
+native or another agent's run ID does not bypass the conflict. While leased,
 agent responses expose `status: "under_emulation"` plus `nativeStatus`,
 `emulationSessionId`, `emulationRunId`, `emulationStartedAt`, and
 `emulationExpiresAt`.

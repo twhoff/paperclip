@@ -280,4 +280,94 @@ describe("external agent emulation leases", () => {
       service.startEmulation(agentId, { runId: "external-run", ttlSec: 300 }),
     ).rejects.toThrow("native heartbeat");
   });
+
+  it("allows a running emulated heartbeat to acquire its own lease", async () => {
+    const { agentId, companyId } = await seedAgent("idle");
+    const service = agentService(db);
+    const [emulatedRun] = await db
+      .insert(heartbeatRuns)
+      .values({
+        companyId,
+        agentId,
+        status: "running",
+        invocationSource: "on_demand",
+        startedAt: new Date(),
+        contextSnapshot: { emulated: true },
+      })
+      .returning();
+
+    await expect(
+      service.startEmulation(agentId, { runId: emulatedRun!.id, ttlSec: 300 }),
+    ).resolves.toMatchObject({
+      agent: { status: "under_emulation" },
+      emulation: { runId: emulatedRun!.id },
+    });
+  });
+
+  it("still rejects a distinct running native heartbeat alongside the caller's emulated run", async () => {
+    const { agentId, companyId } = await seedAgent("idle");
+    const service = agentService(db);
+    const [emulatedRun] = await db
+      .insert(heartbeatRuns)
+      .values({
+        companyId,
+        agentId,
+        status: "running",
+        invocationSource: "on_demand",
+        startedAt: new Date(),
+        contextSnapshot: { emulated: true },
+      })
+      .returning();
+    await db.insert(heartbeatRuns).values({
+      companyId,
+      agentId,
+      status: "running",
+      invocationSource: "timer",
+      startedAt: new Date(),
+    });
+
+    await expect(
+      service.startEmulation(agentId, { runId: emulatedRun!.id, ttlSec: 300 }),
+    ).rejects.toThrow("native heartbeat");
+  });
+
+  it("does not treat a native run with the supplied ID as an emulated self-run", async () => {
+    const { agentId, companyId } = await seedAgent("idle");
+    const service = agentService(db);
+    const [nativeRun] = await db
+      .insert(heartbeatRuns)
+      .values({
+        companyId,
+        agentId,
+        status: "running",
+        invocationSource: "timer",
+        startedAt: new Date(),
+      })
+      .returning();
+
+    await expect(
+      service.startEmulation(agentId, { runId: nativeRun!.id, ttlSec: 300 }),
+    ).rejects.toThrow("native heartbeat");
+  });
+
+  it("rejects another agent's emulated run ID", async () => {
+    const { agentId } = await seedAgent("idle");
+    const other = await seedAgent("idle");
+    const service = agentService(db);
+    const [foreignEmulatedRun] = await db
+      .insert(heartbeatRuns)
+      .values({
+        companyId: other.companyId,
+        agentId: other.agentId,
+        status: "running",
+        invocationSource: "on_demand",
+        startedAt: new Date(),
+        contextSnapshot: { emulated: true },
+      })
+      .returning();
+
+    await expect(
+      service.startEmulation(agentId, { runId: foreignEmulatedRun!.id, ttlSec: 300 }),
+    ).rejects.toThrow("does not belong to target agent");
+  });
 });
