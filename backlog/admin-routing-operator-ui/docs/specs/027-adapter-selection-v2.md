@@ -119,7 +119,7 @@ This means V2 should refine and extend those boundaries, not invent a second com
 
 ### Conceptual Data Model
 
-The target conceptual model is captured in [docs/ERDs/adapter-selection-v2.md](docs/ERDs/adapter-selection-v2.md).
+The target conceptual model is captured in [the archived Adapter Selection V2 ERD](../ERDs/adapter-selection-v2.md).
 
 Key concepts:
 
