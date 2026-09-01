@@ -75,4 +75,9 @@ Each is a standalone Paperclip-platform topic, not part of the UI above and not 
 
 - Removed from `tizzi-app` under **TIZA-1218** (North Star corpus audit + ownership probe: a 5-scout / 3-judge pass unanimously found this is Paperclip pcli-optimiser tooling, not Tizzi).
 - Recoverable from `tizzi-app` git history: state **before** removal is commit `eeb9c9b5`; the removal commit is `87ecce75`.
-- This folder is a verbatim snapshot — files are unmodified from the extraction.
+- The original extraction was a verbatim snapshot. Later authorised provenance
+  repairs or dependency intakes may add or adjust files; each change is
+  documented by an adjacent receipt or provenance record, such as the
+  [Adapter Selection V2 ERD intake receipt](./admin-routing-operator-ui/docs/ERDs/README.md).
+  These records do not promote ON HOLD or unratified material into current
+  Paperclip product truth.
