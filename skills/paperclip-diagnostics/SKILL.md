@@ -120,27 +120,30 @@ the database).
 Pino-formatted server log lives alongside `data/`:
 
 ```
-~/.paperclip/instances/<instanceId>/logs/server.log              # current
-~/.paperclip/instances/<instanceId>/logs/server.YYYY-MM-DD.log    # rotated, plain
-~/.paperclip/instances/<instanceId>/logs/server.YYYY-MM-DD.log.gz # rotated, compressed
+~/.paperclip/instances/<instanceId>/logs/current.log                    # symlink to active file
+~/.paperclip/instances/<instanceId>/logs/server.YYYY-MM-DD.N.log         # active or rotated, plain
+~/.paperclip/instances/<instanceId>/logs/server.YYYY-MM-DD.N.log.gz      # rotated, compressed
 ```
 
-Override the directory with `PAPERCLIP_LOG_DIR`. The current `server.log`
-is pretty-printed text; rotated files are JSON (one object per line — pipe
-through `pino-pretty` for human reading).
+Override the directory with `PAPERCLIP_LOG_DIR`. `current.log` is maintained by
+pino-roll and points to the active numbered file. Plain and compressed numbered
+files contain JSON, one object per line; pipe them through `pino-pretty` for
+human reading. Do not assume the highest number is the only active file: a
+duplicate process or rollover race can leave several current-day files open.
 
 ```bash
 LOG_DIR="${PAPERCLIP_LOG_DIR:-$HOME/.paperclip/instances/default/logs}"
 
-# Live tail
-tail -f "$LOG_DIR/server.log"
+# Inspect and follow the stable active-log identity across rotations
+ls -l "$LOG_DIR/current.log"
+tail -F "$LOG_DIR/current.log"
 
 # Search across rotated history (gz + plain)
-{ zcat "$LOG_DIR"/server.*.log.gz 2>/dev/null; cat "$LOG_DIR"/server.log; } \
+{ zcat "$LOG_DIR"/server.*.log.gz 2>/dev/null; cat "$LOG_DIR"/server.*.log 2>/dev/null; } \
   | grep -i 'error\|warn'
 
 # Pretty-print yesterday's JSON file
-zcat "$LOG_DIR/server.$(date -v-1d +%F).log.gz" | npx pino-pretty | tail -100
+zcat "$LOG_DIR"/server."$(date -v-1d +%F)".*.log.gz | npx pino-pretty | tail -100
 
 # Total disk usage
 du -sh "$LOG_DIR"
@@ -148,8 +151,11 @@ du -sh "$LOG_DIR"
 
 ### Server-log retention defaults
 
-The server rotates `server.log` daily and on size, gzips rotated files
-hourly, and prunes anything older than `retentionDays`. Defaults
+The server rotates numbered files daily and on size, gzips historical plain
+files hourly, and prunes anything older than `retentionDays`. The maintenance
+sweep protects the `current.log` target and all current-day numbered files. It
+fails closed without mutating plain logs when `current.log` is missing, broken,
+unreadable, or resolves outside the configured log directory. Defaults
 (configurable under `serverLog.*` in `config.json` or via
 `PAPERCLIP_SERVER_LOG_*` env vars):
 

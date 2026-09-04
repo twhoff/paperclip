@@ -13,6 +13,12 @@ const captured = vi.hoisted(() => ({
       err?: Error,
     ) => string;
   },
+  transportOptions: null as null | {
+    targets: Array<{
+      target: string;
+      options: Record<string, unknown>;
+    }>;
+  },
 }));
 
 vi.mock("node:fs", () => ({
@@ -21,7 +27,10 @@ vi.mock("node:fs", () => ({
 
 vi.mock("pino", () => {
   const pino = Object.assign(vi.fn(() => ({})), {
-    transport: vi.fn(() => ({})),
+    transport: vi.fn((options: NonNullable<typeof captured.transportOptions>) => {
+      captured.transportOptions = options;
+      return {};
+    }),
   });
   return { default: pino };
 });
@@ -39,12 +48,33 @@ vi.mock("../home-paths.js", () => ({
   resolveHomeAwarePath: vi.fn((value: string) => value),
 }));
 
-await import("../middleware/logger.js");
+const { serverLogFile } = await import("../middleware/logger.js");
 
 function options() {
   if (!captured.options) throw new Error("pino-http options were not captured");
   return captured.options;
 }
+
+function transportOptions() {
+  if (!captured.transportOptions) {
+    throw new Error("pino transport options were not captured");
+  }
+  return captured.transportOptions;
+}
+
+describe("server file logging", () => {
+  it("publishes a stable current.log symlink for the active numbered file", () => {
+    const fileTarget = transportOptions().targets.find(
+      (target) => target.target === "pino-roll",
+    );
+
+    expect(serverLogFile).toBe("/test/logs/current.log");
+    expect(fileTarget?.options).toMatchObject({
+      file: "/test/logs/server.log",
+      symlink: true,
+    });
+  });
+});
 
 describe("HTTP request logging", () => {
   beforeEach(() => {

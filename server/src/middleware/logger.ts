@@ -19,8 +19,9 @@ const logDir = resolveServerLogDir();
 fs.mkdirSync(logDir, { recursive: true });
 
 const logFile = path.join(logDir, "server.log");
+const currentLogFile = path.join(logDir, "current.log");
 export const serverLogDir = logDir;
-export const serverLogFile = logFile;
+export const serverLogFile = currentLogFile;
 
 function resolveServerLogConfig() {
   const fileServerLog = readConfigFile()?.serverLog;
@@ -88,6 +89,7 @@ export const logger = pino(
           dateFormat: "yyyy-MM-dd",
           extension: ".log",
           mkdir: true,
+          symlink: true,
           limit: { count: maxFiles },
         },
         level: fileLogLevel,
