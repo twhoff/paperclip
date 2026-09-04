@@ -65,3 +65,4 @@ tests/release-smoke/playwright-report/
 
 # Holly runtime coordination state (machine-local sessions and caches)
 .holly/state/
+.holly/cache/
