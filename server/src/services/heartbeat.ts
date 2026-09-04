@@ -78,6 +78,8 @@ import { adapterStatusService } from "./adapter-status.js";
 const MAX_LIVE_LOG_CHUNK_BYTES = 8 * 1024;
 const HEARTBEAT_MAX_CONCURRENT_RUNS_DEFAULT = 1;
 const HEARTBEAT_MAX_CONCURRENT_RUNS_MAX = 10;
+export const HEARTBEAT_RUN_LIST_DEFAULT_LIMIT = 200;
+export const HEARTBEAT_RUN_LIST_MAX_LIMIT = 1000;
 const DEFERRED_WAKE_CONTEXT_KEY = "_paperclipWakeContext";
 const DETACHED_PROCESS_ERROR_CODE = "process_detached";
 
@@ -93,6 +95,13 @@ const startLocksByAgent = new Map<string, Promise<void>>();
 const REPO_ONLY_CWD_SENTINEL = "/__paperclip_repo_only__";
 const MANAGED_WORKSPACE_GIT_CLONE_TIMEOUT_MS = 10 * 60 * 1000;
 const execFile = promisify(execFileCallback);
+
+export function normalizeHeartbeatRunListLimit(limit: number | undefined) {
+  if (limit === undefined || !Number.isFinite(limit)) {
+    return HEARTBEAT_RUN_LIST_DEFAULT_LIMIT;
+  }
+  return Math.max(1, Math.min(HEARTBEAT_RUN_LIST_MAX_LIMIT, Math.trunc(limit)));
+}
 const SESSIONED_LOCAL_ADAPTERS = new Set([
   "claude_local",
   "codex_local",
@@ -166,6 +175,42 @@ async function ensureManagedProjectWorkspace(input: {
   }
 }
 
+// Build the small result summary in PostgreSQL. Selecting result_json directly and
+// trimming it in JavaScript is too late: postgres-js must JSON.parse every full
+// payload first. A long-lived instance can retain gigabytes of raw agent results.
+const heartbeatRunListResultJson = sql<Record<string, unknown> | null>`
+  CASE
+    WHEN jsonb_typeof(${heartbeatRuns.resultJson}) = 'object' THEN NULLIF(
+      (CASE WHEN jsonb_typeof(${heartbeatRuns.resultJson} -> 'summary') = 'string'
+        THEN jsonb_build_object('summary', left(${heartbeatRuns.resultJson} ->> 'summary', 500))
+        ELSE '{}'::jsonb END) ||
+      (CASE WHEN jsonb_typeof(${heartbeatRuns.resultJson} -> 'result') = 'string'
+        THEN jsonb_build_object('result', left(${heartbeatRuns.resultJson} ->> 'result', 500))
+        ELSE '{}'::jsonb END) ||
+      (CASE WHEN jsonb_typeof(${heartbeatRuns.resultJson} -> 'message') = 'string'
+        THEN jsonb_build_object('message', left(${heartbeatRuns.resultJson} ->> 'message', 500))
+        ELSE '{}'::jsonb END) ||
+      (CASE WHEN jsonb_typeof(${heartbeatRuns.resultJson} -> 'error') = 'string'
+        THEN jsonb_build_object('error', left(${heartbeatRuns.resultJson} ->> 'error', 500))
+        ELSE '{}'::jsonb END) ||
+      (CASE WHEN ${heartbeatRuns.resultJson} ? 'total_cost_usd'
+        AND ${heartbeatRuns.resultJson} -> 'total_cost_usd' <> 'null'::jsonb
+        THEN jsonb_build_object('total_cost_usd', ${heartbeatRuns.resultJson} -> 'total_cost_usd')
+        ELSE '{}'::jsonb END) ||
+      (CASE WHEN ${heartbeatRuns.resultJson} ? 'cost_usd'
+        AND ${heartbeatRuns.resultJson} -> 'cost_usd' <> 'null'::jsonb
+        THEN jsonb_build_object('cost_usd', ${heartbeatRuns.resultJson} -> 'cost_usd')
+        ELSE '{}'::jsonb END) ||
+      (CASE WHEN ${heartbeatRuns.resultJson} ? 'costUsd'
+        AND ${heartbeatRuns.resultJson} -> 'costUsd' <> 'null'::jsonb
+        THEN jsonb_build_object('costUsd', ${heartbeatRuns.resultJson} -> 'costUsd')
+        ELSE '{}'::jsonb END),
+      '{}'::jsonb
+    )
+    ELSE NULL
+  END
+`.as("resultJson");
+
 const heartbeatRunListColumns = {
   id: heartbeatRuns.id,
   companyId: heartbeatRuns.companyId,
@@ -180,7 +225,7 @@ const heartbeatRunListColumns = {
   exitCode: heartbeatRuns.exitCode,
   signal: heartbeatRuns.signal,
   usageJson: heartbeatRuns.usageJson,
-  resultJson: heartbeatRuns.resultJson,
+  resultJson: heartbeatRunListResultJson,
   sessionIdBefore: heartbeatRuns.sessionIdBefore,
   sessionIdAfter: heartbeatRuns.sessionIdAfter,
   logStore: heartbeatRuns.logStore,
@@ -4211,6 +4256,7 @@ export function heartbeatService(db: Db) {
 
   return {
     list: async (companyId: string, agentId?: string, limit?: number) => {
+      const pageLimit = normalizeHeartbeatRunListLimit(limit);
       const query = db
         .select(heartbeatRunListColumns)
         .from(heartbeatRuns)
@@ -4221,7 +4267,7 @@ export function heartbeatService(db: Db) {
         )
         .orderBy(desc(heartbeatRuns.createdAt));
 
-      const rows = limit ? await query.limit(limit) : await query;
+      const rows = await query.limit(pageLimit);
       return rows.map((row) => ({
         ...row,
         resultJson: summarizeHeartbeatRunResultJson(row.resultJson),

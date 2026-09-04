@@ -24,8 +24,9 @@ export function healthRoutes(
   const router = Router();
 
   router.get("/", async (_req, res) => {
+    const devWatchId = process.env.PAPERCLIP_DEV_WATCH_ID?.trim();
     if (!db) {
-      res.json({ status: "ok", version: serverVersion });
+      res.json({ status: "ok", version: serverVersion, ...(devWatchId ? { devWatchId } : {}) });
       return;
     }
 
@@ -85,6 +86,7 @@ export function healthRoutes(
       features: {
         companyDeletionEnabled: opts.companyDeletionEnabled,
       },
+      ...(devWatchId ? { devWatchId } : {}),
       ...(devServer ? { devServer } : {}),
     });
   });

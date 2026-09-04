@@ -1,19 +1,27 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 import { fileURLToPath } from "node:url";
+import {
+  assertServingChildHealth,
+  createServerChildLaunch,
+  createServingChildWatchdog,
+} from "./serving-child-watchdog.mjs";
 
 const mode = process.argv[2] === "watch" ? "watch" : "dev";
 const cliArgs = process.argv.slice(3);
 const scanIntervalMs = 1500;
 const autoRestartPollIntervalMs = 2500;
 const gracefulShutdownTimeoutMs = 10_000;
+const servingChildProbeTimeoutMs = 2_000;
 const changedPathSampleLimit = 5;
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const devServerStatusFilePath = path.join(repoRoot, ".paperclip", "dev-server-status.json");
+const devWatchId = mode === "watch" ? randomUUID() : null;
 
 const watchedDirectories = [
   ".paperclip",
@@ -85,6 +93,7 @@ if (mode === "dev") {
 if (mode === "watch") {
   env.PAPERCLIP_MIGRATION_PROMPT ??= "never";
   env.PAPERCLIP_MIGRATION_AUTO_APPLY ??= "true";
+  env.PAPERCLIP_DEV_WATCH_ID = devWatchId;
 }
 
 if (tailscaleAuth) {
@@ -111,6 +120,7 @@ let child = null;
 let childExitPromise = null;
 let scanTimer = null;
 let autoRestartTimer = null;
+let servingChildWatchdog = null;
 
 function toError(error, context = "Dev runner command failed") {
   if (error instanceof Error) return error;
@@ -421,11 +431,13 @@ async function scanForBackendChanges() {
 
 async function getDevHealthPayload() {
   const serverPort = env.PORT ?? process.env.PORT ?? "3100";
-  const response = await fetch(`http://127.0.0.1:${serverPort}/api/health`);
+  const response = await fetch(`http://127.0.0.1:${serverPort}/api/health`, {
+    signal: AbortSignal.timeout(servingChildProbeTimeoutMs),
+  });
   if (!response.ok) {
     throw new Error(`Health request failed (${response.status})`);
   }
-  return await response.json();
+  return assertServingChildHealth(await response.json(), devWatchId);
 }
 
 async function waitForChildExit() {
@@ -437,6 +449,7 @@ async function waitForChildExit() {
 
 async function stopChildForRestart() {
   if (!child) return { code: 0, signal: null };
+  const exitPromise = childExitPromise;
   childExitWasExpected = true;
   child.kill("SIGTERM");
   const killTimer = setTimeout(() => {
@@ -445,7 +458,7 @@ async function stopChildForRestart() {
     }
   }, gracefulShutdownTimeoutMs);
   try {
-    return await waitForChildExit();
+    return exitPromise ? await exitPromise : { code: 0, signal: null };
   } finally {
     clearTimeout(killTimer);
   }
@@ -454,12 +467,13 @@ async function stopChildForRestart() {
 async function startServerChild() {
   await buildPluginSdk();
 
-  const serverScript = mode === "watch" ? "dev:watch" : "dev";
-  child = spawn(
-    pnpmBin,
-    ["--filter", "@paperclipai/server", serverScript, ...forwardedArgs],
-    { stdio: "inherit", env, shell: process.platform === "win32" },
-  );
+  const launch = createServerChildLaunch({ mode, repoRoot, forwardedArgs });
+  child = spawn(launch.command, launch.args, {
+    cwd: launch.cwd,
+    stdio: "inherit",
+    env,
+    shell: process.platform === "win32",
+  });
 
   childExitPromise = new Promise((resolve, reject) => {
     child.on("error", reject);
@@ -473,6 +487,10 @@ async function startServerChild() {
       if (restartInFlight || expected || shuttingDown) {
         return;
       }
+      if (mode === "watch" && servingChildWatchdog) {
+        void servingChildWatchdog.recoverNow("watch_process_exit");
+        return;
+      }
       if (signal) {
         exitForSignal(signal);
         return;
@@ -482,6 +500,46 @@ async function startServerChild() {
   });
 
   await markChildAsCurrent();
+}
+
+async function recoverServingChild(reason) {
+  if (shuttingDown) return;
+  restartInFlight = true;
+  process.stderr.write(`[paperclip] Serving child unavailable (${reason}); restarting owned watch process.\n`);
+  try {
+    await stopChildForRestart();
+    await maybePreflightMigrations({
+      autoApply: true,
+      interactive: false,
+      exitOnDecline: false,
+    });
+    await startServerChild();
+  } finally {
+    restartInFlight = false;
+  }
+}
+
+async function failServingChildClosed(error) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  clearDevIntervals();
+  servingChildWatchdog?.stop();
+  const err = toError(error, "Serving child recovery failed");
+  process.stderr.write(`[paperclip] ${err.message}. Stopping the owned watch process.\n`);
+  if (child) {
+    const exitPromise = childExitPromise;
+    childExitWasExpected = true;
+    child.kill("SIGTERM");
+    const killTimer = setTimeout(() => {
+      if (child) child.kill("SIGKILL");
+    }, gracefulShutdownTimeoutMs);
+    try {
+      if (exitPromise) await exitPromise;
+    } finally {
+      clearTimeout(killTimer);
+    }
+  }
+  process.exit(1);
 }
 
 async function maybeAutoRestartChild() {
@@ -550,6 +608,7 @@ async function shutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
   clearDevIntervals();
+  servingChildWatchdog?.stop();
   clearDevServerStatus();
 
   if (!child) {
@@ -577,14 +636,18 @@ process.on("SIGTERM", () => {
   void shutdown("SIGTERM");
 });
 
+if (mode === "watch") {
+  servingChildWatchdog = createServingChildWatchdog({
+    probe: getDevHealthPayload,
+    recover: recoverServingChild,
+    failClosed: failServingChildClosed,
+  });
+}
+
 await maybePreflightMigrations();
 await startServerChild();
 installDevIntervals();
 
 if (mode === "watch") {
-  const exit = await waitForChildExit();
-  if (exit.signal) {
-    exitForSignal(exit.signal);
-  }
-  process.exit(exit.code ?? 0);
+  servingChildWatchdog.start();
 }

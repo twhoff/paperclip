@@ -53,4 +53,4 @@ VOLUME ["/paperclip"]
 EXPOSE 3100
 
 USER node
-CMD ["node", "--import", "./server/node_modules/tsx/dist/loader.mjs", "server/dist/index.js"]
+CMD ["node", "--max-old-space-size=1536", "--import", "./server/node_modules/tsx/dist/loader.mjs", "server/dist/index.js"]
