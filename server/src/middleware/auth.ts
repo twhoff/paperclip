@@ -9,7 +9,7 @@ import {
   heartbeatRuns,
   instanceUserRoles,
 } from "@paperclipai/db";
-import { verifyLocalAgentJwt } from "../agent-auth-jwt.js";
+import { verifyLocalAgentJwt, type LocalAgentJwtClaims } from "../agent-auth-jwt.js";
 import type { DeploymentMode } from "@paperclipai/shared";
 import type { BetterAuthSessionResult } from "../auth/better-auth.js";
 import {
@@ -26,6 +26,51 @@ function sanitizeAuthSessionError(error: unknown) {
     error,
     { enabled: false },
     { fallbackMessage: "Auth session resolution failed" },
+  );
+}
+
+const HOLLY_TOOLING_ADAPTER_TYPE = "holly";
+const HOLLY_TOOLING_MAX_TOKEN_AGE_SECONDS = 5 * 60;
+const HOLLY_TOOLING_CLOCK_SKEW_SECONDS = 30;
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function isCanonicalHollyToolingToken(
+  agentRecord: {
+    status: string;
+    adapterType: string;
+    metadata: unknown;
+  },
+  claims: LocalAgentJwtClaims,
+  runIdHeader: string | undefined,
+): boolean {
+  if (
+    runIdHeader !== claims.run_id ||
+    claims.adapter_type !== HOLLY_TOOLING_ADAPTER_TYPE ||
+    agentRecord.adapterType !== HOLLY_TOOLING_ADAPTER_TYPE ||
+    agentRecord.status !== "paused" ||
+    !isPlainRecord(agentRecord.metadata)
+  ) {
+    return false;
+  }
+
+  const metadata = agentRecord.metadata;
+  if (
+    metadata.source !== "holly" ||
+    metadata.managedBy !== "holly-adapter-paperclip" ||
+    metadata.purpose !== "Holly project tooling agent identity"
+  ) {
+    return false;
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  return (
+    claims.iat <= now + HOLLY_TOOLING_CLOCK_SKEW_SECONDS &&
+    claims.iat >= now - HOLLY_TOOLING_MAX_TOKEN_AGE_SECONDS
   );
 }
 
@@ -143,6 +188,26 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
       }
 
       if (runIdHeader && runIdHeader !== claims.run_id) {
+        next();
+        return;
+      }
+
+      // Holly's project-tooling identity is deliberately paused and never owns
+      // heartbeat runs. Keep its freshly signed tooling JWT narrowly
+      // usable without relaxing run binding for executable agent adapters.
+      if (claims.adapter_type === HOLLY_TOOLING_ADAPTER_TYPE) {
+        if (!isCanonicalHollyToolingToken(agentRecord, claims, runIdHeader)) {
+          next();
+          return;
+        }
+        req.actor = {
+          type: "agent",
+          agentId: claims.sub,
+          companyId: claims.company_id,
+          keyId: undefined,
+          runId: claims.run_id,
+          source: "agent_jwt",
+        };
         next();
         return;
       }

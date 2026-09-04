@@ -14,16 +14,29 @@ const agent = {
   id: "00000000-0000-4000-8000-000000000001",
   companyId: "company-1",
   status: "active",
+  adapterType: "codex_local",
+  metadata: null,
+};
+const hollyToolingAgent = {
+  ...agent,
+  status: "paused",
+  adapterType: "holly",
+  metadata: {
+    source: "holly",
+    managedBy: "holly-adapter-paperclip",
+    purpose: "Holly project tooling agent identity",
+  },
 };
 const runId = "00000000-0000-4000-8000-000000000002";
 
 function createDb(
   runStatus: string | null,
   runOverrides: Partial<{ id: string; agentId: string; companyId: string }> = {},
+  agentRow: typeof agent = agent,
 ) {
   const rowSets = [
     [],
-    [agent],
+    [agentRow],
     runStatus === null
       ? []
       : [
@@ -205,6 +218,105 @@ describe("run-scoped local agent JWT middleware", () => {
     );
 
     expect(req.actor).toEqual({ type: "none", source: "none" });
+  });
+
+  it("accepts the canonical paused Holly tooling identity without a heartbeat run", async () => {
+    const token = createLocalAgentJwt(agent.id, agent.companyId, "holly", runId)!;
+    const req = createRequest(token, runId);
+    const db = createDb(null, {}, hollyToolingAgent);
+
+    await actorMiddleware(db, { deploymentMode: "authenticated" })(
+      req,
+      {} as any,
+      vi.fn(),
+    );
+
+    expect(req.actor).toMatchObject({
+      type: "agent",
+      agentId: agent.id,
+      companyId: agent.companyId,
+      runId,
+      source: "agent_jwt",
+    });
+    expect(db.select).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ["active status", { status: "active" }],
+    ["wrong adapter", { adapterType: "codex_local" }],
+    ["missing metadata", { metadata: null }],
+    ["wrong metadata owner", { metadata: { ...hollyToolingAgent.metadata, managedBy: "other" } }],
+  ])("rejects a heartbeat-free Holly claim with %s", async (_case, overrides) => {
+    const token = createLocalAgentJwt(agent.id, agent.companyId, "holly", runId)!;
+    const req = createRequest(token, runId);
+    const db = createDb("running", {}, { ...hollyToolingAgent, ...overrides });
+
+    await actorMiddleware(db, { deploymentMode: "authenticated" })(
+      req,
+      {} as any,
+      vi.fn(),
+    );
+
+    expect(req.actor).toEqual({ type: "none", source: "none" });
+    expect(db.select).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects a canonical Holly tooling token with a mismatched run header", async () => {
+    const token = createLocalAgentJwt(agent.id, agent.companyId, "holly", runId)!;
+    const req = createRequest(token, "00000000-0000-4000-8000-000000000099");
+
+    await actorMiddleware(createDb(null, {}, hollyToolingAgent), {
+      deploymentMode: "authenticated",
+    })(req, {} as any, vi.fn());
+
+    expect(req.actor).toEqual({ type: "none", source: "none" });
+  });
+
+  it("rejects a canonical Holly tooling token without its matching run header", async () => {
+    const token = createLocalAgentJwt(agent.id, agent.companyId, "holly", runId)!;
+    const req = createRequest(token);
+
+    await actorMiddleware(createDb(null, {}, hollyToolingAgent), {
+      deploymentMode: "authenticated",
+    })(req, {} as any, vi.fn());
+
+    expect(req.actor).toEqual({ type: "none", source: "none" });
+  });
+
+  it("rejects a canonical Holly tooling token after the short replay window", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-09-05T00:00:00Z"));
+      const token = createLocalAgentJwt(agent.id, agent.companyId, "holly", runId)!;
+      vi.setSystemTime(new Date("2026-09-05T00:05:01Z"));
+      const req = createRequest(token, runId);
+
+      await actorMiddleware(createDb("running", {}, hollyToolingAgent), {
+        deploymentMode: "authenticated",
+      })(req, {} as any, vi.fn());
+
+      expect(req.actor).toEqual({ type: "none", source: "none" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects a canonical Holly tooling token issued beyond the clock-skew allowance", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-09-05T00:00:31Z"));
+      const token = createLocalAgentJwt(agent.id, agent.companyId, "holly", runId)!;
+      vi.setSystemTime(new Date("2026-09-05T00:00:00Z"));
+      const req = createRequest(token, runId);
+
+      await actorMiddleware(createDb("running", {}, hollyToolingAgent), {
+        deploymentMode: "authenticated",
+      })(req, {} as any, vi.fn());
+
+      expect(req.actor).toEqual({ type: "none", source: "none" });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it.each(["succeeded", "failed", "cancelled", "timed_out"])(
