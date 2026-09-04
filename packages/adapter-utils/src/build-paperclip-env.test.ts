@@ -98,14 +98,22 @@ describe("buildPaperclipEnv", () => {
     expect(env.PAPERCLIP_ADAPTER_TYPE).toBeUndefined();
   });
 
-  it("derives a canonical Holly session only for local adapters without changing agent ID case", () => {
+  it("derives a canonical Holly session for trusted local adapter types without changing agent ID case", () => {
     process.env.HOLLY_SESSION_ID = "agent-00000000-0000-4000-8000-000000000000";
 
     const localEnv = buildPaperclipEnv(localAgent);
+    const cursorEnv = buildPaperclipEnv({
+      id: "00000000-0000-4000-8000-000000000003",
+      companyId: "company-1",
+      adapterType: "cursor",
+    });
     const nonLocalEnv = buildPaperclipEnv(agentWithAdapter);
 
     expect(localEnv.HOLLY_SESSION_ID).toBe(
       "agent-ABCDEF12-3456-4789-ABCD-0123456789AB",
+    );
+    expect(cursorEnv.HOLLY_SESSION_ID).toBe(
+      "agent-00000000-0000-4000-8000-000000000003",
     );
     expect(nonLocalEnv.HOLLY_SESSION_ID).toBeUndefined();
   });

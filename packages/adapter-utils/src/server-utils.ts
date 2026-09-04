@@ -208,8 +208,12 @@ type PaperclipEnvAgent = {
   adapterType?: string | null;
 };
 
+function isLocalAdapterType(adapterType: string | null | undefined): boolean {
+  return adapterType === "cursor" || adapterType?.endsWith("_local") === true;
+}
+
 function localHollySessionId(agent: PaperclipEnvAgent): string | null {
-  if (!agent.adapterType?.endsWith("_local")) return null;
+  if (!isLocalAdapterType(agent.adapterType)) return null;
   if (typeof agent.id !== "string" || agent.id.trim().length === 0) {
     throw new Error("Local adapter agent ID must not be empty");
   }
@@ -796,7 +800,7 @@ export async function runLocalAdapterChildProcess(
 ): Promise<RunProcessResult> {
   const hollySessionId = localHollySessionId(agent);
   if (hollySessionId === null) {
-    throw new Error("Local adapter child process requires an adapterType ending in _local");
+    throw new Error("Local adapter child process requires a trusted local adapter type");
   }
   return runChildProcessWithSessionIdentity(runId, command, args, opts, hollySessionId);
 }

@@ -93,7 +93,7 @@ describe("buildPaperclipEnv", () => {
     const localAgent = {
       id: "00000000-0000-4000-8000-000000000001",
       companyId: "company-1",
-      adapterType: "codex_local",
+      adapterType: "cursor",
     };
     const env = buildPaperclipEnv(localAgent);
 
