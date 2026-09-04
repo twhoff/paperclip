@@ -18,6 +18,8 @@ export {
   renderTemplate,
   redactEnvForLogs,
   buildPaperclipEnv,
+  finalizeLocalAdapterEnv,
+  runLocalAdapterChildProcess,
   defaultPathForPlatform,
   ensurePathInEnv,
   ensureAbsoluteDirectory,

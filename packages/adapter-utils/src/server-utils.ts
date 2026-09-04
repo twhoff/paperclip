@@ -202,7 +202,45 @@ export function redactEnvForLogs(env: Record<string, string>): Record<string, st
   return redacted;
 }
 
-export function buildPaperclipEnv(agent: { id: string; companyId: string; adapterType?: string | null }): Record<string, string> {
+type PaperclipEnvAgent = {
+  id: string;
+  companyId: string;
+  adapterType?: string | null;
+};
+
+function localHollySessionId(agent: PaperclipEnvAgent): string | null {
+  if (!agent.adapterType?.endsWith("_local")) return null;
+  if (typeof agent.id !== "string" || agent.id.trim().length === 0) {
+    throw new Error("Local adapter agent ID must not be empty");
+  }
+  return `agent-${agent.id}`;
+}
+
+export function finalizeLocalAdapterEnv(
+  agent: PaperclipEnvAgent,
+  env: Record<string, string>,
+  configuredEnv: Record<string, unknown>,
+): void {
+  const hollySessionId = localHollySessionId(agent);
+  if (hollySessionId === null) return;
+
+  if (Object.prototype.hasOwnProperty.call(configuredEnv, "PCLI_SESSION_ID")) {
+    throw new Error("PCLI_SESSION_ID must not be configured for local adapters");
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(configuredEnv, "HOLLY_SESSION_ID") &&
+    configuredEnv.HOLLY_SESSION_ID !== hollySessionId
+  ) {
+    throw new Error(
+      `Configured HOLLY_SESSION_ID does not match the local agent session identity (${hollySessionId})`,
+    );
+  }
+
+  delete env.PCLI_SESSION_ID;
+  env.HOLLY_SESSION_ID = hollySessionId;
+}
+
+export function buildPaperclipEnv(agent: PaperclipEnvAgent): Record<string, string> {
   const resolveHostForUrl = (rawHost: string): string => {
     const host = rawHost.trim();
     // Only fall back to localhost when no host is configured at all.
@@ -227,6 +265,10 @@ export function buildPaperclipEnv(agent: { id: string; companyId: string; adapte
   vars.PAPERCLIP_API_URL = apiUrl;
   if (agent.adapterType) {
     vars.PAPERCLIP_ADAPTER_TYPE = agent.adapterType;
+  }
+  const hollySessionId = localHollySessionId(agent);
+  if (hollySessionId !== null) {
+    vars.HOLLY_SESSION_ID = hollySessionId;
   }
   return vars;
 }
@@ -725,25 +767,55 @@ export async function ensureCommandResolvable(command: string, cwd: string, env:
   throw new Error(`Command not found in PATH: "${command}"`);
 }
 
+type RunChildProcessOptions = {
+  cwd: string;
+  env: Record<string, string>;
+  timeoutSec: number;
+  graceSec: number;
+  onLog: (stream: "stdout" | "stderr", chunk: string) => Promise<void>;
+  onLogError?: (err: unknown, runId: string, message: string) => void;
+  onSpawn?: (meta: { pid: number; startedAt: string }) => Promise<void>;
+  stdin?: string;
+};
+
 export async function runChildProcess(
   runId: string,
   command: string,
   args: string[],
-  opts: {
-    cwd: string;
-    env: Record<string, string>;
-    timeoutSec: number;
-    graceSec: number;
-    onLog: (stream: "stdout" | "stderr", chunk: string) => Promise<void>;
-    onLogError?: (err: unknown, runId: string, message: string) => void;
-    onSpawn?: (meta: { pid: number; startedAt: string }) => Promise<void>;
-    stdin?: string;
-  },
+  opts: RunChildProcessOptions,
+): Promise<RunProcessResult> {
+  return runChildProcessWithSessionIdentity(runId, command, args, opts, null);
+}
+
+export async function runLocalAdapterChildProcess(
+  agent: PaperclipEnvAgent,
+  runId: string,
+  command: string,
+  args: string[],
+  opts: RunChildProcessOptions,
+): Promise<RunProcessResult> {
+  const hollySessionId = localHollySessionId(agent);
+  if (hollySessionId === null) {
+    throw new Error("Local adapter child process requires an adapterType ending in _local");
+  }
+  return runChildProcessWithSessionIdentity(runId, command, args, opts, hollySessionId);
+}
+
+async function runChildProcessWithSessionIdentity(
+  runId: string,
+  command: string,
+  args: string[],
+  opts: RunChildProcessOptions,
+  hollySessionId: string | null,
 ): Promise<RunProcessResult> {
   const onLogError = opts.onLogError ?? ((err, id, msg) => console.warn({ err, runId: id }, msg));
 
   return new Promise<RunProcessResult>((resolve, reject) => {
     const rawMerged: NodeJS.ProcessEnv = { ...process.env, ...opts.env };
+    if (hollySessionId !== null) {
+      delete rawMerged.PCLI_SESSION_ID;
+      rawMerged.HOLLY_SESSION_ID = hollySessionId;
+    }
 
     // Strip Claude Code nesting-guard env vars so spawned `claude` processes
     // don't refuse to start with "cannot be launched inside another session".

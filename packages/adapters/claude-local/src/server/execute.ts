@@ -13,6 +13,7 @@ import {
   parseObject,
   parseJson,
   buildPaperclipEnv,
+  finalizeLocalAdapterEnv,
   readPaperclipRuntimeSkillEntries,
   joinPromptSections,
   redactEnvForLogs,
@@ -20,7 +21,7 @@ import {
   ensureCommandResolvable,
   ensurePathInEnv,
   renderTemplate,
-  runChildProcess
+  runLocalAdapterChildProcess
 } from '@paperclipai/adapter-utils/server-utils'
 import { CLAUDE_BASE_ARGS } from './base-args.js'
 import { createClaudeLogFilter } from './format-event.js'
@@ -301,6 +302,7 @@ async function buildClaudeRuntimeConfig(input: ClaudeExecutionInput): Promise<Cl
   for (const [key, value] of Object.entries(envConfig)) {
     if (typeof value === 'string') env[key] = value
   }
+  finalizeLocalAdapterEnv(agent, env, envConfig)
 
   if (!hasExplicitApiKey && authToken) {
     env.PAPERCLIP_API_KEY = authToken
@@ -347,13 +349,19 @@ export async function runClaudeLogin(input: {
     authToken: input.authToken
   })
 
-  const proc = await runChildProcess(input.runId, runtime.command, ['login'], {
-    cwd: runtime.cwd,
-    env: runtime.env,
-    timeoutSec: runtime.timeoutSec,
-    graceSec: runtime.graceSec,
-    onLog
-  })
+  const proc = await runLocalAdapterChildProcess(
+    input.agent,
+    input.runId,
+    runtime.command,
+    ['login'],
+    {
+      cwd: runtime.cwd,
+      env: runtime.env,
+      timeoutSec: runtime.timeoutSec,
+      graceSec: runtime.graceSec,
+      onLog
+    }
+  )
 
   const loginMeta = detectClaudeLoginRequired({
     parsed: null,
@@ -708,7 +716,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         : prompt
 
     const logFilter = createClaudeLogFilter(onLog)
-    const proc = await runChildProcess(runId, command, args, {
+    const proc = await runLocalAdapterChildProcess(agent, runId, command, args, {
       cwd,
       env,
       stdin: stdinPayload,

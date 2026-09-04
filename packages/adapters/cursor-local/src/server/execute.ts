@@ -13,6 +13,7 @@ import {
   asStringArray,
   parseObject,
   buildPaperclipEnv,
+  finalizeLocalAdapterEnv,
   redactEnvForLogs,
   ensureAbsoluteDirectory,
   ensureCommandResolvable,
@@ -23,7 +24,7 @@ import {
   removeMaintainerOnlySkillSymlinks,
   renderTemplate,
   joinPromptSections,
-  runChildProcess
+  runLocalAdapterChildProcess
 } from '@paperclipai/adapter-utils/server-utils'
 import { DEFAULT_CURSOR_LOCAL_MODEL } from '../index.js'
 import { parseCursorJsonl, isCursorUnknownSessionError } from './parse.js'
@@ -277,6 +278,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   for (const [k, v] of Object.entries(envConfig)) {
     if (typeof v === 'string') env[k] = v
   }
+  finalizeLocalAdapterEnv(agent, env, envConfig)
   if (!hasExplicitApiKey && authToken) {
     env.PAPERCLIP_API_KEY = authToken
   }
@@ -436,7 +438,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       }
     }
 
-    const proc = await runChildProcess(runId, command, args, {
+    const proc = await runLocalAdapterChildProcess(agent, runId, command, args, {
       cwd,
       env,
       timeoutSec,

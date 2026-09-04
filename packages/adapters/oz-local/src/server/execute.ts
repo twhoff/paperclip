@@ -9,6 +9,7 @@ import {
   asString,
   asStringArray,
   buildPaperclipEnv,
+  finalizeLocalAdapterEnv,
   ensureAbsoluteDirectory,
   ensurePaperclipSkillSymlink,
   ensureCommandResolvable,
@@ -19,7 +20,7 @@ import {
   readInstalledSkillTargets,
   redactEnvForLogs,
   renderTemplate,
-  runChildProcess
+  runLocalAdapterChildProcess
 } from '@paperclipai/adapter-utils/server-utils'
 import { DEFAULT_OZ_MODEL } from '../index.js'
 import { isOzUnknownConversationError, parseOzOutput } from './parse.js'
@@ -159,6 +160,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   for (const [key, value] of Object.entries(envConfig)) {
     if (typeof value === 'string') env[key] = value
   }
+  finalizeLocalAdapterEnv(agent, env, envConfig)
 
   // Inject Paperclip API key so pcurl can authenticate back to the Paperclip server.
   // WARP_API_KEY is intentionally NOT injected here: Oz authenticates to the Warp cloud
@@ -393,7 +395,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       context
     })
 
-    const proc = await runChildProcess(runId, command, args, {
+    const proc = await runLocalAdapterChildProcess(agent, runId, command, args, {
       cwd,
       env: envWithScripts,
       timeoutSec,

@@ -1,9 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import os from "node:os";
-import { buildPaperclipEnv } from "./server-utils.js";
+import {
+  buildPaperclipEnv,
+  finalizeLocalAdapterEnv,
+} from "./server-utils.js";
 
 const agent = { id: "agent-1", companyId: "company-1" };
 const agentWithAdapter = { id: "agent-1", companyId: "company-1", adapterType: "copilot_cli" };
+const localAgent = {
+  id: "ABCDEF12-3456-4789-ABCD-0123456789AB",
+  companyId: "company-1",
+  adapterType: "codex_local",
+};
 
 describe("buildPaperclipEnv", () => {
   const originalEnv = { ...process.env };
@@ -88,5 +96,108 @@ describe("buildPaperclipEnv", () => {
   it("omits PAPERCLIP_ADAPTER_TYPE when adapterType is null", () => {
     const env = buildPaperclipEnv({ id: "agent-1", companyId: "company-1", adapterType: null });
     expect(env.PAPERCLIP_ADAPTER_TYPE).toBeUndefined();
+  });
+
+  it("derives a canonical Holly session only for local adapters without changing agent ID case", () => {
+    process.env.HOLLY_SESSION_ID = "agent-00000000-0000-4000-8000-000000000000";
+
+    const localEnv = buildPaperclipEnv(localAgent);
+    const nonLocalEnv = buildPaperclipEnv(agentWithAdapter);
+
+    expect(localEnv.HOLLY_SESSION_ID).toBe(
+      "agent-ABCDEF12-3456-4789-ABCD-0123456789AB",
+    );
+    expect(nonLocalEnv.HOLLY_SESSION_ID).toBeUndefined();
+  });
+
+  it("rejects an empty agent ID for a local adapter", () => {
+    expect(() =>
+      buildPaperclipEnv({ id: "", companyId: "company-1", adapterType: "claude_local" }),
+    ).toThrow(/agent ID.*empty/i);
+    expect(() =>
+      buildPaperclipEnv({ id: " \t ", companyId: "company-1", adapterType: "claude_local" }),
+    ).toThrow(/agent ID.*empty/i);
+  });
+});
+
+describe("finalizeLocalAdapterEnv", () => {
+  it("accepts an exactly matching configured Holly session and removes ambient PCLI identity", () => {
+    const expected = "agent-ABCDEF12-3456-4789-ABCD-0123456789AB";
+    const env = {
+      ...buildPaperclipEnv(localAgent),
+      HOLLY_SESSION_ID: "agent-00000000-0000-4000-8000-000000000000",
+      PCLI_SESSION_ID: "ambient-parent",
+      CUSTOM_VALUE: "preserved",
+    };
+
+    finalizeLocalAdapterEnv(localAgent, env, { HOLLY_SESSION_ID: expected });
+
+    expect(env).toMatchObject({ HOLLY_SESSION_ID: expected, CUSTOM_VALUE: "preserved" });
+    expect(env.PCLI_SESSION_ID).toBeUndefined();
+  });
+
+  it("isolates concurrent local environment construction and keeps retries stable", async () => {
+    const claudeAgent = {
+      id: "00000000-0000-4000-8000-000000000001",
+      companyId: "company-1",
+      adapterType: "claude_local",
+    };
+    const codexAgent = {
+      id: "00000000-0000-4000-8000-000000000002",
+      companyId: "company-1",
+      adapterType: "codex_local",
+    };
+    const prepare = (agent: typeof claudeAgent) =>
+      Promise.resolve().then(() => {
+        const env: Record<string, string> = {
+          ...buildPaperclipEnv(agent),
+          PCLI_SESSION_ID: "ambient-parent",
+        };
+        finalizeLocalAdapterEnv(agent, env, {});
+        return env;
+      });
+
+    const [claudeEnv, codexEnv] = await Promise.all([prepare(claudeAgent), prepare(codexAgent)]);
+    const codexRetryEnv = await prepare(codexAgent);
+
+    expect(claudeEnv.HOLLY_SESSION_ID).toBe(
+      "agent-00000000-0000-4000-8000-000000000001",
+    );
+    expect(codexEnv.HOLLY_SESSION_ID).toBe(
+      "agent-00000000-0000-4000-8000-000000000002",
+    );
+    expect(codexRetryEnv.HOLLY_SESSION_ID).toBe(codexEnv.HOLLY_SESSION_ID);
+    expect(claudeEnv.HOLLY_SESSION_ID).not.toBe(codexEnv.HOLLY_SESSION_ID);
+    expect(claudeEnv.PCLI_SESSION_ID).toBeUndefined();
+    expect(codexEnv.PCLI_SESSION_ID).toBeUndefined();
+  });
+
+  it("rejects a conflicting configured Holly session", () => {
+    const env = buildPaperclipEnv(localAgent);
+
+    expect(() =>
+      finalizeLocalAdapterEnv(localAgent, env, {
+        HOLLY_SESSION_ID: "agent-00000000-0000-4000-8000-000000000000",
+      }),
+    ).toThrow(/HOLLY_SESSION_ID.*does not match/i);
+  });
+
+  it("rejects configured PCLI_SESSION_ID even when empty", () => {
+    const env = buildPaperclipEnv(localAgent);
+
+    expect(() =>
+      finalizeLocalAdapterEnv(localAgent, env, { PCLI_SESSION_ID: "" }),
+    ).toThrow(/PCLI_SESSION_ID.*must not be configured/i);
+  });
+
+  it("leaves non-local adapter environments unchanged", () => {
+    const env = { CUSTOM_VALUE: "preserved", PCLI_SESSION_ID: "existing" };
+
+    finalizeLocalAdapterEnv(agentWithAdapter, env, {
+      HOLLY_SESSION_ID: "configured-non-local",
+      PCLI_SESSION_ID: "existing",
+    });
+
+    expect(env).toEqual({ CUSTOM_VALUE: "preserved", PCLI_SESSION_ID: "existing" });
   });
 });

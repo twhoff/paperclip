@@ -10,6 +10,7 @@ import {
   asString,
   asStringArray,
   buildPaperclipEnv,
+  finalizeLocalAdapterEnv,
   ensureAbsoluteDirectory,
   ensureCommandResolvable,
   ensurePaperclipSkillSymlink,
@@ -21,7 +22,7 @@ import {
   parseObject,
   redactEnvForLogs,
   renderTemplate,
-  runChildProcess
+  runLocalAdapterChildProcess
 } from '@paperclipai/adapter-utils/server-utils'
 import { DEFAULT_GEMINI_LOCAL_MODEL } from '../index.js'
 import {
@@ -224,6 +225,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   for (const [key, value] of Object.entries(envConfig)) {
     if (typeof value === 'string') env[key] = value
   }
+  finalizeLocalAdapterEnv(agent, env, envConfig)
   if (!hasExplicitApiKey && authToken) {
     env.PAPERCLIP_API_KEY = authToken
   }
@@ -364,7 +366,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       })
     }
 
-    const proc = await runChildProcess(runId, command, args, {
+    const proc = await runLocalAdapterChildProcess(agent, runId, command, args, {
       cwd,
       env,
       timeoutSec,
