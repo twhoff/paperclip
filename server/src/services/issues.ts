@@ -27,12 +27,16 @@ import {
   parseProjectExecutionWorkspacePolicy,
 } from "./execution-workspace-policy.js";
 import { instanceSettingsService } from "./instance-settings.js";
-import { redactCurrentUserText } from "../log-redaction.js";
+import {
+  MAX_COMMENT_PAGE_ROWS,
+  redactCommentRecords,
+  redactStrictDiagnosticText,
+} from "./comment-redaction.js";
 import { resolveIssueGoalId, resolveNextIssueGoalId } from "./issue-goal-fallback.js";
 import { getDefaultCompanyGoal } from "./goals.js";
 
 const ALL_ISSUE_STATUSES = ["backlog", "todo", "in_progress", "in_review", "blocked", "done", "cancelled"];
-const MAX_ISSUE_COMMENT_PAGE_LIMIT = 500;
+const MAX_ISSUE_COMMENT_PAGE_LIMIT = MAX_COMMENT_PAGE_ROWS;
 
 function assertTransition(from: string, to: string) {
   if (from === to) return;
@@ -315,13 +319,6 @@ function withActiveRuns(
 
 export function issueService(db: Db) {
   const instanceSettings = instanceSettingsService(db);
-
-  function redactIssueComment<T extends { body: string }>(comment: T, censorUsernameInLogs: boolean): T {
-    return {
-      ...comment,
-      body: redactCurrentUserText(comment.body, { enabled: censorUsernameInLogs }),
-    };
-  }
 
   async function assertAssignableAgent(companyId: string, agentId: string) {
     const assignee = await db
@@ -1244,7 +1241,7 @@ export function issueService(db: Db) {
       const limit =
         opts?.limit && opts.limit > 0
           ? Math.min(Math.floor(opts.limit), MAX_ISSUE_COMMENT_PAGE_LIMIT)
-          : null;
+          : MAX_ISSUE_COMMENT_PAGE_LIMIT;
 
       const conditions = [eq(issueComments.issueId, issueId)];
       if (afterCommentId) {
@@ -1280,9 +1277,9 @@ export function issueService(db: Db) {
           order === "asc" ? asc(issueComments.id) : desc(issueComments.id),
         );
 
-      const comments = limit ? await query.limit(limit) : await query;
+      const comments = await query.limit(limit);
       const { censorUsernameInLogs } = await instanceSettings.getGeneral();
-      return comments.map((comment) => redactIssueComment(comment, censorUsernameInLogs));
+      return redactCommentRecords(comments, { enabled: censorUsernameInLogs });
     },
 
     getCommentCursor: async (issueId: string) => {
@@ -1321,7 +1318,9 @@ export function issueService(db: Db) {
         .where(eq(issueComments.id, commentId))
         .then((rows) => {
           const comment = rows[0] ?? null;
-          return comment ? redactIssueComment(comment, censorUsernameInLogs) : null;
+          return comment
+            ? redactCommentRecords([comment], { enabled: censorUsernameInLogs })[0] ?? null
+            : null;
         })),
 
     addComment: async (issueId: string, body: string, actor: { agentId?: string; userId?: string }) => {
@@ -1336,7 +1335,7 @@ export function issueService(db: Db) {
       const currentUserRedactionOptions = {
         enabled: (await instanceSettings.getGeneral()).censorUsernameInLogs,
       };
-      const redactedBody = redactCurrentUserText(body, currentUserRedactionOptions);
+      const redactedBody = redactStrictDiagnosticText(body, currentUserRedactionOptions);
       const [comment] = await db
         .insert(issueComments)
         .values({
@@ -1354,7 +1353,7 @@ export function issueService(db: Db) {
         .set({ updatedAt: new Date() })
         .where(eq(issues.id, issueId));
 
-      return redactIssueComment(comment, currentUserRedactionOptions.enabled);
+      return redactCommentRecords([comment], currentUserRedactionOptions)[0];
     },
 
     createAttachment: async (input: {

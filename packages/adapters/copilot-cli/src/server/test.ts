@@ -12,7 +12,7 @@ import {
   ensureAbsoluteDirectory,
   ensureCommandResolvable,
   ensurePathInEnv,
-  runChildProcess,
+  runProviderProbeChildProcess,
 } from "@paperclipai/adapter-utils/server-utils";
 import path from "node:path";
 import { parseCopilotJsonl, detectCopilotLoginRequired } from "./parse.js";
@@ -134,7 +134,7 @@ export async function testEnvironment(
       if (reasoningEffort && (!model || model in modelEffortSupport)) args.push("--reasoning-effort", reasoningEffort);
       if (extraArgs.length > 0) args.push(...extraArgs);
 
-      const probe = await runChildProcess(
+      const probe = await runProviderProbeChildProcess(
         `copilot-envtest-${Date.now()}-${Math.random().toString(16).slice(2)}`,
         command,
         args,
@@ -143,6 +143,7 @@ export async function testEnvironment(
           env,
           timeoutSec: 60,
           graceSec: 5,
+          signal: ctx.signal,
           onLog: async () => {},
         },
       );

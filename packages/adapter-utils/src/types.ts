@@ -210,6 +210,7 @@ export interface AdapterEnvironmentTestContext {
   companyId: string;
   adapterType: string;
   config: Record<string, unknown>;
+  signal?: AbortSignal;
   deployment?: {
     mode?: "local_trusted" | "authenticated";
     exposure?: "private" | "public";

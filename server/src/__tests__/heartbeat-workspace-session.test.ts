@@ -2,9 +2,13 @@ import { describe, expect, it } from "vitest";
 import type { agents } from "@paperclipai/db";
 import { resolveDefaultAgentWorkspaceDir } from "../home-paths.js";
 import {
+  buildExecutionWorkspaceCleanupFailureLog,
+  buildSessionHandoffMarkdown,
   formatRuntimeWorkspaceWarningLog,
   prioritizeProjectWorkspaceCandidatesForRun,
   parseSessionCompactionPolicy,
+  prepareWakeupExecutionViews,
+  resolveHeartbeatExecutionContext,
   resolveRuntimeSessionParamsForWorkspace,
   resolveRuntimeSessionFallback,
   shouldResetTaskSessionForWake,
@@ -183,12 +187,159 @@ describe("shouldResetTaskSessionForWake", () => {
   });
 });
 
+describe("sanitizeWakeupExecutionInput", () => {
+  it("keeps raw adapter execution context while masking persisted wakeup fields", () => {
+    const secret = "wakeup-execution-secret-0123456789";
+    const splitAt = Math.floor(secret.length / 2);
+    const workspacePath = "/Users/fixture-user/Projects/paperclip-worktrees/PCL-505";
+    const prompt = "Review /Users/fixture-user/Projects/paperclip and report back";
+
+    const views = prepareWakeupExecutionViews(
+      {
+        reason: `Continue work in ${workspacePath}`,
+        source: "on_demand",
+        triggerDetail: secret as never,
+        payload: {
+          prompt,
+          secretPrefix: secret.slice(0, splitAt),
+        },
+        contextSnapshot: {
+          cwd: workspacePath,
+          command: `use ${secret}`,
+          secretTail: secret.slice(splitAt),
+        },
+      },
+      {
+        enabled: true,
+        userNames: ["fixture-user"],
+        homeDirs: ["/Users/fixture-user"],
+        secretValues: [secret],
+      },
+    );
+    const sanitized = views.persisted;
+    const adapterContext = resolveHeartbeatExecutionContext(
+      sanitized.contextSnapshot,
+      views.operational.contextSnapshot,
+    );
+
+    expect(adapterContext.cwd).toBe(workspacePath);
+    expect(adapterContext.command).toBe(`use ${secret}`);
+    expect(views.operational.reason).toBe(`Continue work in ${workspacePath}`);
+    expect(views.operational.payload?.prompt).toBe(prompt);
+    expect(views.operational.triggerDetail).toBe(secret);
+    expect(sanitized.reason).toBe(`Continue work in ${workspacePath}`);
+    expect((sanitized.payload as { prompt: string }).prompt).toBe(prompt);
+    expect((sanitized.contextSnapshot as { cwd: string }).cwd).toBe(workspacePath);
+    expect(sanitized.triggerDetail).toBe("***REDACTED***");
+    expect(
+      `${(sanitized.payload as { secretPrefix: string }).secretPrefix}${
+        (sanitized.contextSnapshot as { secretTail: string }).secretTail
+      }`,
+    ).not.toContain(secret);
+    expect(JSON.stringify(sanitized)).not.toContain(secret);
+    expect(JSON.stringify(sanitized)).toContain("***REDACTED***");
+  });
+
+  it("falls back to the credential-safe persisted context after transient state is lost", () => {
+    const secret = "restart-fallback-current-secret-0123456789";
+    const views = prepareWakeupExecutionViews(
+      {
+        reason: "resume after restart",
+        source: "on_demand",
+        triggerDetail: "system",
+        payload: null,
+        contextSnapshot: {
+          taskKey: "restart-task",
+          command: `use ${secret}`,
+          benignContext: "preserved",
+        },
+      },
+      { enabled: false, secretValues: [secret] },
+    );
+
+    const restartedContext = resolveHeartbeatExecutionContext(
+      views.persisted.contextSnapshot,
+      undefined,
+    );
+
+    expect(restartedContext.command).not.toBe(`use ${secret}`);
+    expect(JSON.stringify(restartedContext)).not.toContain(secret);
+    expect(JSON.stringify(restartedContext)).toContain("***REDACTED***");
+    expect(restartedContext.benignContext).toBe("preserved");
+  });
+});
+
 describe("formatRuntimeWorkspaceWarningLog", () => {
   it("emits informational workspace warnings on stdout", () => {
     expect(formatRuntimeWorkspaceWarningLog("Using fallback workspace")).toEqual({
       stream: "stdout",
       chunk: "[paperclip] Using fallback workspace\n",
     });
+  });
+});
+
+describe("buildExecutionWorkspaceCleanupFailureLog", () => {
+  it("cannot reconstruct a run secret split across cleanup log fields", () => {
+    const credential = "workspace-cleanup-log-secret-4219";
+    const splitAt = 17;
+    const payload = buildExecutionWorkspaceCleanupFailureLog(
+      {
+        runId: "run-1",
+        issueId: "issue-1",
+        executionWorkspaceCwd: credential.slice(0, splitAt),
+        cleanupError: credential.slice(splitAt),
+      },
+      { enabled: false, secretValues: [credential] },
+    );
+
+    expect(`${payload.executionWorkspaceCwd}${payload.cleanupError}`).not.toContain(credential);
+    expect(JSON.stringify(payload)).toContain("***REDACTED***");
+  });
+
+  it("fails closed when workspace cleanup throws a hostile error object", () => {
+    let messageReads = 0;
+    const cleanupError = new Error("placeholder");
+    Object.defineProperty(cleanupError, "message", {
+      configurable: true,
+      get() {
+        messageReads += 1;
+        throw new Error("workspace-cleanup-accessor-secret-8472");
+      },
+    });
+
+    const payload = buildExecutionWorkspaceCleanupFailureLog(
+      {
+        runId: "run-1",
+        issueId: "issue-1",
+        executionWorkspaceCwd: "/safe/workspace",
+        cleanupError,
+      },
+      { enabled: false, secretValues: ["workspace-cleanup-accessor-secret-8472"] },
+    );
+
+    expect(messageReads).toBe(1);
+    expect(payload.cleanupError).toBe("***REDACTED***");
+    expect(JSON.stringify(payload)).not.toContain("workspace-cleanup-accessor-secret-8472");
+  });
+});
+
+describe("buildSessionHandoffMarkdown", () => {
+  it("cannot reconstruct a historical JWT split across handoff fields", () => {
+    const jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJoYW5kb2ZmIn0.signaturevalue123456";
+    const markdown = buildSessionHandoffMarkdown(
+      {
+        sessionId: jwt.slice(0, 1),
+        issueId: "issue-1",
+        reason: "session exceeded 5 runs",
+        latestTextSummary: jwt.slice(1),
+      },
+      { enabled: false },
+    );
+
+    expect(markdown).not.toContain(jwt);
+    expect(markdown).not.toContain(jwt.slice(1));
+    expect(markdown).toContain("***REDACTED***");
+    expect(markdown).toContain("issue-1");
   });
 });
 

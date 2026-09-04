@@ -40,10 +40,11 @@ export async function runChildProcess(
     timeoutSec: number;
     graceSec: number;
     onLog: (stream: "stdout" | "stderr", chunk: string) => Promise<void>;
+    onSpawn?: (meta: { pid: number; startedAt: string }) => Promise<void>;
   },
 ): Promise<RunProcessResult> {
   return _runChildProcess(runId, command, args, {
     ...opts,
-    onLogError: (err, id, msg) => logger.warn({ err, runId: id }, msg),
+    onLogError: (_err, id, msg) => logger.warn({ runId: id }, msg),
   });
 }

@@ -80,7 +80,7 @@ function defaultBasePath(): string {
   return process.env.RUN_LOG_BASE_PATH ?? path.resolve(resolvePaperclipInstanceRoot(), "data", "run-logs");
 }
 
-function createLocalFileRunLogStore(opts: RunLogStoreOptions = {}): RunLogStore {
+export function createLocalFileRunLogStore(opts: RunLogStoreOptions = {}): RunLogStore {
   const basePath = opts.basePath ?? defaultBasePath();
   const maxRunBytes = Math.max(1024, opts.maxRunBytes ?? DEFAULT_MAX_RUN_BYTES);
   const compressOnFinalize = opts.compressOnFinalize ?? true;
@@ -88,6 +88,18 @@ function createLocalFileRunLogStore(opts: RunLogStoreOptions = {}): RunLogStore 
   // Track per-run byte counts so we can enforce maxRunBytes across many appends.
   const runBytes = new Map<string, number>();
   const truncatedRuns = new Set<string>();
+  const appendTails = new Map<string, Promise<void>>();
+
+  async function serializeAppend(logRef: string, append: () => Promise<void>) {
+    const previous = appendTails.get(logRef) ?? Promise.resolve();
+    const next = previous.catch(() => undefined).then(append);
+    appendTails.set(logRef, next);
+    try {
+      await next;
+    } finally {
+      if (appendTails.get(logRef) === next) appendTails.delete(logRef);
+    }
+  }
 
   async function ensureDir(relativeDir: string) {
     const dir = resolveWithin(basePath, relativeDir);
@@ -99,11 +111,9 @@ function createLocalFileRunLogStore(opts: RunLogStoreOptions = {}): RunLogStore 
     if (!stat) throw notFound("Run log not found");
 
     const start = Math.max(0, Math.min(offset, stat.size));
-    const end = Math.max(start, Math.min(start + limitBytes - 1, stat.size - 1));
-
-    if (start > end) {
-      return { content: "", nextOffset: start };
-    }
+    if (limitBytes <= 0) return { content: "", nextOffset: start };
+    if (start >= stat.size) return { content: "", nextOffset: undefined };
+    const end = Math.min(start + limitBytes - 1, stat.size - 1);
 
     const chunks: Buffer[] = [];
     await new Promise<void>((resolve, reject) => {
@@ -121,22 +131,37 @@ function createLocalFileRunLogStore(opts: RunLogStoreOptions = {}): RunLogStore 
   }
 
   async function readGzipRange(filePath: string, offset: number, limitBytes: number): Promise<RunLogReadResult> {
-    // gzip files don't expose random access; decompress fully (logs are capped at maxRunBytes
-    // so worst case is a few tens of MB of UTF-8) then slice.
+    // gzip files don't expose random access. Stream only through the requested
+    // range plus one probe byte so an oversized historical gzip cannot force a
+    // full decompression into memory.
+    const start = Math.max(0, Math.trunc(offset));
+    const limit = Math.max(0, Math.trunc(limitBytes));
+    const end = limit > Number.MAX_SAFE_INTEGER - start
+      ? Number.MAX_SAFE_INTEGER
+      : start + limit;
+    const probeEnd = end < Number.MAX_SAFE_INTEGER ? end + 1 : end;
     const chunks: Buffer[] = [];
-    await new Promise<void>((resolve, reject) => {
-      const stream = createReadStream(filePath).pipe(createGunzip());
-      stream.on("data", (chunk) => {
-        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-      });
-      stream.on("error", reject);
-      stream.on("end", () => resolve());
-    });
-    const buf = Buffer.concat(chunks);
-    const start = Math.max(0, Math.min(offset, buf.length));
-    const end = Math.min(start + limitBytes, buf.length);
-    const content = buf.subarray(start, end).toString("utf8");
-    const nextOffset = end < buf.length ? end : undefined;
+    let position = 0;
+    const stream = createReadStream(filePath).pipe(createGunzip());
+    for await (const rawChunk of stream) {
+      const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk);
+      const chunkStart = position;
+      const chunkEnd = chunkStart + chunk.length;
+      if (chunkEnd > start && chunkStart < probeEnd) {
+        const sliceStart = Math.max(0, start - chunkStart);
+        const sliceEnd = Math.min(chunk.length, probeEnd - chunkStart);
+        if (sliceEnd > sliceStart) chunks.push(chunk.subarray(sliceStart, sliceEnd));
+      }
+      position = chunkEnd;
+      if (position >= probeEnd) break;
+    }
+
+    const buffered = Buffer.concat(chunks);
+    const contentBuffer = buffered.subarray(0, limit);
+    const content = contentBuffer.toString("utf8");
+    const nextOffset = buffered.length > limit
+      ? start + contentBuffer.length
+      : undefined;
     return { content, nextOffset };
   }
 
@@ -172,43 +197,50 @@ function createLocalFileRunLogStore(opts: RunLogStoreOptions = {}): RunLogStore 
 
     async append(handle, event) {
       if (handle.store !== "local_file") return;
-      const absPath = resolveWithin(basePath, handle.logRef);
-      const line = `${JSON.stringify({
-        ts: event.ts,
-        stream: event.stream,
-        chunk: event.chunk,
-      })}\n`;
-      const lineBytes = Buffer.byteLength(line, "utf8");
-
-      let current = runBytes.get(handle.logRef);
-      if (current === undefined) {
-        // Recover current size if we restarted mid-run.
-        const stat = await fs.stat(absPath).catch(() => null);
-        current = stat?.size ?? 0;
-        runBytes.set(handle.logRef, current);
-      }
-
-      if (current + lineBytes > maxRunBytes) {
-        if (truncatedRuns.has(handle.logRef)) return;
+      return serializeAppend(handle.logRef, async () => {
+        const absPath = resolveWithin(basePath, handle.logRef);
+        const line = `${JSON.stringify({
+          ts: event.ts,
+          stream: event.stream,
+          chunk: event.chunk,
+        })}\n`;
+        const lineBytes = Buffer.byteLength(line, "utf8");
         const sentinel = `${JSON.stringify({
           ts: event.ts,
           stream: "system",
           chunk: `[run-log truncated: exceeded ${maxRunBytes.toLocaleString()} bytes]`,
         })}\n`;
-        await fs.appendFile(absPath, sentinel, "utf8");
-        runBytes.set(handle.logRef, current + Buffer.byteLength(sentinel, "utf8"));
-        truncatedRuns.add(handle.logRef);
-        return;
-      }
+        const sentinelBytes = Buffer.byteLength(sentinel, "utf8");
 
-      await fs.appendFile(absPath, line, "utf8");
-      runBytes.set(handle.logRef, current + lineBytes);
+        let current = runBytes.get(handle.logRef);
+        if (current === undefined) {
+          // Recover current size if we restarted mid-run.
+          const stat = await fs.stat(absPath).catch(() => null);
+          current = stat?.size ?? 0;
+          runBytes.set(handle.logRef, current);
+        }
+
+        if (current + lineBytes + sentinelBytes > maxRunBytes) {
+          if (truncatedRuns.has(handle.logRef)) return;
+          if (current + sentinelBytes <= maxRunBytes) {
+            await fs.appendFile(absPath, sentinel, "utf8");
+            current += sentinelBytes;
+          }
+          runBytes.set(handle.logRef, current);
+          truncatedRuns.add(handle.logRef);
+          return;
+        }
+
+        await fs.appendFile(absPath, line, "utf8");
+        runBytes.set(handle.logRef, current + lineBytes);
+      });
     },
 
     async finalize(handle) {
       if (handle.store !== "local_file") {
         return { bytes: 0, compressed: false };
       }
+      await appendTails.get(handle.logRef);
       const absPath = resolveWithin(basePath, handle.logRef);
       const stat = await fs.stat(absPath).catch(() => null);
       if (!stat) throw notFound("Run log not found");
@@ -235,8 +267,11 @@ function createLocalFileRunLogStore(opts: RunLogStoreOptions = {}): RunLogStore 
         throw notFound("Run log not found");
       }
       const absPath = resolveWithin(basePath, handle.logRef);
-      const offset = opts?.offset ?? 0;
-      const limitBytes = opts?.limitBytes ?? 256_000;
+      const offset = Math.max(0, Math.trunc(opts?.offset ?? 0));
+      const limitBytes = Math.min(
+        maxRunBytes + 1,
+        Math.max(0, Math.trunc(opts?.limitBytes ?? 256_000)),
+      );
 
       const gzPath = `${absPath}.gz`;
       const hasPlain = await fs.stat(absPath).then(() => true, () => false);
@@ -328,4 +363,3 @@ export async function pruneRunLogs(opts: PruneRunLogsOptions): Promise<PruneRunL
 
   return { deletedFiles, deletedBytes, removedDirs };
 }
-

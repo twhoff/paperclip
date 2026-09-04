@@ -20,6 +20,7 @@ import {
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
 import { fetchAllQuotaWindows } from "../services/quota-windows.js";
 import { badRequest } from "../errors.js";
+import { redactStatelessDiagnosticResponseValue } from "../log-redaction.js";
 
 export function costRoutes(db: Db) {
   const router = Router();
@@ -204,7 +205,10 @@ export function costRoutes(db: Db) {
       return;
     }
     const results = await fetchAllQuotaWindows();
-    res.json(results);
+    res.json(redactStatelessDiagnosticResponseValue(results, {
+      enabled: false,
+      extraDiagnosticKeys: ["source", "label", "valueLabel"],
+    }));
   });
 
   router.get("/companies/:companyId/budgets/overview", async (req, res) => {

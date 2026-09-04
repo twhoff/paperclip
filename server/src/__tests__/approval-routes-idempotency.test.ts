@@ -107,4 +107,76 @@ describe("approval routes idempotent retries", () => {
     expect(res.status).toBe(200);
     expect(mockLogActivity).not.toHaveBeenCalled();
   });
+
+  it("rejects approval payloads beyond the bounded nesting limit", async () => {
+    let payload: Record<string, unknown> = { safe: "value" };
+    for (let depth = 0; depth < 33; depth += 1) payload = { nested: payload };
+
+    const res = await request(createApp())
+      .post("/api/companies/company-1/approvals")
+      .send({ type: "approve_ceo_strategy", payload });
+
+    expect(res.status).toBe(400);
+    expect(mockApprovalService.create).not.toHaveBeenCalled();
+  });
+
+  it("redacts credentials split across an approval response payload", async () => {
+    const token = "eyJapproval.payload.signature_";
+    mockApprovalService.getById.mockResolvedValue({
+      id: "approval-1",
+      companyId: "company-1",
+      type: "approve_ceo_strategy",
+      status: "pending",
+      payload: {
+        left: token.slice(0, 1),
+        right: token.slice(1),
+      },
+    });
+
+    const res = await request(createApp()).get("/api/approvals/approval-1");
+
+    expect(res.status).toBe(200);
+    expect(JSON.stringify(res.body)).not.toContain(token);
+    expect(JSON.stringify(res.body)).toContain("***REDACTED***");
+  });
+
+  it("redacts requester wakeup failures before activity persistence", async () => {
+    const previousSecret = process.env.PAPERCLIP_AGENT_JWT_SECRET;
+    const secret = "approval-wakeup-current-secret";
+    process.env.PAPERCLIP_AGENT_JWT_SECRET = secret;
+    const hostile = Object.create(null) as Record<string, unknown>;
+    Object.defineProperty(hostile, "name", { enumerable: true, value: secret.slice(0, 12) });
+    Object.defineProperty(hostile, "message", { enumerable: true, value: secret.slice(12) });
+    Object.defineProperty(hostile, "stack", {
+      enumerable: true,
+      get() {
+        throw new Error("hostile stack getter");
+      },
+    });
+    mockApprovalService.approve.mockResolvedValue({
+      approval: {
+        id: "approval-1",
+        companyId: "company-1",
+        type: "hire_agent",
+        status: "approved",
+        payload: {},
+        requestedByAgentId: "agent-1",
+      },
+      applied: true,
+    });
+    mockHeartbeatService.wakeup.mockRejectedValue(hostile);
+
+    try {
+      const res = await request(createApp())
+        .post("/api/approvals/approval-1/approve")
+        .send({});
+      expect(res.status).toBe(200);
+      const serializedCalls = JSON.stringify(mockLogActivity.mock.calls);
+      expect(serializedCalls).not.toContain(secret);
+      expect(serializedCalls).toContain("***REDACTED***");
+    } finally {
+      if (previousSecret === undefined) delete process.env.PAPERCLIP_AGENT_JWT_SECRET;
+      else process.env.PAPERCLIP_AGENT_JWT_SECRET = previousSecret;
+    }
+  });
 });

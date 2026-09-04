@@ -2,11 +2,22 @@ import { and, asc, eq, inArray } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { approvalComments, approvals } from "@paperclipai/db";
 import { notFound, unprocessable } from "../errors.js";
-import { redactCurrentUserText } from "../log-redaction.js";
 import { agentService } from "./agents.js";
 import { budgetService } from "./budgets.js";
 import { notifyHireApproved } from "./hire-hook.js";
 import { instanceSettingsService } from "./instance-settings.js";
+import {
+  sanitizeApprovalDecisionNoteForPersistence,
+  sanitizeApprovalPayloadForPersistence,
+} from "./approval-redaction.js";
+import {
+  MAX_COMMENT_PAGE_ROWS,
+  redactCommentRecords,
+  redactStrictDiagnosticText,
+} from "./comment-redaction.js";
+
+const MAX_APPROVAL_ROWS = 100;
+const MAX_APPROVAL_COMMENT_ROWS = MAX_COMMENT_PAGE_ROWS;
 
 export function approvalService(db: Db) {
   const agentsSvc = agentService(db);
@@ -16,13 +27,6 @@ export function approvalService(db: Db) {
   const resolvableStatuses = Array.from(canResolveStatuses);
   type ApprovalRecord = typeof approvals.$inferSelect;
   type ResolutionResult = { approval: ApprovalRecord; applied: boolean };
-
-  function redactApprovalComment<T extends { body: string }>(comment: T, censorUsernameInLogs: boolean): T {
-    return {
-      ...comment,
-      body: redactCurrentUserText(comment.body, { enabled: censorUsernameInLogs }),
-    };
-  }
 
   async function getExistingApproval(id: string) {
     const existing = await db
@@ -56,7 +60,7 @@ export function approvalService(db: Db) {
       .set({
         status: targetStatus,
         decidedByUserId,
-        decisionNote: decisionNote ?? null,
+        decisionNote: sanitizeApprovalDecisionNoteForPersistence(decisionNote),
         decidedAt: now,
         updatedAt: now,
       })
@@ -82,7 +86,7 @@ export function approvalService(db: Db) {
     list: (companyId: string, status?: string) => {
       const conditions = [eq(approvals.companyId, companyId)];
       if (status) conditions.push(eq(approvals.status, status));
-      return db.select().from(approvals).where(and(...conditions));
+      return db.select().from(approvals).where(and(...conditions)).limit(MAX_APPROVAL_ROWS);
     },
 
     getById: (id: string) =>
@@ -95,7 +99,12 @@ export function approvalService(db: Db) {
     create: (companyId: string, data: Omit<typeof approvals.$inferInsert, "companyId">) =>
       db
         .insert(approvals)
-        .values({ ...data, companyId })
+        .values({
+          ...data,
+          companyId,
+          payload: sanitizeApprovalPayloadForPersistence(data.payload),
+          decisionNote: sanitizeApprovalDecisionNoteForPersistence(data.decisionNote),
+        })
         .returning()
         .then((rows) => rows[0]),
 
@@ -199,7 +208,7 @@ export function approvalService(db: Db) {
         .set({
           status: "revision_requested",
           decidedByUserId,
-          decisionNote: decisionNote ?? null,
+          decisionNote: sanitizeApprovalDecisionNoteForPersistence(decisionNote),
           decidedAt: now,
           updatedAt: now,
         })
@@ -219,7 +228,7 @@ export function approvalService(db: Db) {
         .update(approvals)
         .set({
           status: "pending",
-          payload: payload ?? existing.payload,
+          payload: sanitizeApprovalPayloadForPersistence(payload ?? existing.payload),
           decisionNote: null,
           decidedByUserId: null,
           decidedAt: null,
@@ -243,7 +252,9 @@ export function approvalService(db: Db) {
           ),
         )
         .orderBy(asc(approvalComments.createdAt))
-        .then((comments) => comments.map((comment) => redactApprovalComment(comment, censorUsernameInLogs)));
+        .limit(MAX_APPROVAL_COMMENT_ROWS)
+        .then((comments) =>
+          redactCommentRecords(comments, { enabled: censorUsernameInLogs }));
     },
 
     addComment: async (
@@ -255,7 +266,7 @@ export function approvalService(db: Db) {
       const currentUserRedactionOptions = {
         enabled: (await instanceSettings.getGeneral()).censorUsernameInLogs,
       };
-      const redactedBody = redactCurrentUserText(body, currentUserRedactionOptions);
+      const redactedBody = redactStrictDiagnosticText(body, currentUserRedactionOptions);
       return db
         .insert(approvalComments)
         .values({
@@ -266,7 +277,7 @@ export function approvalService(db: Db) {
           body: redactedBody,
         })
         .returning()
-        .then((rows) => redactApprovalComment(rows[0], currentUserRedactionOptions.enabled));
+        .then((rows) => redactCommentRecords(rows, currentUserRedactionOptions)[0]);
     },
   };
 }

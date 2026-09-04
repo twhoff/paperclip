@@ -2,10 +2,23 @@ import { and, desc, eq, inArray } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { executionWorkspaces } from "@paperclipai/db";
 import type { ExecutionWorkspace } from "@paperclipai/shared";
+import { redactStatelessDiagnosticResponseValue } from "../log-redaction.js";
 
 type ExecutionWorkspaceRow = typeof executionWorkspaces.$inferSelect;
 
-function toExecutionWorkspace(row: ExecutionWorkspaceRow): ExecutionWorkspace {
+export const EXECUTION_WORKSPACE_LIST_DEFAULT_LIMIT = 200;
+export const EXECUTION_WORKSPACE_LIST_MAX_LIMIT = 500;
+
+export function normalizeExecutionWorkspaceListLimit(limit: number | undefined) {
+  if (limit === undefined || !Number.isFinite(limit)) {
+    return EXECUTION_WORKSPACE_LIST_DEFAULT_LIMIT;
+  }
+  return Math.max(1, Math.min(EXECUTION_WORKSPACE_LIST_MAX_LIMIT, Math.trunc(limit)));
+}
+
+function toExecutionWorkspaceRecord(
+  row: ExecutionWorkspaceRow | ExecutionWorkspace,
+): ExecutionWorkspace {
   return {
     id: row.id,
     companyId: row.companyId,
@@ -34,6 +47,20 @@ function toExecutionWorkspace(row: ExecutionWorkspaceRow): ExecutionWorkspace {
   };
 }
 
+function toExecutionWorkspace(
+  row: ExecutionWorkspaceRow | ExecutionWorkspace,
+): ExecutionWorkspace {
+  const redacted = redactStatelessDiagnosticResponseValue(toExecutionWorkspaceRecord(row), {
+    enabled: false,
+    extraDiagnosticKeys: ["cleanupReason"],
+  });
+  const metadata = redacted.metadata !== null
+    && (typeof redacted.metadata !== "object" || Array.isArray(redacted.metadata))
+    ? { redacted: redacted.metadata }
+    : redacted.metadata;
+  return { ...redacted, metadata } as ExecutionWorkspace;
+}
+
 export function executionWorkspaceService(db: Db) {
   return {
     list: async (companyId: string, filters?: {
@@ -42,6 +69,7 @@ export function executionWorkspaceService(db: Db) {
       issueId?: string;
       status?: string;
       reuseEligible?: boolean;
+      limit?: number;
     }) => {
       const conditions = [eq(executionWorkspaces.companyId, companyId)];
       if (filters?.projectId) conditions.push(eq(executionWorkspaces.projectId, filters.projectId));
@@ -62,8 +90,9 @@ export function executionWorkspaceService(db: Db) {
         .select()
         .from(executionWorkspaces)
         .where(and(...conditions))
-        .orderBy(desc(executionWorkspaces.lastUsedAt), desc(executionWorkspaces.createdAt));
-      return rows.map(toExecutionWorkspace);
+        .orderBy(desc(executionWorkspaces.lastUsedAt), desc(executionWorkspaces.createdAt))
+        .limit(normalizeExecutionWorkspaceListLimit(filters?.limit));
+      return rows.map(toExecutionWorkspaceRecord);
     },
 
     getById: async (id: string) => {
@@ -72,7 +101,7 @@ export function executionWorkspaceService(db: Db) {
         .from(executionWorkspaces)
         .where(eq(executionWorkspaces.id, id))
         .then((rows) => rows[0] ?? null);
-      return row ? toExecutionWorkspace(row) : null;
+      return row ? toExecutionWorkspaceRecord(row) : null;
     },
 
     create: async (data: typeof executionWorkspaces.$inferInsert) => {
@@ -81,7 +110,7 @@ export function executionWorkspaceService(db: Db) {
         .values(data)
         .returning()
         .then((rows) => rows[0] ?? null);
-      return row ? toExecutionWorkspace(row) : null;
+      return row ? toExecutionWorkspaceRecord(row) : null;
     },
 
     update: async (id: string, patch: Partial<typeof executionWorkspaces.$inferInsert>) => {
@@ -91,7 +120,7 @@ export function executionWorkspaceService(db: Db) {
         .where(eq(executionWorkspaces.id, id))
         .returning()
         .then((rows) => rows[0] ?? null);
-      return row ? toExecutionWorkspace(row) : null;
+      return row ? toExecutionWorkspaceRecord(row) : null;
     },
   };
 }

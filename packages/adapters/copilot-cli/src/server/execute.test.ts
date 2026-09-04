@@ -4,12 +4,12 @@ const {
   ensureAbsoluteDirectoryMock,
   ensureCommandResolvableMock,
   readPaperclipSkillMarkdownMock,
-  runChildProcessMock,
+  runLocalAdapterChildProcessMock,
 } = vi.hoisted(() => ({
   ensureAbsoluteDirectoryMock: vi.fn(async () => {}),
   ensureCommandResolvableMock: vi.fn(async () => {}),
   readPaperclipSkillMarkdownMock: vi.fn(async () => null),
-  runChildProcessMock: vi.fn(),
+  runLocalAdapterChildProcessMock: vi.fn(),
 }));
 
 vi.mock("@paperclipai/adapter-utils/server-utils", async () => {
@@ -22,7 +22,7 @@ vi.mock("@paperclipai/adapter-utils/server-utils", async () => {
     ensureAbsoluteDirectory: ensureAbsoluteDirectoryMock,
     ensureCommandResolvable: ensureCommandResolvableMock,
     readPaperclipSkillMarkdown: readPaperclipSkillMarkdownMock,
-    runChildProcess: runChildProcessMock,
+    runLocalAdapterChildProcess: runLocalAdapterChildProcessMock,
   };
 });
 
@@ -33,11 +33,11 @@ describe("copilot execute", () => {
     ensureAbsoluteDirectoryMock.mockClear();
     ensureCommandResolvableMock.mockClear();
     readPaperclipSkillMarkdownMock.mockClear();
-    runChildProcessMock.mockReset();
+    runLocalAdapterChildProcessMock.mockReset();
   });
 
   it("does not treat a successful final result as auth-required just because raw jsonl mentions copilot login", async () => {
-    runChildProcessMock.mockResolvedValue({
+    runLocalAdapterChildProcessMock.mockResolvedValue({
       exitCode: 0,
       signal: null,
       timedOut: false,
@@ -112,8 +112,59 @@ describe("copilot execute", () => {
     });
   });
 
+  it("keeps the Paperclip run JWT out of Copilot provider-auth variables", async () => {
+    runLocalAdapterChildProcessMock.mockResolvedValue({
+      exitCode: 0,
+      signal: null,
+      timedOut: false,
+      stdout: [
+        JSON.stringify({
+          type: "result",
+          timestamp: "2026-09-05T00:00:00.000Z",
+          sessionId: "session-auth-boundary",
+          exitCode: 0,
+          usage: { premiumRequests: 0 },
+        }),
+      ].join("\n"),
+      stderr: "",
+    });
+
+    const authToken = "paperclip-run-jwt-not-a-github-token";
+    await execute({
+      runId: "run-auth-boundary",
+      agent: {
+        id: "agent-auth-boundary",
+        name: "Copilot Auth Boundary",
+        companyId: "company-123",
+        adapterType: "copilot_cli",
+      },
+      runtime: {
+        sessionId: null,
+        sessionDisplayId: null,
+        sessionParams: null,
+      },
+      config: {
+        command: "copilot",
+        cwd: "/tmp/paperclip-copilot-test",
+        allowAll: false,
+        skillsEnabled: false,
+      },
+      context: {},
+      authToken,
+      onLog: async () => {},
+      onMeta: async () => {},
+      onSpawn: async () => {},
+    } as never);
+
+    const options = runLocalAdapterChildProcessMock.mock.calls[0]?.[4];
+    expect(options?.env.PAPERCLIP_API_KEY).toBe(authToken);
+    expect(options?.env.COPILOT_GITHUB_TOKEN).toBeUndefined();
+    expect(options?.env.GH_TOKEN).toBeUndefined();
+    expect(options?.env.GITHUB_TOKEN).toBeUndefined();
+  });
+
   it("does not pass --no-auto-update when launching Copilot", async () => {
-    runChildProcessMock.mockResolvedValue({
+    runLocalAdapterChildProcessMock.mockResolvedValue({
       exitCode: 0,
       signal: null,
       timedOut: false,
@@ -175,8 +226,8 @@ describe("copilot execute", () => {
       onSpawn: async () => {},
     } as never);
 
-    expect(runChildProcessMock).toHaveBeenCalledTimes(1);
-    const args = runChildProcessMock.mock.calls[0]?.[2] ?? [];
+    expect(runLocalAdapterChildProcessMock).toHaveBeenCalledTimes(1);
+    const args = runLocalAdapterChildProcessMock.mock.calls[0]?.[3] ?? [];
     expect(args).toContain("--model");
     expect(args).toContain("gpt-5.5");
     expect(args).not.toContain("--no-auto-update");
@@ -189,7 +240,7 @@ describe("copilot execute", () => {
   });
 
   it("retries without session when resume fails before a result event is emitted", async () => {
-    runChildProcessMock
+    runLocalAdapterChildProcessMock
       .mockResolvedValueOnce({
         exitCode: 1,
         signal: null,
@@ -258,9 +309,9 @@ describe("copilot execute", () => {
       onSpawn: async () => {},
     } as never);
 
-    expect(runChildProcessMock).toHaveBeenCalledTimes(2);
-    expect(runChildProcessMock.mock.calls[0]?.[2]).toContain("--resume=stale-thread");
-    expect(runChildProcessMock.mock.calls[1]?.[2]).not.toContain("--resume=stale-thread");
+    expect(runLocalAdapterChildProcessMock).toHaveBeenCalledTimes(2);
+    expect(runLocalAdapterChildProcessMock.mock.calls[0]?.[3]).toContain("--resume=stale-thread");
+    expect(runLocalAdapterChildProcessMock.mock.calls[1]?.[3]).not.toContain("--resume=stale-thread");
     expect(result.exitCode).toBe(0);
     expect(result.errorMessage).toBeNull();
     expect(result.sessionId).toBe("fresh-session-123");

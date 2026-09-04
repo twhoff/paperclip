@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import type { AdapterModel } from "@paperclipai/adapter-utils";
+import { stripLocalAdapterProviderEnv } from "@paperclipai/adapter-utils/server-utils";
 import { models as staticModels } from "../index.js";
 
 const COPILOT_MODELS_TIMEOUT_MS = 45_000;
@@ -93,6 +94,7 @@ export async function listCopilotCliModels(command = "copilot"): Promise<Adapter
       encoding: "utf8",
       timeout: COPILOT_MODELS_TIMEOUT_MS,
       maxBuffer: MAX_BUFFER_BYTES,
+      env: stripLocalAdapterProviderEnv(process.env),
     });
 
     const stdout = typeof result.stdout === "string" ? result.stdout : "";

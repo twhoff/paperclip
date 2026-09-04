@@ -119,13 +119,31 @@ export function extractClaudeLoginUrl(text: string): string | null {
   return match[0]?.replace(/[\])}.!,?;:'\"]+$/g, "") ?? null;
 }
 
+export function isClaudeFailureResult(
+  parsed: Record<string, unknown> | null | undefined,
+): boolean {
+  if (!parsed) return false;
+  const subtype = asString(parsed.subtype, "").trim().toLowerCase();
+  return parsed.is_error === true || subtype === "error" || subtype.startsWith("error_");
+}
+
 export function detectClaudeLoginRequired(input: {
   parsed: Record<string, unknown> | null;
   stdout: string;
   stderr: string;
+  processFailed?: boolean;
 }): { requiresLogin: boolean; loginUrl: string | null } {
+  const parsedSignalsFailure = isClaudeFailureResult(input.parsed);
   const resultText = asString(input.parsed?.result, "").trim();
-  const messages = [resultText, ...extractClaudeErrorMessages(input.parsed ?? {}), input.stdout, input.stderr]
+  const messages = [
+    ...(parsedSignalsFailure && resultText ? [resultText] : []),
+    ...(parsedSignalsFailure ? extractClaudeErrorMessages(input.parsed ?? {}) : []),
+    ...(!input.parsed
+      ? [input.stdout, input.stderr]
+      : parsedSignalsFailure || input.processFailed === true
+        ? [input.stderr]
+        : []),
+  ]
     .join("\n")
     .split(/\r?\n/)
     .map((line) => line.trim())
@@ -134,7 +152,7 @@ export function detectClaudeLoginRequired(input: {
   const requiresLogin = messages.some((line) => CLAUDE_AUTH_REQUIRED_RE.test(line));
   return {
     requiresLogin,
-    loginUrl: extractClaudeLoginUrl([input.stdout, input.stderr].join("\n")),
+    loginUrl: extractClaudeLoginUrl(messages.join("\n")),
   };
 }
 

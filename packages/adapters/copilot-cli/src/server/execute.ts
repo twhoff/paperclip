@@ -11,12 +11,13 @@ import {
   asStringArray,
   parseObject,
   buildPaperclipEnv,
+  finalizeLocalAdapterEnv,
   redactEnvForLogs,
   ensureAbsoluteDirectory,
   ensureCommandResolvable,
   ensurePathInEnv,
   renderTemplate,
-  runChildProcess,
+  runLocalAdapterChildProcess,
   readPaperclipRuntimeSkillEntries,
   resolvePaperclipDesiredSkillNames
 } from '@paperclipai/adapter-utils/server-utils'
@@ -233,10 +234,7 @@ async function buildCopilotRuntimeConfig(
   for (const [key, value] of Object.entries(envConfig)) {
     if (typeof value === 'string') env[key] = value
   }
-
-  if (authToken && !env.COPILOT_GITHUB_TOKEN && !env.GH_TOKEN && !env.GITHUB_TOKEN) {
-    env.COPILOT_GITHUB_TOKEN = authToken
-  }
+  finalizeLocalAdapterEnv(agent, env, envConfig)
 
   if (!hasExplicitApiKey && authToken) {
     env.PAPERCLIP_API_KEY = authToken
@@ -549,7 +547,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
     const interceptor = createJsonlLogInterceptor(onLog)
 
-    const proc = await runChildProcess(runId, command, args, {
+    const proc = await runLocalAdapterChildProcess(agent, runId, command, args, {
       cwd,
       env,
       timeoutSec,

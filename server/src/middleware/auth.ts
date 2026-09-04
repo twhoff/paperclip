@@ -2,14 +2,31 @@ import { createHash } from "node:crypto";
 import type { Request, RequestHandler } from "express";
 import { and, eq, isNull } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { agentApiKeys, agents, companyMemberships, instanceUserRoles } from "@paperclipai/db";
+import {
+  agentApiKeys,
+  agents,
+  companyMemberships,
+  heartbeatRuns,
+  instanceUserRoles,
+} from "@paperclipai/db";
 import { verifyLocalAgentJwt } from "../agent-auth-jwt.js";
 import type { DeploymentMode } from "@paperclipai/shared";
 import type { BetterAuthSessionResult } from "../auth/better-auth.js";
-import { logger } from "./logger.js";
+import {
+  redactThrownDiagnosticError,
+} from "../log-redaction.js";
+import { logger, requestLogUrl } from "./logger.js";
 
 function hashToken(token: string) {
   return createHash("sha256").update(token).digest("hex");
+}
+
+function sanitizeAuthSessionError(error: unknown) {
+  return redactThrownDiagnosticError(
+    error,
+    { enabled: false },
+    { fallbackMessage: "Auth session resolution failed" },
+  );
 }
 
 interface ActorMiddlewareOptions {
@@ -34,7 +51,7 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
           session = await opts.resolveSession(req);
         } catch (err) {
           logger.warn(
-            { err, method: req.method, url: req.originalUrl },
+            { err: sanitizeAuthSessionError(err), method: req.method, url: requestLogUrl(req) },
             "Failed to resolve auth session from request headers",
           );
         }
@@ -125,12 +142,45 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
         return;
       }
 
+      if (runIdHeader && runIdHeader !== claims.run_id) {
+        next();
+        return;
+      }
+
+      const runRecord = await db
+        .select({
+          id: heartbeatRuns.id,
+          agentId: heartbeatRuns.agentId,
+          companyId: heartbeatRuns.companyId,
+          status: heartbeatRuns.status,
+        })
+        .from(heartbeatRuns)
+        .where(
+          and(
+            eq(heartbeatRuns.id, claims.run_id),
+            eq(heartbeatRuns.agentId, claims.sub),
+            eq(heartbeatRuns.companyId, claims.company_id),
+          ),
+        )
+        .then((rows) => rows[0] ?? null);
+
+      if (
+        !runRecord ||
+        runRecord.id !== claims.run_id ||
+        runRecord.agentId !== claims.sub ||
+        runRecord.companyId !== claims.company_id ||
+        (runRecord.status !== "queued" && runRecord.status !== "running")
+      ) {
+        next();
+        return;
+      }
+
       req.actor = {
         type: "agent",
         agentId: claims.sub,
         companyId: claims.company_id,
         keyId: undefined,
-        runId: runIdHeader || claims.run_id || undefined,
+        runId: claims.run_id,
         source: "agent_jwt",
       };
       next();

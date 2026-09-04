@@ -9,7 +9,7 @@ import {
   ensureCommandResolvable,
   ensurePathInEnv,
   parseObject,
-  runChildProcess,
+  runProviderProbeChildProcess,
 } from "@paperclipai/adapter-utils/server-utils";
 
 function summarizeStatus(checks: AdapterEnvironmentCheck[]): AdapterEnvironmentTestResult["status"] {
@@ -98,7 +98,7 @@ export async function testEnvironment(
   );
   if (canRunProbe) {
     try {
-      const probe = await runChildProcess(
+      const probe = await runProviderProbeChildProcess(
         `oz-envtest-${Date.now()}`,
         command,
         ["model", "list", "--output-format", "json"],
@@ -107,6 +107,7 @@ export async function testEnvironment(
           env,
           timeoutSec: 15,
           graceSec: 5,
+          signal: ctx.signal,
           onLog: async () => {},
         },
       );

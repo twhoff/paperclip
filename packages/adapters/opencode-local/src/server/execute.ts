@@ -319,7 +319,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
     const proc = await runLocalAdapterChildProcess(agent, runId, command, args, {
       cwd,
-      env: runtimeEnv,
+      env,
       stdin: prompt,
       timeoutSec,
       graceSec,

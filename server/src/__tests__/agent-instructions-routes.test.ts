@@ -61,7 +61,7 @@ vi.mock("../adapters/index.js", () => ({
   listAdapterModels: vi.fn(),
 }));
 
-function createApp() {
+function createApp(onError?: (error: unknown) => void) {
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => {
@@ -75,6 +75,12 @@ function createApp() {
     next();
   });
   app.use("/api", agentRoutes({} as any));
+  if (onError) {
+    app.use((error: unknown, _req: express.Request, _res: express.Response, next: express.NextFunction) => {
+      onError(error);
+      next(error);
+    });
+  }
   app.use(errorHandler);
   return app;
 }
@@ -105,6 +111,10 @@ describe("agent instructions bundle routes", () => {
       ...makeAgent(),
       adapterConfig: patch.adapterConfig ?? {},
     }));
+    mockSecretService.resolveAdapterConfigForRuntime.mockResolvedValue({
+      config: { env: {} },
+      secretKeys: new Set<string>(),
+    });
     mockAgentInstructionsService.getBundle.mockResolvedValue({
       agentId: "11111111-1111-4111-8111-111111111111",
       companyId: "company-1",
@@ -203,5 +213,116 @@ describe("agent instructions bundle routes", () => {
       }),
       expect.any(Object),
     );
+  });
+
+  it("redacts resolved benign-key secrets from bundle, file, and mutation responses", async () => {
+    const resolvedValue = "/private/resolved-instructions-secret";
+    mockAgentService.getById.mockResolvedValue({
+      ...makeAgent(),
+      adapterConfig: {
+        env: {
+          RUNTIME_DISPLAY_VALUE: { type: "secret_ref", secretId: "secret-display" },
+        },
+      },
+    });
+    mockSecretService.resolveAdapterConfigForRuntime.mockResolvedValue({
+      config: { env: { RUNTIME_DISPLAY_VALUE: resolvedValue } },
+      secretKeys: new Set(["RUNTIME_DISPLAY_VALUE"]),
+    });
+    mockAgentInstructionsService.getBundle.mockResolvedValueOnce({
+      agentId: "11111111-1111-4111-8111-111111111111",
+      companyId: "company-1",
+      mode: "managed",
+      rootPath: `${resolvedValue}/bundle`,
+      managedRootPath: `${resolvedValue}/managed`,
+      entryFile: "AGENTS.md",
+      resolvedEntryPath: `${resolvedValue}/bundle/AGENTS.md`,
+      editable: true,
+      warnings: [`Unable to inspect ${resolvedValue}`],
+      files: [],
+    });
+    mockAgentInstructionsService.readFile.mockResolvedValueOnce({
+      path: "AGENTS.md",
+      size: resolvedValue.length,
+      language: "markdown",
+      markdown: true,
+      isEntryFile: true,
+      editable: true,
+      deprecated: false,
+      virtual: false,
+      content: `Use ${resolvedValue} for runtime setup`,
+    });
+    mockAgentInstructionsService.writeFile.mockResolvedValueOnce({
+      bundle: null,
+      file: {
+        path: `${resolvedValue}/AGENTS.md`,
+        size: resolvedValue.length,
+        language: "markdown",
+        markdown: true,
+        isEntryFile: true,
+        editable: true,
+        deprecated: false,
+        virtual: false,
+        content: `Saved ${resolvedValue}`,
+      },
+      adapterConfig: {},
+    });
+
+    const [bundleResponse, fileResponse, writeResponse] = await Promise.all([
+      request(createApp())
+        .get("/api/agents/11111111-1111-4111-8111-111111111111/instructions-bundle?companyId=company-1"),
+      request(createApp())
+        .get("/api/agents/11111111-1111-4111-8111-111111111111/instructions-bundle/file?companyId=company-1&path=AGENTS.md"),
+      request(createApp())
+        .put("/api/agents/11111111-1111-4111-8111-111111111111/instructions-bundle/file?companyId=company-1")
+        .send({ path: "AGENTS.md", content: "benign editable content" }),
+    ]);
+
+    for (const response of [bundleResponse, fileResponse, writeResponse]) {
+      expect(response.status, JSON.stringify(response.body)).toBe(200);
+      expect(JSON.stringify(response.body)).not.toContain(resolvedValue);
+      expect(JSON.stringify(response.body)).toContain("***REDACTED***");
+    }
+    expect(fileResponse.body.language).toBe("markdown");
+    expect(writeResponse.body.isEntryFile).toBe(true);
+    expect(mockAgentInstructionsService.writeFile).toHaveBeenCalledWith(
+      expect.any(Object),
+      "AGENTS.md",
+      "benign editable content",
+      expect.any(Object),
+    );
+  });
+
+  it("redacts resolved benign-key secrets from thrown instruction errors", async () => {
+    const resolvedValue = "/private/resolved-instructions-error-secret";
+    let routedError: unknown = null;
+    mockAgentService.getById.mockResolvedValue({
+      ...makeAgent(),
+      adapterConfig: {
+        env: {
+          RUNTIME_DISPLAY_VALUE: { type: "secret_ref", secretId: "secret-display" },
+        },
+      },
+    });
+    mockSecretService.resolveAdapterConfigForRuntime.mockResolvedValue({
+      config: { env: { RUNTIME_DISPLAY_VALUE: resolvedValue } },
+      secretKeys: new Set(["RUNTIME_DISPLAY_VALUE"]),
+    });
+    mockAgentInstructionsService.readFile.mockRejectedValueOnce(
+      new Error(`Unable to open ${resolvedValue}/AGENTS.md`),
+    );
+
+    const response = await request(createApp((error) => {
+      routedError = error;
+    })).get(
+      "/api/agents/11111111-1111-4111-8111-111111111111/instructions-bundle/file?companyId=company-1&path=AGENTS.md",
+    );
+
+    expect(response.status).toBe(500);
+    const errorText = routedError instanceof Error
+      ? `${routedError.message}\n${routedError.stack ?? ""}`
+      : String(routedError);
+    expect(errorText).not.toContain(resolvedValue);
+    expect(errorText).toContain("***REDACTED***");
   });
 });

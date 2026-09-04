@@ -2,10 +2,15 @@ import { Router } from "express";
 import { z } from "zod";
 import type { Db } from "@paperclipai/db";
 import { validate } from "../middleware/validate.js";
-import { activityService } from "../services/activity.js";
+import { activityService, normalizeIssueActivityLimit } from "../services/activity.js";
 import { assertBoard, assertCompanyAccess } from "./authz.js";
-import { issueService } from "../services/index.js";
-import { sanitizeRecord } from "../redaction.js";
+import { heartbeatService, issueService } from "../services/index.js";
+import { redactStatelessDiagnosticResponseValue } from "../log-redaction.js";
+import {
+  sanitizeActivityRecordForOutput,
+  sanitizeActivityRecordForPersistence,
+} from "../services/activity-log.js";
+import { instanceSettingsService } from "../services/instance-settings.js";
 
 const createActivitySchema = z.object({
   actorType: z.enum(["agent", "user", "system"]).optional().default("system"),
@@ -21,6 +26,12 @@ export function activityRoutes(db: Db) {
   const router = Router();
   const svc = activityService(db);
   const issueSvc = issueService(db);
+  const heartbeat = heartbeatService(db);
+  const instanceSettings = instanceSettingsService(db);
+
+  async function currentUserRedactionOptions() {
+    return { enabled: (await instanceSettings.getGeneral()).censorUsernameInLogs };
+  }
 
   async function resolveIssueByRef(rawId: string) {
     if (/^[A-Z]+-\d+$/i.test(rawId)) {
@@ -46,18 +57,29 @@ export function activityRoutes(db: Db) {
       offset,
     };
     const result = await svc.list(filters);
-    res.json(result);
+    const redactionOptions = await currentUserRedactionOptions();
+    res.json(
+      result.map((event) =>
+        sanitizeActivityRecordForOutput(event, redactionOptions),
+      ),
+    );
   });
 
   router.post("/companies/:companyId/activity", validate(createActivitySchema), async (req, res) => {
     assertBoard(req);
     const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const sanitizedBody = sanitizeActivityRecordForPersistence(
+      req.body,
+      await currentUserRedactionOptions(),
+    );
     const event = await svc.create({
       companyId,
-      ...req.body,
-      details: req.body.details ? sanitizeRecord(req.body.details) : null,
+      ...sanitizedBody,
     });
-    res.status(201).json(event);
+    res.status(201).json(
+      sanitizeActivityRecordForOutput(event, await currentUserRedactionOptions()),
+    );
   });
 
   router.get("/issues/:id/activity", async (req, res) => {
@@ -68,8 +90,15 @@ export function activityRoutes(db: Db) {
       return;
     }
     assertCompanyAccess(req, issue.companyId);
-    const result = await svc.forIssue(issue.id);
-    res.json(result);
+    const requestedLimit =
+      typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
+    const result = await svc.forIssue(issue.id, normalizeIssueActivityLimit(requestedLimit));
+    const redactionOptions = await currentUserRedactionOptions();
+    res.json(
+      result.map((event) =>
+        sanitizeActivityRecordForOutput(event, redactionOptions),
+      ),
+    );
   });
 
   router.get("/issues/:id/runs", async (req, res) => {
@@ -81,11 +110,20 @@ export function activityRoutes(db: Db) {
     }
     assertCompanyAccess(req, issue.companyId);
     const result = await svc.runsForIssue(issue.companyId, issue.id);
-    res.json(result);
+    res.json(redactStatelessDiagnosticResponseValue(
+      result,
+      await currentUserRedactionOptions(),
+    ));
   });
 
   router.get("/heartbeat-runs/:runId/issues", async (req, res) => {
     const runId = req.params.runId as string;
+    const run = await heartbeat.getRun(runId);
+    if (!run) {
+      res.status(404).json({ error: "Heartbeat run not found" });
+      return;
+    }
+    assertCompanyAccess(req, run.companyId);
     const result = await svc.issuesForRun(runId);
     res.json(result);
   });

@@ -1,9 +1,19 @@
 import type { Db } from "@paperclipai/db";
 import { adapterStatus, agents } from "@paperclipai/db";
 import { and, desc, eq, inArray, isNotNull, lte, sql } from "drizzle-orm";
-import type { AdapterEnvironmentTestResult } from "@paperclipai/adapter-utils";
+import type {
+  AdapterEnvironmentCheck,
+  AdapterEnvironmentTestResult,
+} from "@paperclipai/adapter-utils";
+import { normalizeSensitiveValues } from "@paperclipai/adapter-utils/server-utils";
 import { findServerAdapter } from "../adapters/index.js";
 import { logger } from "../middleware/logger.js";
+import {
+  redactDiagnosticResponseValue,
+  SECRET_REDACTION_TOKEN,
+} from "../log-redaction.js";
+import { collectSensitivePayloadValues } from "../redaction.js";
+import { secretService } from "./secrets.js";
 
 /**
  * Thresholds for adapter status transitions based on consecutive failures.
@@ -15,6 +25,102 @@ const OFFLINE_THRESHOLD = 3;
 
 /** Backoff tiers for next_check_at when offline (minutes). */
 const BACKOFF_TIERS_MIN = [5, 15, 30, 60];
+const ADAPTER_PROBE_TIMEOUT_MS = 30_000;
+const MAX_ADAPTER_PROBE_CHECKS = 128;
+const MAX_ADAPTER_PROBE_FIELD_LENGTH = 2_000;
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  try {
+    const prototype = Object.getPrototypeOf(value);
+    return prototype === Object.prototype || prototype === null;
+  } catch {
+    return false;
+  }
+}
+
+function safeProbeErrorMessage(error: unknown): string {
+  try {
+    if (error instanceof Error && typeof error.message === "string" && error.message.length > 0) {
+      return error.message.slice(0, MAX_ADAPTER_PROBE_FIELD_LENGTH);
+    }
+  } catch {
+    // Hostile values are never stringified into persistence or logs.
+  }
+  return "adapter probe failed";
+}
+
+function failedProbeResult(
+  adapterType: string,
+  testedAt: string,
+  message: string,
+): AdapterEnvironmentTestResult {
+  return {
+    adapterType,
+    status: "fail",
+    checks: [{ code: "probe_error", level: "error", message }],
+    testedAt,
+  };
+}
+
+function normalizeProjectedProbeResult(
+  value: unknown,
+  adapterType: string,
+  testedAt: string,
+): AdapterEnvironmentTestResult {
+  if (!isPlainRecord(value) || !Array.isArray(value.checks)) {
+    return failedProbeResult(adapterType, testedAt, "adapter probe returned invalid diagnostics");
+  }
+  if (
+    value.checks.length > MAX_ADAPTER_PROBE_CHECKS ||
+    (value.status !== "pass" && value.status !== "warn" && value.status !== "fail")
+  ) {
+    return failedProbeResult(adapterType, testedAt, "adapter probe returned invalid diagnostics");
+  }
+  const checks: AdapterEnvironmentCheck[] = [];
+  for (const rawCheck of value.checks) {
+    if (!isPlainRecord(rawCheck)) {
+      return failedProbeResult(adapterType, testedAt, "adapter probe returned invalid diagnostics");
+    }
+    const { code, level, message, detail, hint } = rawCheck;
+    if (
+      typeof code !== "string" ||
+      (level !== "info" && level !== "warn" && level !== "error") ||
+      typeof message !== "string" ||
+      (detail !== undefined && detail !== null && typeof detail !== "string") ||
+      (hint !== undefined && hint !== null && typeof hint !== "string")
+    ) {
+      return failedProbeResult(adapterType, testedAt, "adapter probe returned invalid diagnostics");
+    }
+    checks.push({
+      code: code.slice(0, MAX_ADAPTER_PROBE_FIELD_LENGTH),
+      level,
+      message: message.slice(0, MAX_ADAPTER_PROBE_FIELD_LENGTH),
+      ...(detail === undefined ? {} : {
+        detail: typeof detail === "string"
+          ? detail.slice(0, MAX_ADAPTER_PROBE_FIELD_LENGTH)
+          : null,
+      }),
+      ...(hint === undefined ? {} : {
+        hint: typeof hint === "string"
+          ? hint.slice(0, MAX_ADAPTER_PROBE_FIELD_LENGTH)
+          : null,
+      }),
+    });
+  }
+  return {
+    adapterType,
+    status: value.status,
+    checks,
+    testedAt,
+  };
+}
+
+function safeAdapterTypeForLog(adapterType: unknown): string {
+  return typeof adapterType === "string" && /^[a-z0-9_-]{1,128}$/i.test(adapterType)
+    ? adapterType
+    : "unknown";
+}
 
 function nextBackoffMinutes(consecutiveFailures: number): number {
   const idx = Math.min(consecutiveFailures - OFFLINE_THRESHOLD, BACKOFF_TIERS_MIN.length - 1);
@@ -148,6 +254,8 @@ function isAdapterLevelFailure(errorCode: string | null | undefined): boolean {
 }
 
 export function adapterStatusService(db: Db) {
+  const secretsSvc = secretService(db);
+  let scheduledProbeFlight: Promise<{ probed: string[]; failed: string[] }> | null = null;
   /**
    * Update adapter status after a heartbeat run completes.
    * Called from the heartbeat service with the run outcome.
@@ -410,30 +518,97 @@ export function adapterStatusService(db: Db) {
         return null;
       }
 
-      const config = (representativeAgent.adapterConfig ?? {}) as Record<string, unknown>;
+      const persistedConfig = (representativeAgent.adapterConfig ?? {}) as Record<string, unknown>;
       const companyId = representativeAgent.companyId;
       const now = new Date();
+      let config = persistedConfig;
+      let resolvedSecrets: ReturnType<typeof normalizeSensitiveValues> = {
+        values: [],
+        overflow: false,
+      };
+      let phase: "resolve" | "probe" = "resolve";
 
       let result: AdapterEnvironmentTestResult;
       try {
-        result = await Promise.race([
-          adapter.testEnvironment({
-            companyId,
-            adapterType,
-            config,
-          }),
-          new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error("adapter probe timed out after 30s")), 30_000),
-          ),
-        ]);
+        const resolved = await secretsSvc.resolveAdapterConfigForRuntime(
+          companyId,
+          persistedConfig,
+        );
+        config = resolved.config;
+        const resolvedEnv = typeof config.env === "object" && config.env !== null && !Array.isArray(config.env)
+          ? config.env as Record<string, unknown>
+          : {};
+        resolvedSecrets = normalizeSensitiveValues((function* () {
+          for (const key of resolved.secretKeys) {
+            const value = resolvedEnv[key];
+            if (typeof value === "string" && value.length > 0) yield value;
+          }
+        })());
+        phase = "probe";
+        const controller = new AbortController();
+        let timeout: ReturnType<typeof setTimeout> | null = null;
+        try {
+          result = await Promise.race([
+            adapter.testEnvironment({
+              companyId,
+              adapterType,
+              config,
+              signal: controller.signal,
+            }),
+            new Promise<never>((_, reject) => {
+              timeout = setTimeout(() => {
+                controller.abort();
+                reject(new Error("adapter probe timed out after 30s"));
+              }, ADAPTER_PROBE_TIMEOUT_MS);
+            }),
+          ]);
+        } finally {
+          if (timeout) clearTimeout(timeout);
+        }
       } catch (err) {
-        // testEnvironment threw or timed out — record as a probe failure.
-        const message = err instanceof Error ? err.message : String(err);
-        result = {
+        // Configuration resolution can fail while decrypting secrets. Do not
+        // preserve that raw diagnostic because the resolved value is unavailable
+        // to the redactor. Probe failures are sanitized below with resolved values.
+        const message = phase === "resolve"
+          ? "adapter configuration could not be resolved"
+          : safeProbeErrorMessage(err);
+        result = failedProbeResult(adapterType, now.toISOString(), message);
+      }
+      const configSecrets = collectSensitivePayloadValues(config);
+      const mergedSecrets = normalizeSensitiveValues((function* () {
+        yield* configSecrets.values;
+        yield* resolvedSecrets.values;
+      })());
+      const normalizedResult = normalizeProjectedProbeResult(
+        result,
+        adapterType,
+        now.toISOString(),
+      );
+      const secretsOverflow =
+        configSecrets.overflow || resolvedSecrets.overflow || mergedSecrets.overflow;
+      if (secretsOverflow) {
+        result = failedProbeResult(
           adapterType,
-          status: "fail",
-          checks: [{ code: "probe_error", level: "error", message }],
-          testedAt: now.toISOString(),
+          now.toISOString(),
+          SECRET_REDACTION_TOKEN,
+        );
+      } else {
+        const projectedResult = redactDiagnosticResponseValue(normalizedResult, {
+          enabled: false,
+          secretValues: mergedSecrets.values,
+        });
+        result = {
+          ...projectedResult,
+          // These fields have already been reduced to trusted enums/identifiers.
+          // Restore them after diagnostic redaction so a secret beginning with
+          // "p", "w", "f", or "e" cannot corrupt the probe result shape.
+          adapterType: normalizedResult.adapterType,
+          status: normalizedResult.status,
+          testedAt: normalizedResult.testedAt,
+          checks: projectedResult.checks.map((check, index) => ({
+            ...check,
+            level: normalizedResult.checks[index]!.level,
+          })),
         };
       }
 
@@ -568,7 +743,7 @@ export function adapterStatusService(db: Db) {
      *
      * Probes run sequentially to avoid resource contention on the local machine.
      */
-    async function runScheduledProbes(): Promise<{ probed: string[]; failed: string[] }> {
+    async function runScheduledProbesOnce(): Promise<{ probed: string[]; failed: string[] }> {
       const probingTypes = await listProbing();
       const probed: string[] = [];
       const failed: string[] = [];
@@ -601,12 +776,37 @@ export function adapterStatusService(db: Db) {
             failed.push(adapterType);
           }
         } catch (err) {
-          logger.warn({ err, adapterType }, "adapter health probe threw unexpectedly");
+          logger.warn(
+            { adapterType: safeAdapterTypeForLog(adapterType) },
+            "adapter health probe threw unexpectedly",
+          );
           failed.push(adapterType);
         }
       }
 
       return { probed, failed };
+    }
+
+    function startScheduledProbeFlight(
+      task: () => Promise<{ probed: string[]; failed: string[] }>,
+    ): Promise<{ probed: string[]; failed: string[] }> {
+      if (scheduledProbeFlight) return scheduledProbeFlight;
+      const flight = task().finally(() => {
+        if (scheduledProbeFlight === flight) scheduledProbeFlight = null;
+      });
+      scheduledProbeFlight = flight;
+      return flight;
+    }
+
+    function runScheduledProbes(): Promise<{ probed: string[]; failed: string[] }> {
+      return startScheduledProbeFlight(runScheduledProbesOnce);
+    }
+
+    function runScheduledProbeCycle(): Promise<{ probed: string[]; failed: string[] }> {
+      return startScheduledProbeFlight(async () => {
+        await markExpiredForProbing();
+        return runScheduledProbesOnce();
+      });
     }
 
     return {
@@ -618,5 +818,6 @@ export function adapterStatusService(db: Db) {
       listProbing,
       probeAdapterHealth,
       runScheduledProbes,
+      runScheduledProbeCycle,
   };
 }

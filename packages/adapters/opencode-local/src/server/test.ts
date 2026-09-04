@@ -10,7 +10,7 @@ import {
   ensureAbsoluteDirectory,
   ensureCommandResolvable,
   ensurePathInEnv,
-  runChildProcess,
+  runProviderProbeChildProcess,
 } from "@paperclipai/adapter-utils/server-utils";
 import { discoverOpenCodeModels, ensureOpenCodeModelConfiguredAndAvailable } from "./models.js";
 import { parseOpenCodeJsonl } from "./parse.js";
@@ -126,7 +126,12 @@ export async function testEnvironment(
 
   if (canRunProbe && configuredModel) {
     try {
-      const discovered = await discoverOpenCodeModels({ command, cwd, env: runtimeEnv });
+      const discovered = await discoverOpenCodeModels({
+        command,
+        cwd,
+        env: runtimeEnv,
+        signal: ctx.signal,
+      });
       if (discovered.length > 0) {
         checks.push({
           code: "opencode_models_discovered",
@@ -162,7 +167,12 @@ export async function testEnvironment(
     }
   } else if (canRunProbe && !configuredModel) {
     try {
-      const discovered = await discoverOpenCodeModels({ command, cwd, env: runtimeEnv });
+      const discovered = await discoverOpenCodeModels({
+        command,
+        cwd,
+        env: runtimeEnv,
+        signal: ctx.signal,
+      });
       if (discovered.length > 0) {
         checks.push({
           code: "opencode_models_discovered",
@@ -201,6 +211,7 @@ export async function testEnvironment(
         command,
         cwd,
         env: runtimeEnv,
+        signal: ctx.signal,
       });
       checks.push({
         code: "opencode_model_configured",
@@ -233,7 +244,7 @@ export async function testEnvironment(
     if (extraArgs.length > 0) args.push(...extraArgs);
 
     try {
-      const probe = await runChildProcess(
+      const probe = await runProviderProbeChildProcess(
         `opencode-envtest-${Date.now()}-${Math.random().toString(16).slice(2)}`,
         command,
         args,
@@ -242,6 +253,7 @@ export async function testEnvironment(
           env: runtimeEnv,
           timeoutSec: 60,
           graceSec: 5,
+          signal: ctx.signal,
           stdin: "Respond with hello.",
           onLog: async () => {},
         },

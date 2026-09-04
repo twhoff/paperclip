@@ -33,9 +33,17 @@ export interface WorkspaceOperationLogStore {
     handle: WorkspaceOperationLogHandle,
     event: { stream: "stdout" | "stderr" | "system"; chunk: string; ts: string },
   ): Promise<void>;
+  discard(handle: WorkspaceOperationLogHandle): Promise<void>;
   finalize(handle: WorkspaceOperationLogHandle): Promise<WorkspaceOperationLogFinalizeSummary>;
   read(handle: WorkspaceOperationLogHandle, opts?: WorkspaceOperationLogReadOptions): Promise<WorkspaceOperationLogReadResult>;
 }
+
+export interface WorkspaceOperationLogStoreOptions {
+  basePath?: string;
+  maxOperationBytes?: number;
+}
+
+const DEFAULT_MAX_OPERATION_BYTES = 50_000_000;
 
 function safeSegments(...segments: string[]) {
   return segments.map((segment) => segment.replace(/[^a-zA-Z0-9._-]/g, "_"));
@@ -50,7 +58,34 @@ function resolveWithin(basePath: string, relativePath: string) {
   return resolved;
 }
 
-function createLocalFileWorkspaceOperationLogStore(basePath: string): WorkspaceOperationLogStore {
+function defaultBasePath() {
+  return process.env.WORKSPACE_OPERATION_LOG_BASE_PATH
+    ?? path.resolve(resolvePaperclipInstanceRoot(), "data", "workspace-operation-logs");
+}
+
+export function createLocalFileWorkspaceOperationLogStore(
+  options: WorkspaceOperationLogStoreOptions = {},
+): WorkspaceOperationLogStore {
+  const basePath = options.basePath ?? defaultBasePath();
+  const maxOperationBytes = Math.max(
+    1_024,
+    options.maxOperationBytes ?? DEFAULT_MAX_OPERATION_BYTES,
+  );
+  const operationBytes = new Map<string, number>();
+  const truncatedOperations = new Set<string>();
+  const appendTails = new Map<string, Promise<void>>();
+
+  async function serializeAppend(logRef: string, append: () => Promise<void>) {
+    const previous = appendTails.get(logRef) ?? Promise.resolve();
+    const next = previous.catch(() => undefined).then(append);
+    appendTails.set(logRef, next);
+    try {
+      await next;
+    } finally {
+      if (appendTails.get(logRef) === next) appendTails.delete(logRef);
+    }
+  }
+
   async function ensureDir(relativeDir: string) {
     const dir = resolveWithin(basePath, relativeDir);
     await fs.mkdir(dir, { recursive: true });
@@ -61,11 +96,9 @@ function createLocalFileWorkspaceOperationLogStore(basePath: string): WorkspaceO
     if (!stat) throw notFound("Workspace operation log not found");
 
     const start = Math.max(0, Math.min(offset, stat.size));
-    const end = Math.max(start, Math.min(start + limitBytes - 1, stat.size - 1));
-
-    if (start > end) {
-      return { content: "", nextOffset: start };
-    }
+    if (limitBytes <= 0) return { content: "", nextOffset: start };
+    if (start >= stat.size) return { content: "", nextOffset: undefined };
+    const end = Math.min(start + limitBytes - 1, stat.size - 1);
 
     const chunks: Buffer[] = [];
     await new Promise<void>((resolve, reject) => {
@@ -102,28 +135,75 @@ function createLocalFileWorkspaceOperationLogStore(basePath: string): WorkspaceO
 
       const absPath = resolveWithin(basePath, relPath);
       await fs.writeFile(absPath, "", "utf8");
+      operationBytes.set(relPath, 0);
+      truncatedOperations.delete(relPath);
 
       return { store: "local_file", logRef: relPath };
     },
 
     async append(handle, event) {
       if (handle.store !== "local_file") return;
-      const absPath = resolveWithin(basePath, handle.logRef);
-      const line = JSON.stringify({
-        ts: event.ts,
-        stream: event.stream,
-        chunk: event.chunk,
+      return serializeAppend(handle.logRef, async () => {
+        const absPath = resolveWithin(basePath, handle.logRef);
+        const line = JSON.stringify({
+          ts: event.ts,
+          stream: event.stream,
+          chunk: event.chunk,
+        });
+        const serialized = `${line}\n`;
+        const lineBytes = Buffer.byteLength(serialized, "utf8");
+        const sentinel = `${JSON.stringify({
+          ts: event.ts,
+          stream: "system",
+          chunk: `[workspace-operation-log truncated: exceeded ${maxOperationBytes.toLocaleString()} bytes]`,
+        })}\n`;
+        const sentinelBytes = Buffer.byteLength(sentinel, "utf8");
+        let current = operationBytes.get(handle.logRef);
+        if (current === undefined) {
+          const stat = await fs.stat(absPath).catch(() => null);
+          current = stat?.size ?? 0;
+          operationBytes.set(handle.logRef, current);
+        }
+
+        if (current + lineBytes + sentinelBytes > maxOperationBytes) {
+          if (truncatedOperations.has(handle.logRef)) return;
+          if (current + sentinelBytes <= maxOperationBytes) {
+            await fs.appendFile(absPath, sentinel, "utf8");
+            current += sentinelBytes;
+          }
+          operationBytes.set(handle.logRef, current);
+          truncatedOperations.add(handle.logRef);
+          return;
+        }
+
+        await fs.appendFile(absPath, serialized, "utf8");
+        operationBytes.set(handle.logRef, current + lineBytes);
       });
-      await fs.appendFile(absPath, `${line}\n`, "utf8");
+    },
+
+    async discard(handle) {
+      if (handle.store !== "local_file") return;
+      await appendTails.get(handle.logRef)?.catch(() => undefined);
+      appendTails.delete(handle.logRef);
+      operationBytes.delete(handle.logRef);
+      truncatedOperations.delete(handle.logRef);
+      const absPath = resolveWithin(basePath, handle.logRef);
+      await fs.unlink(absPath).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== "ENOENT") throw error;
+      });
     },
 
     async finalize(handle) {
       if (handle.store !== "local_file") {
         return { bytes: 0, compressed: false };
       }
+      await appendTails.get(handle.logRef);
       const absPath = resolveWithin(basePath, handle.logRef);
       const stat = await fs.stat(absPath).catch(() => null);
       if (!stat) throw notFound("Workspace operation log not found");
+
+      operationBytes.delete(handle.logRef);
+      truncatedOperations.delete(handle.logRef);
 
       const hash = await sha256File(absPath);
       return {
@@ -138,8 +218,11 @@ function createLocalFileWorkspaceOperationLogStore(basePath: string): WorkspaceO
         throw notFound("Workspace operation log not found");
       }
       const absPath = resolveWithin(basePath, handle.logRef);
-      const offset = opts?.offset ?? 0;
-      const limitBytes = opts?.limitBytes ?? 256_000;
+      const offset = Math.max(0, Math.trunc(opts?.offset ?? 0));
+      const limitBytes = Math.min(
+        maxOperationBytes + 1,
+        Math.max(0, Math.trunc(opts?.limitBytes ?? 256_000)),
+      );
       return readFileRange(absPath, offset, limitBytes);
     },
   };
@@ -149,8 +232,6 @@ let cachedStore: WorkspaceOperationLogStore | null = null;
 
 export function getWorkspaceOperationLogStore() {
   if (cachedStore) return cachedStore;
-  const basePath = process.env.WORKSPACE_OPERATION_LOG_BASE_PATH
-    ?? path.resolve(resolvePaperclipInstanceRoot(), "data", "workspace-operation-logs");
-  cachedStore = createLocalFileWorkspaceOperationLogStore(basePath);
+  cachedStore = createLocalFileWorkspaceOperationLogStore();
   return cachedStore;
 }

@@ -4,10 +4,18 @@ import { agents } from "@paperclipai/db";
 import type { HireApprovedPayload } from "@paperclipai/adapter-utils";
 import { findServerAdapter } from "../adapters/registry.js";
 import { logger } from "../middleware/logger.js";
+import {
+  materializeCurrentUserRedactionOptions,
+  redactDiagnosticResponseValue,
+} from "../log-redaction.js";
+import { collectSensitivePayloadValues } from "../redaction.js";
 import { logActivity } from "./activity-log.js";
+import { secretService } from "./secrets.js";
 
 const HIRE_APPROVED_MESSAGE =
   "Tell your user that your hire was approved, now they should assign you a task in Paperclip or ask you to create issues.";
+const HIRE_HOOK_ERROR_NAME = "Error";
+const HIRE_HOOK_ERROR_MESSAGE = "Adapter hire hook failed";
 
 export interface NotifyHireApprovedInput {
   companyId: string;
@@ -15,6 +23,63 @@ export interface NotifyHireApprovedInput {
   source: "join_request" | "approval";
   sourceId: string;
   approvedAt?: Date;
+}
+
+function safeHireHookError(
+  err: unknown,
+  redactionOptions: ReturnType<typeof materializeCurrentUserRedactionOptions>,
+) {
+  let name = HIRE_HOOK_ERROR_NAME;
+  let message = HIRE_HOOK_ERROR_MESSAGE;
+  try {
+    if (err instanceof Error) {
+      let candidateName: unknown;
+      let candidateMessage: unknown;
+      try {
+        candidateName = err.name;
+      } catch {
+        candidateName = null;
+      }
+      try {
+        candidateMessage = err.message;
+      } catch {
+        candidateMessage = null;
+      }
+      if (typeof candidateName === "string" && candidateName.length > 0) name = candidateName;
+      if (typeof candidateMessage === "string" && candidateMessage.length > 0) {
+        message = candidateMessage;
+      }
+    } else if (typeof err === "string" && err.length > 0) {
+      message = err;
+    } else {
+      let rendered: unknown;
+      try {
+        rendered = String(err);
+      } catch {
+        rendered = null;
+      }
+      if (typeof rendered === "string" && rendered.length > 0) message = rendered;
+    }
+  } catch {
+    // Hostile objects must not escape this deliberately non-fatal hook boundary.
+  }
+
+  try {
+    const redacted = redactDiagnosticResponseValue(
+      { name, message },
+      { ...redactionOptions, extraDiagnosticKeys: ["name"] },
+    );
+    return {
+      name: typeof redacted.name === "string"
+        ? redacted.name.slice(0, 128)
+        : HIRE_HOOK_ERROR_NAME,
+      message: typeof redacted.message === "string"
+        ? redacted.message.slice(0, 2_000)
+        : HIRE_HOOK_ERROR_MESSAGE,
+    };
+  } catch {
+    return { name: HIRE_HOOK_ERROR_NAME, message: HIRE_HOOK_ERROR_MESSAGE };
+  }
 }
 
 /**
@@ -57,12 +122,35 @@ export async function notifyHireApproved(
     message: HIRE_APPROVED_MESSAGE,
   };
 
-  const adapterConfig =
+  const persistedAdapterConfig =
     typeof row.adapterConfig === "object" && row.adapterConfig !== null && !Array.isArray(row.adapterConfig)
       ? (row.adapterConfig as Record<string, unknown>)
       : {};
+  const persistedSecrets = collectSensitivePayloadValues(persistedAdapterConfig);
+  let redactionOptions = materializeCurrentUserRedactionOptions({
+    enabled: false,
+    secretValues: persistedSecrets.values,
+    secretValuesOverflow: persistedSecrets.overflow,
+  });
 
   try {
+    const { config: adapterConfig, secretKeys } = await secretService(db)
+      .resolveAdapterConfigForRuntime(companyId, persistedAdapterConfig);
+    const resolvedEnv = typeof adapterConfig.env === "object" && adapterConfig.env !== null && !Array.isArray(adapterConfig.env)
+      ? adapterConfig.env as Record<string, unknown>
+      : {};
+    const resolvedSecretValues = Array.from(secretKeys)
+      .map((key) => resolvedEnv[key])
+      .filter((value): value is string => typeof value === "string" && value.length > 0);
+    const collectedSecrets = collectSensitivePayloadValues(adapterConfig);
+    redactionOptions = materializeCurrentUserRedactionOptions({
+      enabled: false,
+      secretValues: [
+        ...collectedSecrets.values,
+        ...resolvedSecretValues,
+      ],
+      secretValuesOverflow: collectedSecrets.overflow,
+    });
     const result = await onHireApproved(payload, adapterConfig);
     if (result.ok) {
       await logActivity(db, {
@@ -77,8 +165,21 @@ export async function notifyHireApproved(
       return;
     }
 
+    const redactedFailure = redactDiagnosticResponseValue(
+      { error: result.error, detail: result.detail },
+      redactionOptions,
+    );
+
     logger.warn(
-      { companyId, agentId, adapterType, source, sourceId, error: result.error, detail: result.detail },
+      {
+        companyId,
+        agentId,
+        adapterType,
+        source,
+        sourceId,
+        error: redactedFailure.error,
+        detail: redactedFailure.detail,
+      },
       "hire hook: adapter returned failure",
     );
     await logActivity(db, {
@@ -88,26 +189,41 @@ export async function notifyHireApproved(
       action: "hire_hook.failed",
       entityType: "agent",
       entityId: agentId,
-      details: { source, sourceId, adapterType, error: result.error, detail: result.detail },
-    });
-  } catch (err) {
-    logger.error(
-      { err, companyId, agentId, adapterType, source, sourceId },
-      "hire hook: adapter threw",
-    );
-    await logActivity(db, {
-      companyId,
-      actorType: "system",
-      actorId: "hire_hook",
-      action: "hire_hook.error",
-      entityType: "agent",
-      entityId: agentId,
       details: {
         source,
         sourceId,
         adapterType,
-        error: err instanceof Error ? err.message : String(err),
+        error: redactedFailure.error,
+        detail: redactedFailure.detail,
       },
     });
+  } catch (err) {
+    const redactedError = safeHireHookError(err, redactionOptions);
+    try {
+      logger.error(
+        { err: redactedError, companyId, agentId, adapterType, source, sourceId },
+        "hire hook: adapter threw",
+      );
+    } catch {
+      // Logging must not turn an optional adapter callback into a fatal request.
+    }
+    try {
+      await logActivity(db, {
+        companyId,
+        actorType: "system",
+        actorId: "hire_hook",
+        action: "hire_hook.error",
+        entityType: "agent",
+        entityId: agentId,
+        details: {
+          source,
+          sourceId,
+          adapterType,
+          error: redactedError.message,
+        },
+      });
+    } catch {
+      // Activity reporting is also best-effort for this non-fatal hook.
+    }
   }
 }

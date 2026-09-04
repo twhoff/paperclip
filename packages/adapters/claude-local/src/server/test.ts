@@ -12,7 +12,7 @@ import {
   ensureAbsoluteDirectory,
   ensureCommandResolvable,
   ensurePathInEnv,
-  runChildProcess,
+  runProviderProbeChildProcess,
 } from "@paperclipai/adapter-utils/server-utils";
 import path from "node:path";
 import { CLAUDE_BASE_ARGS } from "./base-args.js";
@@ -150,7 +150,7 @@ export async function testEnvironment(
       if (maxTurns > 0) args.push("--max-turns", String(maxTurns));
       if (extraArgs.length > 0) args.push(...extraArgs);
 
-      const probe = await runChildProcess(
+      const probe = await runProviderProbeChildProcess(
         `claude-envtest-${Date.now()}-${Math.random().toString(16).slice(2)}`,
         command,
         args,
@@ -159,6 +159,7 @@ export async function testEnvironment(
           env,
           timeoutSec: 45,
           graceSec: 5,
+          signal: ctx.signal,
           stdin: "Respond with hello.",
           onLog: async () => {},
         },

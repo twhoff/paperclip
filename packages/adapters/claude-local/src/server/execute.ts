@@ -29,6 +29,7 @@ import {
   parseClaudeStreamJson,
   describeClaudeFailure,
   detectClaudeLoginRequired,
+  isClaudeFailureResult,
   isClaudeMaxTurnsResult,
   isClaudeUnknownSessionError
 } from './parse.js'
@@ -37,6 +38,21 @@ import { shouldUseBatch, serializeToBatchRequest, generateCustomId } from './bat
 import { claudeModelSupportsEffort } from './model-capabilities.js'
 
 const __moduleDir = path.dirname(fileURLToPath(import.meta.url))
+
+export function didClaudeProcessFail(
+  proc: Pick<RunProcessResult, 'exitCode' | 'signal'>
+): boolean {
+  return proc.exitCode !== 0 || proc.signal != null
+}
+
+export function didClaudeProcessTerminateBySignal(
+  proc: Pick<RunProcessResult, 'exitCode' | 'signal'>
+): boolean {
+  return (
+    proc.signal != null ||
+    (proc.exitCode != null && proc.exitCode >= 129 && proc.exitCode <= 192)
+  )
+}
 
 /**
  * Tools that Paperclip agents need without interactive approval.
@@ -741,13 +757,20 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     opts: { fallbackSessionId: string | null; clearSessionOnMissingSession?: boolean }
   ): AdapterExecutionResult => {
     const { proc, parsedStream, parsed } = attempt
+    // Shells encode POSIX signal termination as 128 + signal number. Accept
+    // the complete portable signal range so cancelled/crashed runs cannot be
+    // misreported as an authentication failure because of stale stderr text.
+    const terminatedBySignal = didClaudeProcessTerminateBySignal(proc)
+    const processFailed = didClaudeProcessFail(proc)
     const loginMeta = detectClaudeLoginRequired({
       parsed,
       stdout: proc.stdout,
-      stderr: proc.stderr
+      stderr: proc.stderr,
+      processFailed
     })
+    const requiresLogin = loginMeta.requiresLogin && !terminatedBySignal
     const errorMeta =
-      loginMeta.loginUrl != null
+      requiresLogin && loginMeta.loginUrl != null
         ? {
             loginUrl: loginMeta.loginUrl
           }
@@ -770,8 +793,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         exitCode: proc.exitCode,
         signal: proc.signal,
         timedOut: false,
-        errorMessage: parseFallbackErrorMessage(proc),
-        errorCode: loginMeta.requiresLogin ? 'claude_auth_required' : null,
+        errorMessage: terminatedBySignal
+          ? `Claude exited with code ${proc.exitCode ?? -1}`
+          : parseFallbackErrorMessage(proc),
+        errorCode: requiresLogin ? 'claude_auth_required' : null,
         errorMeta,
         resultJson: {
           stdout: proc.stdout,
@@ -805,16 +830,22 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         } as Record<string, unknown>)
       : null
     const clearSessionForMaxTurns = isClaudeMaxTurnsResult(parsed)
+    const structuredFailure = isClaudeFailureResult(parsed)
 
     return {
       exitCode: proc.exitCode,
       signal: proc.signal,
       timedOut: false,
       errorMessage:
-        (proc.exitCode ?? 0) === 0
+        !processFailed && !structuredFailure
           ? null
-          : (describeClaudeFailure(parsed) ?? `Claude exited with code ${proc.exitCode ?? -1}`),
-      errorCode: loginMeta.requiresLogin ? 'claude_auth_required' : null,
+          : terminatedBySignal
+            ? `Claude exited with code ${proc.exitCode ?? -1}`
+            : (describeClaudeFailure(parsed) ??
+              (processFailed
+                ? `Claude exited with code ${proc.exitCode ?? -1}`
+                : 'Claude reported a structured failure')),
+      errorCode: requiresLogin ? 'claude_auth_required' : null,
       errorMeta,
       usage,
       sessionId: resolvedSessionId,
@@ -839,7 +870,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     if (
       sessionId &&
       !initial.proc.timedOut &&
-      (initial.proc.exitCode ?? 0) !== 0 &&
+      didClaudeProcessFail(initial.proc) &&
+      !didClaudeProcessTerminateBySignal(initial.proc) &&
       initial.parsed &&
       isClaudeUnknownSessionError(initial.parsed)
     ) {

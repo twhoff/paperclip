@@ -1,4 +1,4 @@
-import { runChildProcess } from "@paperclipai/adapter-utils/server-utils";
+import { runProviderProbeChildProcess } from "@paperclipai/adapter-utils/server-utils";
 
 export interface OzProfile {
   id: string;
@@ -12,7 +12,7 @@ export async function listProfiles(
   command: string,
   env: Record<string, string>,
 ): Promise<OzProfile[]> {
-  const proc = await runChildProcess(
+  const proc = await runProviderProbeChildProcess(
     `oz-profile-list-${Date.now()}`,
     command,
     ["agent", "profile", "list", "--output-format", "json"],

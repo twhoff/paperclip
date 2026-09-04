@@ -1,4 +1,4 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import { Router } from "express";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -13,21 +13,78 @@ import {
   stopRuntimeServicesForExecutionWorkspace,
 } from "../services/workspace-runtime.js";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
-import { toExecutionWorkspace } from "../services/execution-workspaces.js";
+import {
+  normalizeExecutionWorkspaceListLimit,
+  toExecutionWorkspace,
+} from "../services/execution-workspaces.js";
+import {
+  materializeCurrentUserRedactionOptions,
+  redactDiagnosticResponseValue,
+  redactStatelessDiagnosticResponseValue,
+  redactThrownDiagnosticError,
+} from "../log-redaction.js";
+import { instanceSettingsService } from "../services/instance-settings.js";
 
 const execFileAsync = promisify(execFile);
 
+type GitExecFile = (
+  file: string,
+  args: string[],
+  options: { cwd: string; env: NodeJS.ProcessEnv },
+) => Promise<{ stdout: string; stderr: string }>;
+
+export interface ExecutionWorkspaceRouteOptions {
+  execFile?: GitExecFile;
+  processEnv?: NodeJS.ProcessEnv;
+}
+
+const GIT_CHILD_ENV_KEYS = new Set([
+  "APPDATA",
+  "COMSPEC",
+  "HOME",
+  "LANG",
+  "LC_ALL",
+  "LC_CTYPE",
+  "LOCALAPPDATA",
+  "PATH",
+  "PATHEXT",
+  "SYSTEMROOT",
+  "TEMP",
+  "TMP",
+  "TMPDIR",
+  "TZ",
+  "USERPROFILE",
+  "WINDIR",
+  "XDG_CONFIG_HOME",
+]);
+
+export function buildExecutionWorkspaceGitEnv(
+  env: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  return Object.fromEntries(
+    Object.entries(env).filter(([key]) => GIT_CHILD_ENV_KEYS.has(key.toUpperCase())),
+  );
+}
+
 const TERMINAL_ISSUE_STATUSES = new Set(["done", "cancelled"]);
 
-export function executionWorkspaceRoutes(db: Db) {
+export function executionWorkspaceRoutes(
+  db: Db,
+  options: ExecutionWorkspaceRouteOptions = {},
+) {
   const router = Router();
+  const runGit = options.execFile ?? (execFileAsync as GitExecFile);
   const svc = executionWorkspaceService(db);
   const workspaceOperationsSvc = workspaceOperationService(db);
+  const instanceSettings = instanceSettingsService(db);
 
   router.get("/companies/:companyId/execution-workspaces", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
     const enriched = req.query.enriched === "true";
+    const limit = normalizeExecutionWorkspaceListLimit(
+      typeof req.query.limit === "string" ? Number(req.query.limit) : undefined,
+    );
 
     if (enriched) {
       const conditions = [eq(executionWorkspaces.companyId, companyId)];
@@ -62,14 +119,18 @@ export function executionWorkspaceRoutes(db: Db) {
         .leftJoin(issuesAlias, eq(issuesAlias.id, executionWorkspaces.sourceIssueId))
         .leftJoin(agentsAlias, eq(agentsAlias.id, issuesAlias.assigneeAgentId))
         .where(and(...conditions))
-        .orderBy();
+        .orderBy(desc(executionWorkspaces.lastUsedAt), desc(executionWorkspaces.createdAt))
+        .limit(limit);
 
       const result = rows.map((row) => ({
         ...toExecutionWorkspace(row.workspace),
         issue: row.issue?.id ? { id: row.issue.id, title: row.issue.title, identifier: row.issue.identifier, status: row.issue.status } : null,
         agent: row.agent?.id ? { id: row.agent.id, name: row.agent.name } : null,
       }));
-      res.json(result);
+      res.json(redactStatelessDiagnosticResponseValue(result, {
+        enabled: false,
+        extraDiagnosticKeys: ["cleanupReason"],
+      }));
       return;
     }
 
@@ -79,8 +140,12 @@ export function executionWorkspaceRoutes(db: Db) {
       issueId: req.query.issueId as string | undefined,
       status: req.query.status as string | undefined,
       reuseEligible: req.query.reuseEligible === "true",
+      limit,
     });
-    res.json(workspaces);
+    res.json(redactStatelessDiagnosticResponseValue(
+      workspaces.map(toExecutionWorkspace),
+      { enabled: false, extraDiagnosticKeys: ["cleanupReason"] },
+    ));
   });
 
   router.get("/execution-workspaces/:id", async (req, res) => {
@@ -91,7 +156,7 @@ export function executionWorkspaceRoutes(db: Db) {
       return;
     }
     assertCompanyAccess(req, workspace.companyId);
-    res.json(workspace);
+    res.json(toExecutionWorkspace(workspace));
   });
 
   router.patch("/execution-workspaces/:id", validate(updateExecutionWorkspaceSchema), async (req, res) => {
@@ -102,14 +167,33 @@ export function executionWorkspaceRoutes(db: Db) {
       return;
     }
     assertCompanyAccess(req, existing.companyId);
+    const patchRedactionOptions = materializeCurrentUserRedactionOptions({
+      enabled: (await instanceSettings.getGeneral()).censorUsernameInLogs,
+    });
+    const hasCleanupReason = Object.prototype.hasOwnProperty.call(req.body, "cleanupReason");
+    const hasMetadata = Object.prototype.hasOwnProperty.call(req.body, "metadata");
+    const sanitizedDiagnostics = redactDiagnosticResponseValue({
+      ...(hasCleanupReason ? { cleanupReason: req.body.cleanupReason } : {}),
+      ...(hasMetadata ? { metadata: req.body.metadata } : {}),
+    }, {
+      ...patchRedactionOptions,
+      extraDiagnosticKeys: ["cleanupReason", "metadata"],
+    });
+    const sanitizedMetadata = hasMetadata && sanitizedDiagnostics.metadata !== null
+      && (typeof sanitizedDiagnostics.metadata !== "object" || Array.isArray(sanitizedDiagnostics.metadata))
+      ? { redacted: sanitizedDiagnostics.metadata }
+      : sanitizedDiagnostics.metadata;
     const patch: Record<string, unknown> = {
       ...req.body,
+      ...(hasCleanupReason ? { cleanupReason: sanitizedDiagnostics.cleanupReason } : {}),
+      ...(hasMetadata ? { metadata: sanitizedMetadata } : {}),
       ...(req.body.cleanupEligibleAt ? { cleanupEligibleAt: new Date(req.body.cleanupEligibleAt) } : {}),
     };
     let workspace = existing;
     let cleanupWarnings: string[] = [];
 
     if (req.body.status === "archived" && existing.status !== "archived") {
+      const cleanupRedactionOptions = patchRedactionOptions;
       const linkedIssues = await db
         .select({
           id: issues.id,
@@ -176,7 +260,9 @@ export function executionWorkspaceRoutes(db: Db) {
           recorder: workspaceOperationsSvc.createRecorder({
             companyId: existing.companyId,
             executionWorkspaceId: existing.id,
+            redactionOptions: cleanupRedactionOptions,
           }),
+          redactionOptions: cleanupRedactionOptions,
         });
         cleanupWarnings = cleanupResult.warnings;
         const cleanupPatch: Record<string, unknown> = {
@@ -190,7 +276,11 @@ export function executionWorkspaceRoutes(db: Db) {
           workspace = (await svc.update(id, cleanupPatch)) ?? workspace;
         }
       } catch (error) {
-        const failureReason = error instanceof Error ? error.message : String(error);
+        const failureReason = redactThrownDiagnosticError(
+          error,
+          cleanupRedactionOptions,
+          { fallbackMessage: "Workspace cleanup failed" },
+        ).message;
         workspace =
           (await svc.update(id, {
             status: "cleanup_failed",
@@ -225,7 +315,7 @@ export function executionWorkspaceRoutes(db: Db) {
         ...(cleanupWarnings.length > 0 ? { cleanupWarnings } : {}),
       },
     });
-    res.json(workspace);
+    res.json(toExecutionWorkspace(workspace));
   });
 
   // GET /companies/:companyId/projects/:projectId/git-worktrees
@@ -257,7 +347,10 @@ export function executionWorkspaceRoutes(db: Db) {
     // Run git worktree list --porcelain in the repo root
     let stdout = "";
     try {
-      ({ stdout } = await execFileAsync("git", ["worktree", "list", "--porcelain"], { cwd: pw.cwd }));
+      ({ stdout } = await runGit("git", ["worktree", "list", "--porcelain"], {
+        cwd: pw.cwd,
+        env: buildExecutionWorkspaceGitEnv(options.processEnv ?? process.env),
+      }));
     } catch {
       res.json([]);
       return;
@@ -441,10 +534,19 @@ export function executionWorkspaceRoutes(db: Db) {
     }
 
     try {
-      await execFileAsync("git", ["worktree", "remove", "--force", worktreePath], { cwd: pw.cwd });
+      await runGit("git", ["worktree", "remove", "--force", worktreePath], {
+        cwd: pw.cwd,
+        env: buildExecutionWorkspaceGitEnv(options.processEnv ?? process.env),
+      });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Failed to remove worktree";
-      res.status(500).json({ error: msg });
+      const failureReason = redactThrownDiagnosticError(
+        err,
+        materializeCurrentUserRedactionOptions({
+          enabled: (await instanceSettings.getGeneral()).censorUsernameInLogs,
+        }),
+        { fallbackMessage: "Failed to remove worktree" },
+      ).message;
+      res.status(500).json({ error: failureReason });
       return;
     }
 

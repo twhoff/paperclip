@@ -4,7 +4,7 @@ import type { AdapterModel } from "@paperclipai/adapter-utils";
 import {
   asString,
   ensurePathInEnv,
-  runChildProcess,
+  runProviderProbeChildProcess,
 } from "@paperclipai/adapter-utils/server-utils";
 
 const MODELS_CACHE_TTL_MS = 60_000;
@@ -104,6 +104,7 @@ export async function discoverOpenCodeModels(input: {
   command?: unknown;
   cwd?: unknown;
   env?: unknown;
+  signal?: AbortSignal;
 } = {}): Promise<AdapterModel[]> {
   const command = resolveOpenCodeCommand(input.command);
   const cwd = asString(input.cwd, process.cwd());
@@ -122,7 +123,7 @@ export async function discoverOpenCodeModels(input: {
   }
   const runtimeEnv = normalizeEnv(ensurePathInEnv({ ...process.env, ...env, ...(resolvedHome ? { HOME: resolvedHome } : {}) }));
 
-  const result = await runChildProcess(
+  const result = await runProviderProbeChildProcess(
     `opencode-models-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     command,
     ["models"],
@@ -131,6 +132,7 @@ export async function discoverOpenCodeModels(input: {
       env: runtimeEnv,
       timeoutSec: MODELS_DISCOVERY_TIMEOUT_MS / 1000,
       graceSec: 3,
+      signal: input.signal,
       onLog: async () => {},
     },
   );
@@ -150,6 +152,7 @@ export async function discoverOpenCodeModelsCached(input: {
   command?: unknown;
   cwd?: unknown;
   env?: unknown;
+  signal?: AbortSignal;
 } = {}): Promise<AdapterModel[]> {
   const command = resolveOpenCodeCommand(input.command);
   const cwd = asString(input.cwd, process.cwd());
@@ -160,7 +163,7 @@ export async function discoverOpenCodeModelsCached(input: {
   const cached = discoveryCache.get(key);
   if (cached && cached.expiresAt > now) return cached.models;
 
-  const models = await discoverOpenCodeModels({ command, cwd, env });
+  const models = await discoverOpenCodeModels({ command, cwd, env, signal: input.signal });
   discoveryCache.set(key, { expiresAt: now + MODELS_CACHE_TTL_MS, models });
   return models;
 }
@@ -170,6 +173,7 @@ export async function ensureOpenCodeModelConfiguredAndAvailable(input: {
   command?: unknown;
   cwd?: unknown;
   env?: unknown;
+  signal?: AbortSignal;
 }): Promise<AdapterModel[]> {
   const model = asString(input.model, "").trim();
   if (!model) {
@@ -180,6 +184,7 @@ export async function ensureOpenCodeModelConfiguredAndAvailable(input: {
     command: input.command,
     cwd: input.cwd,
     env: input.env,
+    signal: input.signal,
   });
 
   if (models.length === 0) {

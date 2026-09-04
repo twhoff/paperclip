@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { QuotaWindow } from "@paperclipai/adapter-utils";
@@ -9,6 +10,7 @@ import {
   fetchWithTimeout,
   fetchClaudeQuota,
   parseClaudeCliUsageText,
+  readClaudeAuthStatus,
   readClaudeToken,
   claudeConfigDir,
 } from "@paperclipai/adapter-claude-local/server";
@@ -18,6 +20,7 @@ import {
   readCodexAuthInfo,
   readCodexToken,
   fetchCodexQuota,
+  fetchCodexRpcQuota,
   mapCodexRpcQuota,
   codexHomeDir,
 } from "@paperclipai/adapter-codex-local/server";
@@ -770,6 +773,144 @@ describe("mapCodexRpcQuota", () => {
         detail: null,
       },
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Provider child-process environment boundaries
+// ---------------------------------------------------------------------------
+
+const PROVIDER_PROBE_CAPTURE_KEYS = [
+  "PAPERCLIP_API_KEY",
+  "PAPERCLIP_AGENT_JWT_SECRET",
+  "PAPERCLIP_TEST_OVERRIDE",
+  "PCLI_SESSION_ID",
+  "HOLLY_SESSION_ID",
+];
+
+describe("provider quota probe environments", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("keeps Claude auth but strips control-plane identity from its auth-status probe", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "paperclip-claude-quota-env-"));
+    const capturePath = path.join(tempDir, "claude-env.json");
+    const commandPath = path.join(tempDir, "claude");
+    const keys = [...PROVIDER_PROBE_CAPTURE_KEYS, "ANTHROPIC_API_KEY", "CLAUDE_CONFIG_DIR"];
+
+    await writeFile(
+      commandPath,
+      `#!/usr/bin/env node
+const fs = require("node:fs");
+const keys = ${JSON.stringify(keys)};
+fs.writeFileSync(
+  process.env.PROBE_CAPTURE_PATH,
+  JSON.stringify(Object.fromEntries(keys.map((key) => [key, process.env[key] ?? null]))),
+);
+process.stdout.write(JSON.stringify({
+  loggedIn: true,
+  authMethod: "claude.ai",
+  subscriptionType: "pro",
+}) + "\\n");
+`,
+      "utf8",
+    );
+    await chmod(commandPath, 0o755);
+
+    vi.stubEnv("PATH", `${tempDir}${path.delimiter}${process.env.PATH ?? ""}`);
+    vi.stubEnv("PROBE_CAPTURE_PATH", capturePath);
+    vi.stubEnv("PAPERCLIP_API_KEY", "ambient-run-token");
+    vi.stubEnv("PAPERCLIP_AGENT_JWT_SECRET", "ambient-signing-secret");
+    vi.stubEnv("PAPERCLIP_TEST_OVERRIDE", "ambient-control-plane-value");
+    vi.stubEnv("PCLI_SESSION_ID", "operator-session");
+    vi.stubEnv("HOLLY_SESSION_ID", "operator-holly-session");
+    vi.stubEnv("ANTHROPIC_API_KEY", "anthropic-provider-token");
+    vi.stubEnv("CLAUDE_CONFIG_DIR", path.join(tempDir, "claude-config"));
+
+    try {
+      const status = await readClaudeAuthStatus();
+      const childEnv = JSON.parse(await readFile(capturePath, "utf8")) as Record<
+        string,
+        string | null
+      >;
+
+      expect(status).toEqual({
+        loggedIn: true,
+        authMethod: "claude.ai",
+        subscriptionType: "pro",
+      });
+      expect(childEnv).toEqual({
+        PAPERCLIP_API_KEY: null,
+        PAPERCLIP_AGENT_JWT_SECRET: null,
+        PAPERCLIP_TEST_OVERRIDE: null,
+        PCLI_SESSION_ID: null,
+        HOLLY_SESSION_ID: null,
+        ANTHROPIC_API_KEY: "anthropic-provider-token",
+        CLAUDE_CONFIG_DIR: path.join(tempDir, "claude-config"),
+      });
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps Codex auth but strips control-plane identity from its app-server probe", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "paperclip-codex-quota-env-"));
+    const capturePath = path.join(tempDir, "codex-env.json");
+    const commandPath = path.join(tempDir, "codex");
+    const keys = [...PROVIDER_PROBE_CAPTURE_KEYS, "OPENAI_API_KEY", "CODEX_HOME"];
+
+    await writeFile(
+      commandPath,
+      `#!/usr/bin/env node
+const fs = require("node:fs");
+const readline = require("node:readline");
+const keys = ${JSON.stringify(keys)};
+fs.writeFileSync(
+  process.env.PROBE_CAPTURE_PATH,
+  JSON.stringify(Object.fromEntries(keys.map((key) => [key, process.env[key] ?? null]))),
+);
+const lines = readline.createInterface({ input: process.stdin });
+lines.on("line", (line) => {
+  const message = JSON.parse(line);
+  if (typeof message.id !== "number") return;
+  const result = message.method === "account/rateLimits/read" ? {} : null;
+  process.stdout.write(JSON.stringify({ id: message.id, result }) + "\\n");
+});
+`,
+      "utf8",
+    );
+    await chmod(commandPath, 0o755);
+
+    vi.stubEnv("PATH", `${tempDir}${path.delimiter}${process.env.PATH ?? ""}`);
+    vi.stubEnv("PROBE_CAPTURE_PATH", capturePath);
+    vi.stubEnv("PAPERCLIP_API_KEY", "ambient-run-token");
+    vi.stubEnv("PAPERCLIP_AGENT_JWT_SECRET", "ambient-signing-secret");
+    vi.stubEnv("PAPERCLIP_TEST_OVERRIDE", "ambient-control-plane-value");
+    vi.stubEnv("PCLI_SESSION_ID", "operator-session");
+    vi.stubEnv("HOLLY_SESSION_ID", "operator-holly-session");
+    vi.stubEnv("OPENAI_API_KEY", "openai-provider-token");
+    vi.stubEnv("CODEX_HOME", path.join(tempDir, "codex-home"));
+
+    try {
+      await fetchCodexRpcQuota();
+      const childEnv = JSON.parse(await readFile(capturePath, "utf8")) as Record<
+        string,
+        string | null
+      >;
+
+      expect(childEnv).toEqual({
+        PAPERCLIP_API_KEY: null,
+        PAPERCLIP_AGENT_JWT_SECRET: null,
+        PAPERCLIP_TEST_OVERRIDE: null,
+        PCLI_SESSION_ID: null,
+        HOLLY_SESSION_ID: null,
+        OPENAI_API_KEY: "openai-provider-token",
+        CODEX_HOME: path.join(tempDir, "codex-home"),
+      });
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
   });
 });
 

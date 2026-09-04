@@ -11,7 +11,7 @@ import {
   ensureAbsoluteDirectory,
   ensureCommandResolvable,
   ensurePathInEnv,
-  runChildProcess,
+  runProviderProbeChildProcess,
 } from "@paperclipai/adapter-utils/server-utils";
 import path from "node:path";
 import { parseCodexJsonl } from "./parse.js";
@@ -156,7 +156,7 @@ export async function testEnvironment(
       if (extraArgs.length > 0) args.push(...extraArgs);
       args.push("-");
 
-      const probe = await runChildProcess(
+      const probe = await runProviderProbeChildProcess(
         `codex-envtest-${Date.now()}-${Math.random().toString(16).slice(2)}`,
         command,
         args,
@@ -165,6 +165,7 @@ export async function testEnvironment(
           env,
           timeoutSec: 45,
           graceSec: 5,
+          signal: ctx.signal,
           stdin: "Respond with hello.",
           onLog: async () => {},
         },

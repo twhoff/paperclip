@@ -17,9 +17,34 @@ export interface RunProcessResult {
   startedAt: string | null;
 }
 
+export class LocalAdapterProcessTerminationError extends Error {
+  readonly code = "process_termination_pending" as const;
+  readonly processTerminationPending = true as const;
+
+  constructor(readonly pid: number | null) {
+    super("Local adapter process tree termination could not be verified");
+    this.name = "LocalAdapterProcessTerminationError";
+  }
+}
+
+export function isLocalAdapterProcessTerminationError(
+  value: unknown,
+): value is LocalAdapterProcessTerminationError {
+  if (!value || typeof value !== "object") return false;
+  try {
+    return (
+      Reflect.get(value, "code") === "process_termination_pending" &&
+      Reflect.get(value, "processTerminationPending") === true
+    );
+  } catch {
+    return false;
+  }
+}
+
 interface RunningProcess {
   child: ChildProcess;
   graceSec: number;
+  processGroup?: boolean;
 }
 
 interface SpawnTarget {
@@ -36,9 +61,96 @@ type ChildProcessWithEvents = ChildProcess & {
 };
 
 export const runningProcesses = new Map<string, RunningProcess>();
+
+export function signalLocalAdapterProcess(
+  child: ChildProcess,
+  signal: NodeJS.Signals,
+  processGroup = false,
+) {
+  if (processGroup && process.platform !== "win32" && typeof child.pid === "number" && child.pid > 0) {
+    try {
+      process.kill(-child.pid, signal);
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+      // Fall back to the direct child when group signalling is unavailable.
+    }
+  }
+  try {
+    return child.kill(signal);
+  } catch {
+    return false;
+  }
+}
+
+function isLocalAdapterProcessAlive(child: ChildProcess, processGroup: boolean) {
+  if (processGroup && process.platform !== "win32" && typeof child.pid === "number" && child.pid > 0) {
+    try {
+      process.kill(-child.pid, 0);
+      return true;
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code !== "ESRCH";
+    }
+  }
+  return child.exitCode === null && child.signalCode === null;
+}
+
+async function waitForLocalAdapterProcessExit(
+  child: ChildProcess,
+  processGroup: boolean,
+  timeoutMs: number,
+) {
+  const deadline = Date.now() + Math.max(0, timeoutMs);
+  while (isLocalAdapterProcessAlive(child, processGroup)) {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) return false;
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, Math.min(25, remainingMs));
+    });
+  }
+  return true;
+}
+
+export async function terminateLocalAdapterProcess(
+  child: ChildProcess,
+  options: {
+    processGroup?: boolean;
+    graceMs: number;
+    killWaitMs?: number;
+  },
+) {
+  const processGroup = options.processGroup === true;
+  if (!isLocalAdapterProcessAlive(child, processGroup)) return true;
+  signalLocalAdapterProcess(child, "SIGTERM", processGroup);
+  if (await waitForLocalAdapterProcessExit(child, processGroup, options.graceMs)) return true;
+  signalLocalAdapterProcess(child, "SIGKILL", processGroup);
+  return await waitForLocalAdapterProcessExit(
+    child,
+    processGroup,
+    options.killWaitMs ?? 1_000,
+  );
+}
 export const MAX_CAPTURE_BYTES = 4 * 1024 * 1024;
 export const MAX_EXCERPT_BYTES = 32 * 1024;
+export const LOCAL_ADAPTER_CONTROL_PLANE_ENV_KEYS = [
+  "PAPERCLIP_AGENT_JWT_SECRET",
+  "DATABASE_URL",
+  "BETTER_AUTH_SECRET",
+  "PAPERCLIP_SECRETS_MASTER_KEY",
+  "PAPERCLIP_SECRETS_MASTER_KEY_FILE",
+] as const;
+const LOCAL_ADAPTER_CONTROL_PLANE_ENV_KEY_SET = new Set<string>(
+  LOCAL_ADAPTER_CONTROL_PLANE_ENV_KEYS,
+);
+const LOCAL_ADAPTER_PROVIDER_RUNTIME_ENV_KEY_SET = new Set<string>([
+  "PCLI_SESSION_ID",
+  "HOLLY_SESSION_ID",
+]);
 const SENSITIVE_ENV_KEY = /(key|token|secret|password|passwd|authorization|cookie)/i;
+const REDACTED_ENV_VALUE = "***REDACTED***";
+export const MAX_REDACTION_SECRET_VALUES = 128;
+export const MAX_REDACTION_SECRET_VALUE_BYTES = 64 * 1024;
+export const MAX_REDACTION_SECRET_BYTES = 1024 * 1024;
 const PAPERCLIP_SKILL_ROOT_RELATIVE_CANDIDATES = [
   "../../skills",
   "../../../../../skills",
@@ -158,6 +270,11 @@ export function appendWithCap(prev: string, chunk: string, cap = MAX_CAPTURE_BYT
   return combined.length > cap ? combined.slice(combined.length - cap) : combined;
 }
 
+function appendPrefixWithCap(prev: string, chunk: string, cap = MAX_CAPTURE_BYTES) {
+  if (prev.length >= cap) return prev;
+  return prev + chunk.slice(0, cap - prev.length);
+}
+
 export function resolvePathValue(obj: Record<string, unknown>, dottedPath: string) {
   const parts = dottedPath.split(".");
   let cursor: unknown = obj;
@@ -202,6 +319,352 @@ export function redactEnvForLogs(env: Record<string, string>): Record<string, st
   return redacted;
 }
 
+function isControlPlaneEnvKey(key: string): boolean {
+  return LOCAL_ADAPTER_CONTROL_PLANE_ENV_KEY_SET.has(key.toUpperCase());
+}
+
+function matchingEnvKeys(env: object, expectedKey: string): string[] {
+  const normalizedExpectedKey = expectedKey.toUpperCase();
+  return Object.keys(env).filter((key) => key.toUpperCase() === normalizedExpectedKey);
+}
+
+function deleteEnvKeyCaseInsensitive(
+  env: Record<string, unknown>,
+  expectedKey: string,
+): void {
+  for (const key of matchingEnvKeys(env, expectedKey)) {
+    delete env[key];
+  }
+}
+
+export function stripLocalAdapterControlPlaneEnv(
+  env: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  const sanitized = { ...env };
+  for (const key of Object.keys(sanitized)) {
+    if (isControlPlaneEnvKey(key)) delete sanitized[key];
+  }
+  return sanitized;
+}
+
+/**
+ * Build the inherited environment for provider CLI discovery and quota probes.
+ * Provider auth/config stays available, while Paperclip credentials and session
+ * identity that are meaningful only inside a managed agent run are removed.
+ */
+export function stripLocalAdapterProviderEnv(
+  env: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  const sanitized = stripLocalAdapterControlPlaneEnv(env);
+  for (const key of Object.keys(sanitized)) {
+    const normalizedKey = key.toUpperCase();
+    if (
+      normalizedKey.startsWith("PAPERCLIP_") ||
+      LOCAL_ADAPTER_PROVIDER_RUNTIME_ENV_KEY_SET.has(normalizedKey)
+    ) {
+      delete sanitized[key];
+    }
+  }
+  return sanitized;
+}
+
+export function collectSensitiveEnvValues(env: NodeJS.ProcessEnv): string[] {
+  const values = new Set<string>();
+  for (const [key, value] of Object.entries(env)) {
+    if (
+      typeof value === "string" &&
+      value.length > 0 &&
+      (SENSITIVE_ENV_KEY.test(key) || isControlPlaneEnvKey(key))
+    ) {
+      values.add(value);
+    }
+  }
+  return Array.from(values).sort((left, right) => right.length - left.length);
+}
+
+export function normalizeSensitiveValues(values: Iterable<string>): {
+  values: string[];
+  overflow: boolean;
+} {
+  const normalized = new Set<string>();
+  let totalBytes = 0;
+  let overflow = false;
+  try {
+    for (const value of values) {
+      if (typeof value !== "string" || value.length === 0 || normalized.has(value)) continue;
+      if (
+        normalized.size >= MAX_REDACTION_SECRET_VALUES ||
+        value.length > MAX_REDACTION_SECRET_VALUE_BYTES
+      ) {
+        overflow = true;
+        break;
+      }
+      const valueBytes = Buffer.byteLength(value, "utf8");
+      if (
+        valueBytes > MAX_REDACTION_SECRET_VALUE_BYTES ||
+        totalBytes + valueBytes > MAX_REDACTION_SECRET_BYTES
+      ) {
+        overflow = true;
+        break;
+      }
+      normalized.add(value);
+      totalBytes += valueBytes;
+    }
+  } catch {
+    overflow = true;
+  }
+  return {
+    values: Array.from(normalized).sort((left, right) => right.length - left.length),
+    overflow,
+  };
+}
+
+type SensitiveValueMatcher = {
+  value: string;
+  failure: readonly number[];
+  matched: number;
+};
+
+type RedactedInterval = {
+  start: number;
+  end: number;
+};
+
+function buildFailureTable(value: string): number[] {
+  const failure = Array.from({ length: value.length }, () => 0);
+  for (let index = 1, matched = 0; index < value.length; index += 1) {
+    while (matched > 0 && value[index] !== value[matched]) matched = failure[matched - 1]!;
+    if (value[index] === value[matched]) matched += 1;
+    failure[index] = matched;
+  }
+  return failure;
+}
+
+export class CompiledSensitiveValueMatchers {
+  readonly values: string[];
+  readonly overflow: boolean;
+  readonly matchers: ReadonlyArray<{
+    value: string;
+    failure: readonly number[];
+  }>;
+
+  constructor(values: Iterable<string>) {
+    const normalized = normalizeSensitiveValues(values);
+    this.values = normalized.values;
+    this.overflow = normalized.overflow;
+    this.matchers = this.values.map((value) => ({
+      value,
+      failure: buildFailureTable(value),
+    }));
+  }
+}
+
+export class SensitiveValueStreamRedactor {
+  private pending = "";
+  private pendingStart = 0;
+  private processedLength = 0;
+  private intervals: RedactedInterval[] = [];
+  private readonly matchers: SensitiveValueMatcher[];
+  private readonly failClosed: boolean;
+  private emittedFailClosedMarker = false;
+
+  constructor(
+    sensitiveValues: Iterable<string> | CompiledSensitiveValueMatchers,
+    private readonly replacement = REDACTED_ENV_VALUE,
+    forceFailClosed = false,
+  ) {
+    let compiled: CompiledSensitiveValueMatchers;
+    try {
+      compiled = sensitiveValues instanceof CompiledSensitiveValueMatchers
+        ? sensitiveValues
+        : new CompiledSensitiveValueMatchers(sensitiveValues);
+    } catch {
+      compiled = new CompiledSensitiveValueMatchers([]);
+      forceFailClosed = true;
+    }
+    this.failClosed = forceFailClosed || compiled.overflow;
+    this.matchers = compiled.matchers.map((matcher) => ({
+      value: matcher.value,
+      failure: matcher.failure,
+      matched: 0,
+    }));
+  }
+
+  push(chunk: string): string {
+    if (!chunk) return "";
+    if (this.failClosed) {
+      if (this.emittedFailClosedMarker) return "";
+      this.emittedFailClosedMarker = true;
+      return this.replacement;
+    }
+    if (this.matchers.length === 0) return chunk;
+    this.pending += chunk;
+    for (let index = 0; index < chunk.length; index += 1) {
+      const character = chunk[index]!;
+      this.processedLength += 1;
+      let longestMatch = 0;
+      for (const matcher of this.matchers) {
+        while (
+          matcher.matched > 0 &&
+          character !== matcher.value[matcher.matched]
+        ) {
+          matcher.matched = matcher.failure[matcher.matched - 1]!;
+        }
+        if (character === matcher.value[matcher.matched]) matcher.matched += 1;
+        if (matcher.matched === matcher.value.length) {
+          longestMatch = Math.max(longestMatch, matcher.value.length);
+          matcher.matched = matcher.failure[matcher.matched - 1]!;
+        }
+      }
+      if (longestMatch > 0) {
+        this.addRedactedInterval(this.processedLength - longestMatch, this.processedLength);
+      }
+    }
+    const partialLength = this.matchers.reduce(
+      (maximum, matcher) => Math.max(maximum, matcher.matched),
+      0,
+    );
+    return this.drainThrough(this.processedLength - partialLength);
+  }
+
+  /**
+   * Finalize currently buffered prefixes for an output boundary without
+   * forgetting matcher state. A later chunk can therefore still complete the
+   * same secret, while the prefix already exposed at the boundary remains
+   * fail-closed.
+   */
+  boundary(): string {
+    if (this.failClosed) {
+      if (this.emittedFailClosedMarker) return "";
+      this.emittedFailClosedMarker = true;
+      return this.replacement;
+    }
+    if (this.matchers.length === 0) return "";
+    const partialLength = Math.min(
+      this.processedLength - this.pendingStart,
+      this.matchers.reduce((maximum, matcher) => Math.max(maximum, matcher.matched), 0),
+    );
+    let output = this.drainThrough(this.processedLength - partialLength);
+    if (this.pending.length > 0) {
+      output += this.replacement;
+      this.pending = "";
+      this.pendingStart = this.processedLength;
+      this.intervals = [];
+    }
+    return output;
+  }
+
+  flush(redactIncomplete = true): string {
+    if (this.failClosed) {
+      if (this.emittedFailClosedMarker) return "";
+      this.emittedFailClosedMarker = true;
+      return this.replacement;
+    }
+    if (this.matchers.length === 0) return "";
+    const partialLength = redactIncomplete
+      ? Math.min(
+          this.processedLength - this.pendingStart,
+          this.matchers.reduce((maximum, matcher) => Math.max(maximum, matcher.matched), 0),
+        )
+      : 0;
+    let output = this.drainThrough(this.processedLength - partialLength);
+    if (this.pending.length > 0) {
+      output += redactIncomplete ? this.replacement : this.pending;
+      this.pending = "";
+      this.pendingStart = this.processedLength;
+      this.intervals = [];
+    }
+    for (const matcher of this.matchers) matcher.matched = 0;
+    return output;
+  }
+
+  private addRedactedInterval(start: number, end: number): void {
+    let mergedStart = Math.max(start, this.pendingStart);
+    let mergedEnd = end;
+    while (this.intervals.length > 0) {
+      const previous = this.intervals.at(-1)!;
+      if (previous.end < mergedStart) break;
+      this.intervals.pop();
+      mergedStart = Math.min(mergedStart, previous.start);
+      mergedEnd = Math.max(mergedEnd, previous.end);
+    }
+    this.intervals.push({ start: mergedStart, end: mergedEnd });
+  }
+
+  private drainThrough(requestedEnd: number): string {
+    const targetEnd = Math.max(
+      this.pendingStart,
+      Math.min(requestedEnd, this.processedLength),
+    );
+    let output = "";
+    let cursor = this.pendingStart;
+    const remainingIntervals: RedactedInterval[] = [];
+    for (const interval of this.intervals) {
+      if (interval.end <= cursor) continue;
+      if (interval.start >= targetEnd) {
+        remainingIntervals.push(interval);
+        continue;
+      }
+      if (interval.start > cursor) {
+        output += this.pending.slice(
+          cursor - this.pendingStart,
+          interval.start - this.pendingStart,
+        );
+      }
+      output += this.replacement;
+      cursor = Math.max(cursor, interval.end);
+    }
+    if (cursor < targetEnd) {
+      output += this.pending.slice(cursor - this.pendingStart, targetEnd - this.pendingStart);
+      cursor = targetEnd;
+    }
+    this.pending = this.pending.slice(cursor - this.pendingStart);
+    this.pendingStart = cursor;
+    this.intervals = remainingIntervals;
+    return output;
+  }
+}
+
+type OrderedSensitiveValueChunk<Stream extends string> = {
+  stream: Stream;
+  chunk: string;
+};
+
+class OrderedSensitiveValueStreamRedactor<Stream extends string> {
+  private activeStream: Stream | null = null;
+  private readonly redactors = new Map<Stream, SensitiveValueStreamRedactor>();
+
+  constructor(private readonly sensitiveValues: CompiledSensitiveValueMatchers) {}
+
+  push(stream: Stream, chunk: string): OrderedSensitiveValueChunk<Stream>[] {
+    const output: OrderedSensitiveValueChunk<Stream>[] = [];
+    if (this.activeStream !== null && this.activeStream !== stream) {
+      const suffix = this.redactors.get(this.activeStream)?.boundary() ?? "";
+      if (suffix) output.push({ stream: this.activeStream, chunk: suffix });
+    }
+    let redactor = this.redactors.get(stream);
+    if (!redactor) {
+      redactor = new SensitiveValueStreamRedactor(this.sensitiveValues);
+      this.redactors.set(stream, redactor);
+    }
+    this.activeStream = stream;
+    const redacted = redactor.push(chunk);
+    if (redacted) output.push({ stream, chunk: redacted });
+    return output;
+  }
+
+  flush(): OrderedSensitiveValueChunk<Stream>[] {
+    const output: OrderedSensitiveValueChunk<Stream>[] = [];
+    for (const [stream, redactor] of this.redactors) {
+      const suffix = redactor.flush();
+      if (suffix) output.push({ stream, chunk: suffix });
+    }
+    this.redactors.clear();
+    this.activeStream = null;
+    return output;
+  }
+}
+
 type PaperclipEnvAgent = {
   id: string;
   companyId: string;
@@ -209,7 +672,11 @@ type PaperclipEnvAgent = {
 };
 
 function isLocalAdapterType(adapterType: string | null | undefined): boolean {
-  return adapterType === "cursor" || adapterType?.endsWith("_local") === true;
+  return (
+    adapterType === "cursor" ||
+    adapterType === "copilot_cli" ||
+    adapterType?.endsWith("_local") === true
+  );
 }
 
 function localHollySessionId(agent: PaperclipEnvAgent): string | null {
@@ -228,19 +695,26 @@ export function finalizeLocalAdapterEnv(
   const hollySessionId = localHollySessionId(agent);
   if (hollySessionId === null) return;
 
-  if (Object.prototype.hasOwnProperty.call(configuredEnv, "PCLI_SESSION_ID")) {
+  if (matchingEnvKeys(configuredEnv, "PCLI_SESSION_ID").length > 0) {
     throw new Error("PCLI_SESSION_ID must not be configured for local adapters");
   }
-  if (
-    Object.prototype.hasOwnProperty.call(configuredEnv, "HOLLY_SESSION_ID") &&
-    configuredEnv.HOLLY_SESSION_ID !== hollySessionId
-  ) {
+  const configuredHollyKeys = matchingEnvKeys(configuredEnv, "HOLLY_SESSION_ID");
+  if (configuredHollyKeys.some((key) => configuredEnv[key] !== hollySessionId)) {
     throw new Error(
       `Configured HOLLY_SESSION_ID does not match the local agent session identity (${hollySessionId})`,
     );
   }
+  const configuredPaperclipKeys = Object.keys(configuredEnv).filter((key) =>
+    key.toUpperCase().startsWith("PAPERCLIP_"),
+  );
+  if (configuredPaperclipKeys.length > 0) {
+    throw new Error(
+      `${configuredPaperclipKeys[0]} is runtime-owned and must not be configured for local adapters`,
+    );
+  }
 
-  delete env.PCLI_SESSION_ID;
+  deleteEnvKeyCaseInsensitive(env, "PCLI_SESSION_ID");
+  deleteEnvKeyCaseInsensitive(env, "HOLLY_SESSION_ID");
   env.HOLLY_SESSION_ID = hollySessionId;
 }
 
@@ -776,6 +1250,7 @@ type RunChildProcessOptions = {
   env: Record<string, string>;
   timeoutSec: number;
   graceSec: number;
+  signal?: AbortSignal;
   onLog: (stream: "stdout" | "stderr", chunk: string) => Promise<void>;
   onLogError?: (err: unknown, runId: string, message: string) => void;
   onSpawn?: (meta: { pid: number; startedAt: string }) => Promise<void>;
@@ -788,7 +1263,29 @@ export async function runChildProcess(
   args: string[],
   opts: RunChildProcessOptions,
 ): Promise<RunProcessResult> {
-  return runChildProcessWithSessionIdentity(runId, command, args, opts, null);
+  return runChildProcessWithEnvironmentBoundary(runId, command, args, opts, {
+    hollySessionId: null,
+    providerProbe: false,
+  });
+}
+
+/**
+ * Run a provider discovery, model, profile, quota, or environment-test probe.
+ * Provider credentials and user configuration remain available, while every
+ * Paperclip/session identity field is removed after the final environment
+ * merge so callers cannot accidentally or explicitly forward control-plane
+ * authority to an untrusted provider CLI.
+ */
+export async function runProviderProbeChildProcess(
+  runId: string,
+  command: string,
+  args: string[],
+  opts: RunChildProcessOptions,
+): Promise<RunProcessResult> {
+  return runChildProcessWithEnvironmentBoundary(runId, command, args, opts, {
+    hollySessionId: null,
+    providerProbe: true,
+  });
 }
 
 export async function runLocalAdapterChildProcess(
@@ -802,23 +1299,53 @@ export async function runLocalAdapterChildProcess(
   if (hollySessionId === null) {
     throw new Error("Local adapter child process requires a trusted local adapter type");
   }
-  return runChildProcessWithSessionIdentity(runId, command, args, opts, hollySessionId);
+  return runChildProcessWithEnvironmentBoundary(runId, command, args, opts, {
+    hollySessionId,
+    providerProbe: false,
+  });
 }
 
-async function runChildProcessWithSessionIdentity(
+async function runChildProcessWithEnvironmentBoundary(
   runId: string,
   command: string,
   args: string[],
   opts: RunChildProcessOptions,
-  hollySessionId: string | null,
+  boundary: {
+    hollySessionId: string | null;
+    providerProbe: boolean;
+  },
 ): Promise<RunProcessResult> {
-  const onLogError = opts.onLogError ?? ((err, id, msg) => console.warn({ err, runId: id }, msg));
+  const onLogError = opts.onLogError ?? ((_err, _id, msg) => console.warn(msg));
 
   return new Promise<RunProcessResult>((resolve, reject) => {
-    const rawMerged: NodeJS.ProcessEnv = { ...process.env, ...opts.env };
-    if (hollySessionId !== null) {
-      delete rawMerged.PCLI_SESSION_ID;
-      rawMerged.HOLLY_SESSION_ID = hollySessionId;
+    const inheritedEnv: NodeJS.ProcessEnv = { ...process.env };
+    const sensitiveValues = collectSensitiveEnvValues({ ...inheritedEnv, ...opts.env });
+    const compiledSensitiveValues = new CompiledSensitiveValueMatchers(sensitiveValues);
+    deleteEnvKeyCaseInsensitive(inheritedEnv, "PAPERCLIP_API_KEY");
+    const rawMerged: NodeJS.ProcessEnv = { ...inheritedEnv, ...opts.env };
+    const paperclipApiKey = opts.env.PAPERCLIP_API_KEY;
+    deleteEnvKeyCaseInsensitive(rawMerged, "PAPERCLIP_API_KEY");
+    if (paperclipApiKey !== undefined) rawMerged.PAPERCLIP_API_KEY = paperclipApiKey;
+
+    // A generic process launch may need its run-scoped Paperclip credential,
+    // but it must never inherit the server/operator's orchestration session.
+    // Local adapters receive a fresh, agent-scoped Holly identity below.
+    deleteEnvKeyCaseInsensitive(rawMerged, "PCLI_SESSION_ID");
+    deleteEnvKeyCaseInsensitive(rawMerged, "HOLLY_SESSION_ID");
+    if (boundary.hollySessionId !== null) {
+      rawMerged.HOLLY_SESSION_ID = boundary.hollySessionId;
+      const trustedPaperclipEnv = Object.fromEntries(
+        Object.entries(opts.env).filter(
+          ([key]) =>
+            key === key.toUpperCase() &&
+            key.startsWith("PAPERCLIP_") &&
+            !isControlPlaneEnvKey(key),
+        ),
+      );
+      for (const key of Object.keys(rawMerged)) {
+        if (key.toUpperCase().startsWith("PAPERCLIP_")) delete rawMerged[key];
+      }
+      Object.assign(rawMerged, trustedPaperclipEnv);
     }
 
     // Strip Claude Code nesting-guard env vars so spawned `claude` processes
@@ -833,19 +1360,29 @@ async function runChildProcessWithSessionIdentity(
       "CLAUDE_CODE_PARENT_SESSION",
     ] as const;
     for (const key of CLAUDE_CODE_NESTING_VARS) {
-      delete rawMerged[key];
+      deleteEnvKeyCaseInsensitive(rawMerged, key);
     }
 
-    const mergedEnv = ensurePathInEnv(rawMerged);
+    const mergedEnv = ensurePathInEnv(
+      boundary.providerProbe
+        ? stripLocalAdapterProviderEnv(rawMerged)
+        : stripLocalAdapterControlPlaneEnv(rawMerged),
+    );
     void resolveSpawnTarget(command, args, opts.cwd, mergedEnv)
       .then((target) => {
+        if (opts.signal?.aborted) {
+          reject(new Error("Child process launch aborted"));
+          return;
+        }
         let child: ChildProcessWithEvents;
+        const useProcessGroup = process.platform !== "win32";
         try {
           child = spawn(target.command, target.args, {
             cwd: opts.cwd,
             env: mergedEnv,
             shell: false,
             stdio: [opts.stdin != null ? "pipe" : "ignore", "pipe", "pipe"],
+            detached: useProcessGroup,
           }) as ChildProcessWithEvents;
         } catch (err) {
           const msg = `Failed to start command "${command}" in "${opts.cwd}": ${
@@ -860,64 +1397,143 @@ async function runChildProcessWithSessionIdentity(
           child.stdin.end();
         }
 
+        runningProcesses.set(runId, {
+          child,
+          graceSec: opts.graceSec,
+          processGroup: useProcessGroup,
+        });
+
         if (typeof child.pid === "number" && child.pid > 0 && opts.onSpawn) {
           void opts.onSpawn({ pid: child.pid, startedAt }).catch((err) => {
             onLogError(err, runId, "failed to record child process metadata");
           });
         }
 
-        runningProcesses.set(runId, { child, graceSec: opts.graceSec });
-
         let timedOut = false;
+        let settled = false;
+        let terminationPromise: Promise<boolean> | null = null;
         let stdout = "";
         let stderr = "";
         let logChain: Promise<void> = Promise.resolve();
+        const orderedOutputRedactor = new OrderedSensitiveValueStreamRedactor<"stdout" | "stderr">(
+          compiledSensitiveValues,
+        );
+
+        const appendOutput = (stream: "stdout" | "stderr", text: string) => {
+          if (text.length === 0) return;
+          // Keep the beginning of captured output. Tail truncation can discard
+          // the `e`/`ey` prefix of a generic JWT and make the retained suffix
+          // unrecognizable to the server's downstream credential redactor.
+          if (stream === "stdout") stdout = appendPrefixWithCap(stdout, text);
+          else stderr = appendPrefixWithCap(stderr, text);
+          logChain = logChain
+            .then(() => opts.onLog(stream, text))
+            .catch((err) =>
+              onLogError(
+                err,
+                runId,
+                `failed to append ${stream} log chunk`,
+              ),
+            );
+        };
+
+        const requestTermination = () => {
+          if (terminationPromise) return;
+          terminationPromise = terminateLocalAdapterProcess(child, {
+            processGroup: useProcessGroup,
+            graceMs: Math.max(1, opts.graceSec) * 1000,
+            killWaitMs: 1_000,
+          });
+        };
+        const abortListener = () => requestTermination();
+        opts.signal?.addEventListener("abort", abortListener, { once: true });
+        if (opts.signal?.aborted) abortListener();
 
         const timeout =
           opts.timeoutSec > 0
             ? setTimeout(() => {
                 timedOut = true;
-                child.kill("SIGTERM");
-                setTimeout(() => {
-                  if (!child.killed) {
-                    child.kill("SIGKILL");
-                  }
-                }, Math.max(1, opts.graceSec) * 1000);
+                requestTermination();
               }, opts.timeoutSec * 1000)
             : null;
 
         child.stdout?.on("data", (chunk: unknown) => {
-          const text = String(chunk);
-          stdout = appendWithCap(stdout, text);
-          logChain = logChain
-            .then(() => opts.onLog("stdout", text))
-            .catch((err) => onLogError(err, runId, "failed to append stdout log chunk"));
+          for (const output of orderedOutputRedactor.push("stdout", String(chunk))) {
+            appendOutput(output.stream, output.chunk);
+          }
         });
 
         child.stderr?.on("data", (chunk: unknown) => {
-          const text = String(chunk);
-          stderr = appendWithCap(stderr, text);
-          logChain = logChain
-            .then(() => opts.onLog("stderr", text))
-            .catch((err) => onLogError(err, runId, "failed to append stderr log chunk"));
+          for (const output of orderedOutputRedactor.push("stderr", String(chunk))) {
+            appendOutput(output.stream, output.chunk);
+          }
         });
 
         child.on("error", (err: Error) => {
+          if (settled) return;
+          settled = true;
           if (timeout) clearTimeout(timeout);
-          runningProcesses.delete(runId);
+          opts.signal?.removeEventListener("abort", abortListener);
           const errno = (err as NodeJS.ErrnoException).code;
           const pathValue = mergedEnv.PATH ?? mergedEnv.Path ?? "";
           const msg =
             errno === "ENOENT"
               ? `Failed to start command "${command}" in "${opts.cwd}". Verify adapter command, working directory, and PATH (${pathValue}).`
               : `Failed to start command "${command}" in "${opts.cwd}": ${err.message}`;
-          reject(new Error(msg));
+          if (typeof child.pid !== "number" || child.pid <= 0) {
+            runningProcesses.delete(runId);
+            reject(new Error(msg));
+            return;
+          }
+
+          // Node can emit `error` for a failed kill as well as a failed spawn.
+          // Once a pid exists, do not discard process ownership until the same
+          // bounded group-termination proof used by the close path succeeds.
+          requestTermination();
+          const termination = terminationPromise ?? Promise.resolve(false);
+          void termination.then(
+            async (terminationProven) => {
+              if (!terminationProven) {
+                reject(new LocalAdapterProcessTerminationError(child.pid ?? null));
+                return;
+              }
+              for (const output of orderedOutputRedactor.flush()) {
+                appendOutput(output.stream, output.chunk);
+              }
+              await logChain;
+              if (runningProcesses.get(runId)?.child === child) {
+                runningProcesses.delete(runId);
+              }
+              reject(new Error(msg));
+            },
+            () => {
+              reject(new LocalAdapterProcessTerminationError(child.pid ?? null));
+            },
+          );
         });
 
         child.on("close", (code: number | null, signal: NodeJS.Signals | null) => {
+          if (settled) return;
+          settled = true;
           if (timeout) clearTimeout(timeout);
-          runningProcesses.delete(runId);
-          void logChain.finally(() => {
+          opts.signal?.removeEventListener("abort", abortListener);
+          for (const output of orderedOutputRedactor.flush()) {
+            appendOutput(output.stream, output.chunk);
+          }
+          const termination = terminationPromise ?? Promise.resolve(true);
+          void Promise.allSettled([logChain, termination]).then(([, terminationResult]) => {
+            const terminationProven =
+              terminationResult.status === "fulfilled" && terminationResult.value;
+            if (!terminationProven) {
+              // Keep the run registered. The heartbeat owner must persist its
+              // process-termination-pending marker and let bounded recovery
+              // prove group absence before releasing capacity or retrying.
+              reject(new LocalAdapterProcessTerminationError(child.pid ?? null));
+              return;
+            }
+            if (runningProcesses.get(runId)?.child === child) {
+              runningProcesses.delete(runId);
+            }
             resolve({
               exitCode: code,
               signal,

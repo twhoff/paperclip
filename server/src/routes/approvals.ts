@@ -17,13 +17,17 @@ import {
   secretService,
 } from "../services/index.js";
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
-import { redactEventPayload } from "../redaction.js";
+import {
+  SECRET_REDACTION_TOKEN,
+  redactThrownDiagnosticError,
+} from "../log-redaction.js";
+import {
+  redactApprovalRecord,
+  redactApprovalRecords,
+} from "../services/approval-redaction.js";
 
 function redactApprovalPayload<T extends { payload: Record<string, unknown> }>(approval: T): T {
-  return {
-    ...approval,
-    payload: redactEventPayload(approval.payload) ?? {},
-  };
+  return redactApprovalRecord(approval);
 }
 
 export function approvalRoutes(db: Db) {
@@ -39,7 +43,7 @@ export function approvalRoutes(db: Db) {
     assertCompanyAccess(req, companyId);
     const status = req.query.status as string | undefined;
     const result = await svc.list(companyId, status);
-    res.json(result.map((approval) => redactApprovalPayload(approval)));
+    res.json(redactApprovalRecords(result));
   });
 
   router.get("/approvals/:id", async (req, res) => {
@@ -185,9 +189,16 @@ export function approvalRoutes(db: Db) {
             },
           });
         } catch (err) {
+          const failure = redactThrownDiagnosticError(err, undefined, {
+            fallbackMessage: "Failed to queue requester wakeup",
+          });
+          const failureMessage = failure.name === SECRET_REDACTION_TOKEN ||
+            failure.message === SECRET_REDACTION_TOKEN
+            ? SECRET_REDACTION_TOKEN
+            : failure.message;
           logger.warn(
             {
-              err,
+              err: failure,
               approvalId: approval.id,
               requestedByAgentId: approval.requestedByAgentId,
             },
@@ -203,7 +214,7 @@ export function approvalRoutes(db: Db) {
             details: {
               requesterAgentId: approval.requestedByAgentId,
               linkedIssueIds,
-              error: err instanceof Error ? err.message : String(err),
+              error: failureMessage,
             },
           });
         }

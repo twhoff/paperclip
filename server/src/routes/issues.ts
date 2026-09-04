@@ -36,8 +36,9 @@ import { assertCompanyAccess, getActorInfo } from "./authz.js";
 import { shouldWakeAssigneeOnCheckout } from "./issues-checkout-wakeup.js";
 import { isAllowedContentType, MAX_ATTACHMENT_BYTES } from "../attachment-types.js";
 import { queueIssueAssignmentWakeup } from "../services/issue-assignment-wakeup.js";
+import { toExecutionWorkspace } from "../services/execution-workspaces.js";
 
-const MAX_ISSUE_COMMENT_LIMIT = 500;
+const MAX_ISSUE_COMMENT_LIMIT = 100;
 
 export function issueRoutes(db: Db, storage: StorageService) {
   const router = Router();
@@ -336,7 +337,9 @@ export function issueRoutes(db: Db, storage: StorageService) {
       project: project ?? null,
       goal: goal ?? null,
       mentionedProjects,
-      currentExecutionWorkspace,
+      currentExecutionWorkspace: currentExecutionWorkspace
+        ? toExecutionWorkspace(currentExecutionWorkspace)
+        : null,
       workProducts,
     });
   });
@@ -1187,7 +1190,7 @@ export function issueRoutes(db: Db, storage: StorageService) {
     const limit =
       limitRaw && Number.isFinite(limitRaw) && limitRaw > 0
         ? Math.min(Math.floor(limitRaw), MAX_ISSUE_COMMENT_LIMIT)
-        : null;
+        : MAX_ISSUE_COMMENT_LIMIT;
     const comments = await svc.listComments(id, {
       afterCommentId,
       order,

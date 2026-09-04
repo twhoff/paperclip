@@ -1,6 +1,19 @@
 import { and, desc, eq, isNull, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { activityLog, heartbeatRuns, issues } from "@paperclipai/db";
+import {
+  heartbeatRunSummaryResultJson,
+  summarizeHeartbeatRunResultJson,
+} from "./heartbeat-run-summary.js";
+
+const ISSUE_RUN_HISTORY_LIMIT = 200;
+const ISSUE_ACTIVITY_DEFAULT_LIMIT = 200;
+const ISSUE_ACTIVITY_MAX_LIMIT = 500;
+
+export function normalizeIssueActivityLimit(limit: number | undefined) {
+  if (limit === undefined || !Number.isFinite(limit)) return ISSUE_ACTIVITY_DEFAULT_LIMIT;
+  return Math.max(1, Math.min(ISSUE_ACTIVITY_MAX_LIMIT, Math.trunc(limit)));
+}
 
 export interface ActivityFilters {
   companyId: string;
@@ -59,7 +72,7 @@ export function activityService(db: Db) {
       return query.then((rows) => rows.map((r) => r.activityLog));
     },
 
-    forIssue: (issueId: string) =>
+    forIssue: (issueId: string, limit?: number) =>
       db
         .select()
         .from(activityLog)
@@ -69,10 +82,11 @@ export function activityService(db: Db) {
             eq(activityLog.entityId, issueId),
           ),
         )
-        .orderBy(desc(activityLog.createdAt)),
+        .orderBy(desc(activityLog.createdAt))
+        .limit(normalizeIssueActivityLimit(limit)),
 
-    runsForIssue: (companyId: string, issueId: string) =>
-      db
+    runsForIssue: async (companyId: string, issueId: string) => {
+      const rows = await db
         .select({
           runId: heartbeatRuns.id,
           status: heartbeatRuns.status,
@@ -82,7 +96,7 @@ export function activityService(db: Db) {
           createdAt: heartbeatRuns.createdAt,
           invocationSource: heartbeatRuns.invocationSource,
           usageJson: heartbeatRuns.usageJson,
-          resultJson: heartbeatRuns.resultJson,
+          resultJson: heartbeatRunSummaryResultJson,
         })
         .from(heartbeatRuns)
         .where(
@@ -101,7 +115,13 @@ export function activityService(db: Db) {
             ),
           ),
         )
-        .orderBy(desc(heartbeatRuns.createdAt)),
+        .orderBy(desc(heartbeatRuns.createdAt))
+        .limit(ISSUE_RUN_HISTORY_LIMIT);
+      return rows.map((row) => ({
+        ...row,
+        resultJson: summarizeHeartbeatRunResultJson(row.resultJson),
+      }));
+    },
 
     issuesForRun: async (runId: string) => {
       const run = await db

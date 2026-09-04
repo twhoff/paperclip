@@ -181,11 +181,21 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     path.dirname(new URL(import.meta.url).pathname),
     '../../../../../scripts/context-mode'
   )
-  const envWithScripts = {
+  const runtimeEnvWithScripts = {
     ...effectiveEnv,
     PATH: `${scriptsModeDir}:${effectiveEnv.PATH ?? process.env.PATH ?? ''}`
   }
-  const runtimeEnv = ensurePathInEnv(envWithScripts)
+  const runtimeEnv = Object.fromEntries(
+    Object.entries(ensurePathInEnv(runtimeEnvWithScripts)).filter(
+      (entry): entry is [string, string] => typeof entry[1] === 'string'
+    )
+  )
+  const childEnv = Object.fromEntries(
+    Object.entries(ensurePathInEnv({
+      ...env,
+      PATH: `${scriptsModeDir}:${env.PATH ?? process.env.PATH ?? ''}`
+    })).filter((entry): entry is [string, string] => typeof entry[1] === 'string')
+  )
   await ensureCommandResolvable(command, cwd, runtimeEnv)
 
   // -------------------------------------------------------------------------
@@ -224,7 +234,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   let profile = profileId
   if (!profile && profileName) {
     try {
-      const resolved = await resolveProfileByName(profileName, command, envWithScripts)
+      const resolved = await resolveProfileByName(profileName, command, runtimeEnv)
       if (resolved) {
         profile = resolved.id
         await onLog(
@@ -397,7 +407,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
     const proc = await runLocalAdapterChildProcess(agent, runId, command, args, {
       cwd,
-      env: envWithScripts,
+      env: childEnv,
       timeoutSec,
       graceSec,
       onSpawn,
@@ -424,7 +434,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     )
     const retry = await runAttempt(null)
     const retryParsed = parseOzOutput(retry.stdout, retry.stderr)
-    const retryCredits = await fetchOzRunCredits(command, retryParsed.runId, envWithScripts)
+    const retryCredits = await fetchOzRunCredits(command, retryParsed.runId, runtimeEnv)
     return toResult(
       retry,
       retryParsed,
@@ -440,7 +450,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     )
   }
 
-  const initialCredits = await fetchOzRunCredits(command, initialParsed.runId, envWithScripts)
+  const initialCredits = await fetchOzRunCredits(command, initialParsed.runId, runtimeEnv)
   return toResult(
     initial,
     initialParsed,

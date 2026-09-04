@@ -5,12 +5,32 @@ import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import type { AdapterRuntimeServiceReport } from "@paperclipai/adapter-utils";
+import {
+  MAX_CAPTURE_BYTES,
+  normalizeSensitiveValues,
+  stripLocalAdapterProviderEnv,
+  terminateLocalAdapterProcess,
+} from "@paperclipai/adapter-utils/server-utils";
 import type { Db } from "@paperclipai/db";
 import { workspaceRuntimeServices } from "@paperclipai/db";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { asNumber, asString, parseObject, renderTemplate } from "../adapters/utils.js";
 import { resolveHomeAwarePath } from "../home-paths.js";
+import { logger } from "../middleware/logger.js";
+import {
+  materializeCurrentUserRedactionOptions,
+  OrderedStreamingTextRedactor,
+  redactDiagnosticResponseValue,
+  redactThrownDiagnosticError,
+  SECRET_REDACTION_TOKEN,
+  type CurrentUserRedactionOptions,
+} from "../log-redaction.js";
+import { collectSensitivePayloadValues } from "../redaction.js";
 import type { WorkspaceOperationRecorder } from "./workspace-operations.js";
+
+const WORKSPACE_PROCESS_TIMEOUT_MS = 15 * 60 * 1000;
+const WORKSPACE_PROCESS_KILL_GRACE_MS = 5_000;
+const RUNTIME_SERVICE_FORCE_KILL_CLOSE_GRACE_MS = 1_000;
 
 export interface ExecutionWorkspaceInput {
   baseCwd: string;
@@ -74,14 +94,157 @@ export interface RuntimeServiceRef {
 interface RuntimeServiceRecord extends RuntimeServiceRef {
   db?: Db;
   child: ChildProcess | null;
+  displayServiceName: string;
   leaseRunIds: Set<string>;
+  logSinks: Map<string, RuntimeServiceLogSink>;
+  logSecrets: RuntimeServiceSecretValues;
   idleTimer: ReturnType<typeof globalThis.setTimeout> | null;
-  envFingerprint: string;
+  launchFingerprint: string;
+  persistenceTail: Promise<void>;
+  terminationPromise: Promise<void> | null;
+  stopPromise: Promise<void> | null;
+  terminationRequested: boolean;
+  childClosed: boolean;
+}
+
+type RuntimeServiceLogStream = "stdout" | "stderr";
+type RuntimeServiceLogCallback = (stream: RuntimeServiceLogStream, chunk: string) => Promise<void>;
+
+interface RuntimeServiceLogSink {
+  callback: RuntimeServiceLogCallback;
+  redactor: OrderedStreamingTextRedactor<RuntimeServiceLogStream>;
+  deliveryTail: Promise<void>;
 }
 
 const runtimeServicesById = new Map<string, RuntimeServiceRecord>();
 const runtimeServicesByReuseKey = new Map<string, string>();
 const runtimeServiceLeasesByRun = new Map<string, string[]>();
+const AUTO_PORT_FINGERPRINT_VALUE = "__paperclip_auto_port__";
+const RUNTIME_SERVICE_STARTUP_SETTLE_MS = 100;
+
+type RuntimeServiceSecretValues = ReturnType<typeof normalizeSensitiveValues>;
+
+function mergeRuntimeServiceSecretValues(
+  values: Iterable<string>[],
+  inheritedOverflow = false,
+): RuntimeServiceSecretValues {
+  const normalized = normalizeSensitiveValues((function* () {
+    for (const entries of values) yield* entries;
+  })());
+  return {
+    values: normalized.values,
+    overflow: inheritedOverflow || normalized.overflow,
+  };
+}
+
+function dispatchRuntimeServiceLog(
+  logSinks: ReadonlyMap<string, RuntimeServiceLogSink>,
+  serviceName: string,
+  stream: RuntimeServiceLogStream,
+  chunk: string,
+) {
+  for (const [runId, logSink] of logSinks) {
+    for (const output of logSink.redactor.push(stream, chunk)) {
+      void deliverRuntimeServiceLog(
+        logSink,
+        runId,
+        serviceName,
+        output.stream,
+        output.chunk,
+      );
+    }
+  }
+}
+
+function createRuntimeServiceLogSink(
+  callback: RuntimeServiceLogCallback,
+  secrets: RuntimeServiceSecretValues,
+): RuntimeServiceLogSink {
+  const redactionOptions: CurrentUserRedactionOptions = {
+    enabled: false,
+    secretValues: secrets.values,
+    secretValuesOverflow: secrets.overflow,
+  };
+  return {
+    callback,
+    redactor: new OrderedStreamingTextRedactor(redactionOptions),
+    deliveryTail: Promise.resolve(),
+  };
+}
+
+function rotateRuntimeServiceLogSinks(
+  logSinks: ReadonlyMap<string, RuntimeServiceLogSink>,
+  serviceName: string,
+  secrets: RuntimeServiceSecretValues,
+) {
+  const redactionOptions: CurrentUserRedactionOptions = {
+    enabled: false,
+    secretValues: secrets.values,
+    secretValuesOverflow: secrets.overflow,
+  };
+  for (const [runId, logSink] of logSinks) {
+    const previousRedactor = logSink.redactor;
+    const transitionRedactor = new OrderedStreamingTextRedactor<RuntimeServiceLogStream>(
+      redactionOptions,
+    );
+    const transitionOutput = previousRedactor.flush().flatMap((output) =>
+      transitionRedactor.push(output.stream, output.chunk));
+    transitionOutput.push(...transitionRedactor.flush());
+    logSink.redactor = new OrderedStreamingTextRedactor(redactionOptions);
+    for (const output of transitionOutput) {
+      void deliverRuntimeServiceLog(
+        logSink,
+        runId,
+        serviceName,
+        output.stream,
+        output.chunk,
+      );
+    }
+  }
+}
+
+function deliverRuntimeServiceLog(
+  logSink: RuntimeServiceLogSink,
+  runId: string,
+  serviceName: string,
+  stream: RuntimeServiceLogStream,
+  sanitizedChunk: string,
+) {
+  if (!sanitizedChunk) return logSink.deliveryTail;
+  logSink.deliveryTail = logSink.deliveryTail
+    .then(() => logSink.callback(stream, `[service:${serviceName}] ${sanitizedChunk}`))
+    .catch(() => {
+      logger.warn({ runId, serviceName, stream }, "runtime service log callback failed");
+    });
+  return logSink.deliveryTail;
+}
+
+async function flushRuntimeServiceLogSink(
+  logSink: RuntimeServiceLogSink,
+  runId: string,
+  serviceName: string,
+) {
+  for (const output of logSink.redactor.flush()) {
+    await deliverRuntimeServiceLog(
+      logSink,
+      runId,
+      serviceName,
+      output.stream,
+      output.chunk,
+    );
+  }
+  await logSink.deliveryTail;
+}
+
+async function flushRuntimeServiceLogSinks(
+  logSinks: ReadonlyMap<string, RuntimeServiceLogSink>,
+  serviceName: string,
+) {
+  await Promise.all(
+    Array.from(logSinks, ([runId, logSink]) =>
+      flushRuntimeServiceLogSink(logSink, runId, serviceName)),
+  );
+}
 
 function stableStringify(value: unknown): string {
   if (Array.isArray(value)) {
@@ -95,14 +258,7 @@ function stableStringify(value: unknown): string {
 }
 
 export function sanitizeRuntimeServiceBaseEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...baseEnv };
-  for (const key of Object.keys(env)) {
-    if (key.startsWith("PAPERCLIP_")) {
-      delete env[key];
-    }
-  }
-  delete env.DATABASE_URL;
-  return env;
+  return stripLocalAdapterProviderEnv(baseEnv);
 }
 
 function stableRuntimeServiceId(input: {
@@ -133,8 +289,66 @@ function stableRuntimeServiceId(input: {
   return `${input.adapterType}-${digest}`;
 }
 
+function projectRuntimeServiceDiagnosticFields(
+  input: Pick<
+    RuntimeServiceRef,
+    | "serviceName"
+    | "scopeId"
+    | "reuseKey"
+    | "command"
+    | "cwd"
+    | "url"
+    | "providerRef"
+    | "stopPolicy"
+  >,
+  secrets: RuntimeServiceSecretValues,
+) {
+  if (secrets.overflow) {
+    return {
+      serviceName: SECRET_REDACTION_TOKEN,
+      scopeId: input.scopeId === null ? null : SECRET_REDACTION_TOKEN,
+      reuseKey: input.reuseKey === null ? null : SECRET_REDACTION_TOKEN,
+      command: input.command === null ? null : SECRET_REDACTION_TOKEN,
+      cwd: input.cwd === null ? null : SECRET_REDACTION_TOKEN,
+      url: input.url === null ? null : SECRET_REDACTION_TOKEN,
+      providerRef: input.providerRef === null ? null : SECRET_REDACTION_TOKEN,
+      stopPolicy:
+        input.stopPolicy === null
+          ? null
+          : { redacted: SECRET_REDACTION_TOKEN },
+    };
+  }
+  return redactDiagnosticResponseValue(
+    { payload: input },
+    {
+      enabled: false,
+      secretValues: secrets.values,
+      secretValuesOverflow: secrets.overflow,
+    },
+  ).payload;
+}
+
+function runtimeServiceDisplayName(serviceName: string, secrets: RuntimeServiceSecretValues) {
+  const projected = projectRuntimeServiceDiagnosticFields(
+    {
+      serviceName,
+      scopeId: null,
+      reuseKey: null,
+      command: null,
+      cwd: null,
+      url: null,
+      providerRef: null,
+      stopPolicy: null,
+    },
+    secrets,
+  ).serviceName;
+  return typeof projected === "string" && projected.trim().length > 0
+    ? projected
+    : "service";
+}
+
 function toRuntimeServiceRef(record: RuntimeServiceRecord, overrides?: Partial<RuntimeServiceRef>): RuntimeServiceRef {
-  return {
+  const rawRef: RuntimeServiceRef = {
     id: record.id,
     companyId: record.companyId,
     projectId: record.projectId,
@@ -162,6 +376,10 @@ function toRuntimeServiceRef(record: RuntimeServiceRecord, overrides?: Partial<R
     healthStatus: record.healthStatus,
     reused: record.reused,
     ...overrides,
+  };
+  return {
+    ...rawRef,
+    ...projectRuntimeServiceDiagnosticFields(rawRef, record.logSecrets),
   };
 }
 
@@ -228,28 +446,104 @@ function formatCommandForDisplay(command: string, args: string[]) {
     .join(" ");
 }
 
-async function executeProcess(input: {
+function appendCapturedProcessOutput(previous: string, chunk: string) {
+  const previousBytes = Buffer.byteLength(previous, "utf8");
+  if (previousBytes >= MAX_CAPTURE_BYTES) return previous;
+  const remaining = MAX_CAPTURE_BYTES - previousBytes;
+  const chunkBytes = Buffer.from(chunk, "utf8");
+  if (chunkBytes.byteLength <= remaining) return previous + chunk;
+  return previous + chunkBytes
+    .subarray(0, remaining)
+    .toString("utf8")
+    .replace(/\uFFFD$/u, "");
+}
+
+export async function executeProcess(input: {
   command: string;
   args: string[];
   cwd: string;
   env?: NodeJS.ProcessEnv;
-}): Promise<{ stdout: string; stderr: string; code: number | null }> {
-  const proc = await new Promise<{ stdout: string; stderr: string; code: number | null }>((resolve, reject) => {
+  timeoutMs?: number;
+  killGraceMs?: number;
+  sanitizeOutput?: boolean;
+}): Promise<{ stdout: string; stderr: string; code: number | null; timedOut: boolean }> {
+  const proc = await new Promise<{
+    stdout: string;
+    stderr: string;
+    code: number | null;
+    timedOut: boolean;
+  }>((resolve, reject) => {
     const child = spawn(input.command, input.args, {
       cwd: input.cwd,
       stdio: ["ignore", "pipe", "pipe"],
-      env: input.env ?? process.env,
+      env: input.env ?? sanitizeRuntimeServiceBaseEnv(process.env),
+      detached: process.platform !== "win32",
     });
     let stdout = "";
     let stderr = "";
+    let timedOut = false;
+    let settled = false;
+    let terminationPromise: Promise<boolean> | null = null;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      terminationPromise = terminateLocalAdapterProcess(child, {
+        processGroup: process.platform !== "win32",
+        graceMs: Math.max(1, input.killGraceMs ?? WORKSPACE_PROCESS_KILL_GRACE_MS),
+        killWaitMs: RUNTIME_SERVICE_FORCE_KILL_CLOSE_GRACE_MS,
+      });
+    }, Math.max(1, input.timeoutMs ?? WORKSPACE_PROCESS_TIMEOUT_MS));
+    const cleanup = () => {
+      clearTimeout(timeout);
+    };
     child.stdout?.on("data", (chunk) => {
-      stdout += String(chunk);
+      stdout = appendCapturedProcessOutput(stdout, String(chunk));
     });
     child.stderr?.on("data", (chunk) => {
-      stderr += String(chunk);
+      stderr = appendCapturedProcessOutput(stderr, String(chunk));
     });
-    child.on("error", reject);
-    child.on("close", (code) => resolve({ stdout, stderr, code }));
+    child.on("error", (error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      void (terminationPromise ?? Promise.resolve(true)).catch(() => false).then((terminationProven) => {
+        if (!terminationProven) {
+          reject(new Error("Workspace process tree could not be terminated"));
+          return;
+        }
+        reject(error);
+      });
+    });
+    child.on("close", (code) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      void (terminationPromise ?? Promise.resolve(true)).catch(() => false).then((terminationProven) => {
+        if (!terminationProven) {
+          reject(new Error("Workspace process tree could not be terminated"));
+          return;
+        }
+        if (input.sanitizeOutput) {
+          const sensitive = collectSensitivePayloadValues(input.env ?? {});
+          const projected = redactDiagnosticResponseValue(
+            { payload: { stdout, stderr } },
+            {
+              enabled: false,
+              secretValues: sensitive.values,
+              secretValuesOverflow: sensitive.overflow,
+            },
+          ).payload;
+          if (projected && typeof projected === "object" && !Array.isArray(projected)) {
+            const record = projected as Record<string, unknown>;
+            stdout = typeof record.stdout === "string" ? record.stdout : SECRET_REDACTION_TOKEN;
+            stderr = typeof record.stderr === "string" ? record.stderr : SECRET_REDACTION_TOKEN;
+          } else {
+            stdout = SECRET_REDACTION_TOKEN;
+            stderr = SECRET_REDACTION_TOKEN;
+          }
+        }
+        resolve({ stdout, stderr, code, timedOut });
+      });
+    });
   });
   return proc;
 }
@@ -275,19 +569,17 @@ async function directoryExists(value: string) {
   return fs.stat(value).then((stats) => stats.isDirectory()).catch(() => false);
 }
 
-function terminateChildProcess(child: ChildProcess) {
+function terminateChildProcess(child: ChildProcess, signal: NodeJS.Signals = "SIGTERM") {
   if (!child.pid) return;
   if (process.platform !== "win32") {
     try {
-      process.kill(-child.pid, "SIGTERM");
+      process.kill(-child.pid, signal);
       return;
     } catch {
       // Fall through to the direct child kill.
     }
   }
-  if (!child.killed) {
-    child.kill("SIGTERM");
-  }
+  child.kill(signal);
 }
 
 function buildWorkspaceCommandEnv(input: {
@@ -299,7 +591,7 @@ function buildWorkspaceCommandEnv(input: {
   agent: ExecutionWorkspaceAgentRef;
   created: boolean;
 }) {
-  const env: NodeJS.ProcessEnv = { ...process.env };
+  const env: NodeJS.ProcessEnv = sanitizeRuntimeServiceBaseEnv(process.env);
   env.PAPERCLIP_WORKSPACE_CWD = input.worktreePath;
   env.PAPERCLIP_WORKSPACE_PATH = input.worktreePath;
   env.PAPERCLIP_WORKSPACE_WORKTREE_PATH = input.worktreePath;
@@ -333,7 +625,11 @@ async function runWorkspaceCommand(input: {
     args: ["-c", input.command],
     cwd: input.cwd,
     env: input.env,
+    sanitizeOutput: true,
   });
+  if (proc.timedOut) {
+    throw new Error(`${input.label} timed out`);
+  }
   if (proc.code === 0) return;
 
   const details = [proc.stderr.trim(), proc.stdout.trim()].filter(Boolean).join("\n");
@@ -429,6 +725,7 @@ async function recordWorkspaceCommandOperation(
         args: ["-c", input.command],
         cwd: input.cwd,
         env: input.env,
+        sanitizeOutput: true,
       });
       stdout = result.stdout;
       stderr = result.stderr;
@@ -704,7 +1001,11 @@ export async function cleanupExecutionWorkspaceArtifacts(input: {
   } | null;
   teardownCommand?: string | null;
   recorder?: WorkspaceOperationRecorder | null;
+  redactionOptions?: CurrentUserRedactionOptions;
 }) {
+  const cleanupRedactionOptions = materializeCurrentUserRedactionOptions(
+    input.redactionOptions,
+  );
   const warnings: string[] = [];
   const workspacePath = input.workspace.providerRef ?? input.workspace.cwd;
   const cleanupEnv = buildExecutionWorkspaceCleanupEnv({
@@ -829,10 +1130,15 @@ export async function cleanupExecutionWorkspaceArtifacts(input: {
     !workspacePath ||
     !(await directoryExists(workspacePath));
 
+  const redactedWarnings = redactDiagnosticResponseValue({ warnings }, {
+    ...cleanupRedactionOptions,
+    extraDiagnosticKeys: ["warnings"],
+  }).warnings;
+
   return {
     cleanedPath: workspacePath,
     cleaned,
-    warnings,
+    warnings: redactedWarnings,
   };
 }
 
@@ -862,7 +1168,7 @@ function buildTemplateData(input: {
   agent: ExecutionWorkspaceAgentRef;
   issue: ExecutionWorkspaceIssueRef | null;
   adapterEnv: Record<string, string>;
-  port: number | null;
+  port: number | string | null;
 }) {
   return {
     workspace: {
@@ -884,6 +1190,136 @@ function buildTemplateData(input: {
     },
     port: input.port ?? "",
   };
+}
+
+function buildTrustedRuntimeServiceEnv(input: {
+  workspace: RealizedExecutionWorkspace;
+  agent: ExecutionWorkspaceAgentRef;
+  issue: ExecutionWorkspaceIssueRef | null;
+}): Record<string, string> {
+  return {
+    PAPERCLIP_WORKSPACE_CWD: input.workspace.cwd,
+    PAPERCLIP_WORKSPACE_PATH: input.workspace.cwd,
+    PAPERCLIP_WORKSPACE_WORKTREE_PATH:
+      input.workspace.worktreePath ?? input.workspace.cwd,
+    PAPERCLIP_WORKSPACE_BRANCH: input.workspace.branchName ?? "",
+    PAPERCLIP_WORKSPACE_BASE_CWD: input.workspace.baseCwd,
+    PAPERCLIP_WORKSPACE_REPO_ROOT: input.workspace.baseCwd,
+    PAPERCLIP_WORKSPACE_SOURCE: input.workspace.source,
+    PAPERCLIP_WORKSPACE_REPO_REF: input.workspace.repoRef ?? "",
+    PAPERCLIP_WORKSPACE_REPO_URL: input.workspace.repoUrl ?? "",
+    PAPERCLIP_WORKSPACE_CREATED: input.workspace.created ? "true" : "false",
+    PAPERCLIP_PROJECT_ID: input.workspace.projectId ?? "",
+    PAPERCLIP_PROJECT_WORKSPACE_ID: input.workspace.workspaceId ?? "",
+    PAPERCLIP_AGENT_ID: input.agent.id,
+    PAPERCLIP_AGENT_NAME: input.agent.name,
+    PAPERCLIP_COMPANY_ID: input.agent.companyId,
+    PAPERCLIP_ISSUE_ID: input.issue?.id ?? "",
+    PAPERCLIP_ISSUE_IDENTIFIER: input.issue?.identifier ?? "",
+    PAPERCLIP_ISSUE_TITLE: input.issue?.title ?? "",
+  };
+}
+
+interface LocalRuntimeServiceLaunchInput {
+  runId: string;
+  agent: ExecutionWorkspaceAgentRef;
+  issue: ExecutionWorkspaceIssueRef | null;
+  workspace: RealizedExecutionWorkspace;
+  adapterEnv: Record<string, string>;
+  resolvedSecrets: RuntimeServiceSecretValues;
+  service: Record<string, unknown>;
+}
+
+function resolveRuntimeServiceLaunchSpec(
+  input: LocalRuntimeServiceLaunchInput,
+  port: number | string | null,
+) {
+  const serviceName = asString(input.service.name, "service");
+  const lifecycle =
+    asString(input.service.lifecycle, "shared") === "ephemeral"
+      ? "ephemeral" as const
+      : "shared" as const;
+  const command = asString(input.service.command, "");
+  const serviceCwdTemplate = asString(input.service.cwd, ".");
+  const portConfig = parseObject(input.service.port);
+  const envConfig = parseObject(input.service.env);
+  const templateData = buildTemplateData({
+    workspace: input.workspace,
+    agent: input.agent,
+    issue: input.issue,
+    adapterEnv: input.adapterEnv,
+    port,
+  });
+  const serviceCwd = resolveConfiguredPath(
+    renderTemplate(serviceCwdTemplate, templateData),
+    input.workspace.cwd,
+  );
+  const mergedEnv: Record<string, string> = {
+    ...process.env,
+    ...input.adapterEnv,
+  } as Record<string, string>;
+  for (const [key, value] of Object.entries(envConfig)) {
+    if (typeof value === "string") {
+      mergedEnv[key] = renderTemplate(value, templateData);
+    }
+  }
+  if (port !== null && port !== "") {
+    const portEnvKey = asString(portConfig.envKey, "PORT");
+    mergedEnv[portEnvKey] = String(port);
+  }
+  const collectedMergedEnvSecrets = collectSensitivePayloadValues(mergedEnv);
+  const logSecrets = mergeRuntimeServiceSecretValues(
+    [collectedMergedEnvSecrets.values, input.resolvedSecrets.values],
+    input.resolvedSecrets.overflow || collectedMergedEnvSecrets.overflow,
+  );
+  const env = stripLocalAdapterProviderEnv(mergedEnv) as Record<string, string>;
+  Object.assign(env, buildTrustedRuntimeServiceEnv(input));
+  const expose = parseObject(input.service.expose);
+  const readiness = parseObject(input.service.readiness);
+  const urlTemplate =
+    asString(expose.urlTemplate, "") ||
+    asString(readiness.urlTemplate, "");
+  const url = urlTemplate ? renderTemplate(urlTemplate, templateData) : null;
+  const stopPolicy = parseObject(input.service.stopPolicy);
+  const shell = process.env.SHELL?.trim() || "/bin/sh";
+
+  return {
+    command,
+    env,
+    expose,
+    lifecycle,
+    logSecrets,
+    portConfig,
+    readiness,
+    serviceCwd,
+    serviceName,
+    shell,
+    stopPolicy,
+    url,
+  };
+}
+
+function buildRuntimeServiceLaunchFingerprint(input: LocalRuntimeServiceLaunchInput) {
+  const portConfig = parseObject(input.service.port);
+  const fingerprintPort =
+    asString(portConfig.type, "") === "auto"
+      ? AUTO_PORT_FINGERPRINT_VALUE
+      : null;
+  const spec = resolveRuntimeServiceLaunchSpec(input, fingerprintPort);
+  return createHash("sha256")
+    .update(stableStringify({
+      command: spec.command,
+      cwd: spec.serviceCwd,
+      env: spec.env,
+      expose: spec.expose,
+      lifecycle: spec.lifecycle,
+      port: spec.portConfig,
+      readiness: spec.readiness,
+      shell: spec.shell,
+      stopPolicy: spec.stopPolicy,
+      url: spec.url,
+    }))
+    .digest("hex");
 }
 
 function resolveServiceScopeId(input: {
@@ -918,51 +1354,61 @@ async function waitForReadiness(input: {
 }) {
   const readiness = parseObject(input.service.readiness);
   const readinessType = asString(readiness.type, "");
-  if (readinessType !== "http" || !input.url) return;
+  if (readinessType !== "http" || !input.url) {
+    await delay(RUNTIME_SERVICE_STARTUP_SETTLE_MS);
+    return;
+  }
   const timeoutSec = Math.max(1, asNumber(readiness.timeoutSec, 30));
   const intervalMs = Math.max(100, asNumber(readiness.intervalMs, 500));
   const deadline = Date.now() + timeoutSec * 1000;
   let lastError = "service did not become ready";
   while (Date.now() < deadline) {
+    const remainingMs = deadline - Date.now();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), Math.max(1, remainingMs));
     try {
-      const response = await fetch(input.url);
+      const response = await fetch(input.url, { signal: controller.signal });
       if (response.ok) return;
       lastError = `received HTTP ${response.status}`;
     } catch (err) {
       lastError = err instanceof Error ? err.message : String(err);
+    } finally {
+      clearTimeout(timeout);
     }
-    await delay(intervalMs);
+    const sleepMs = Math.min(intervalMs, Math.max(0, deadline - Date.now()));
+    if (sleepMs > 0) await delay(sleepMs);
   }
   throw new Error(`Readiness check failed for ${input.url}: ${lastError}`);
 }
 
 function toPersistedWorkspaceRuntimeService(record: RuntimeServiceRecord): typeof workspaceRuntimeServices.$inferInsert {
+  const projected = toRuntimeServiceRef(record);
   return {
-    id: record.id,
-    companyId: record.companyId,
-    projectId: record.projectId,
-    projectWorkspaceId: record.projectWorkspaceId,
-    executionWorkspaceId: record.executionWorkspaceId,
-    issueId: record.issueId,
-    scopeType: record.scopeType,
-    scopeId: record.scopeId,
-    serviceName: record.serviceName,
-    status: record.status,
-    lifecycle: record.lifecycle,
-    reuseKey: record.reuseKey,
-    command: record.command,
-    cwd: record.cwd,
-    port: record.port,
-    url: record.url,
-    provider: record.provider,
-    providerRef: record.providerRef,
-    ownerAgentId: record.ownerAgentId,
-    startedByRunId: record.startedByRunId,
-    lastUsedAt: new Date(record.lastUsedAt),
-    startedAt: new Date(record.startedAt),
-    stoppedAt: record.stoppedAt ? new Date(record.stoppedAt) : null,
-    stopPolicy: record.stopPolicy,
-    healthStatus: record.healthStatus,
+    id: projected.id,
+    companyId: projected.companyId,
+    projectId: projected.projectId,
+    projectWorkspaceId: projected.projectWorkspaceId,
+    executionWorkspaceId: projected.executionWorkspaceId,
+    issueId: projected.issueId,
+    scopeType: projected.scopeType,
+    scopeId: projected.scopeId,
+    serviceName: projected.serviceName,
+    status: projected.status,
+    lifecycle: projected.lifecycle,
+    reuseKey: projected.reuseKey,
+    command: projected.command,
+    cwd: projected.cwd,
+    port: projected.port,
+    url: projected.url,
+    provider: projected.provider,
+    providerRef: projected.providerRef,
+    ownerAgentId: projected.ownerAgentId,
+    startedByRunId: projected.startedByRunId,
+    lastUsedAt: new Date(projected.lastUsedAt),
+    startedAt: new Date(projected.startedAt),
+    stoppedAt: projected.stoppedAt ? new Date(projected.stoppedAt) : null,
+    stopPolicy: projected.stopPolicy,
+    healthStatus: projected.healthStatus,
     updatedAt: new Date(),
   };
 }
@@ -970,38 +1416,43 @@ function toPersistedWorkspaceRuntimeService(record: RuntimeServiceRecord): typeo
 async function persistRuntimeServiceRecord(db: Db | undefined, record: RuntimeServiceRecord) {
   if (!db) return;
   const values = toPersistedWorkspaceRuntimeService(record);
-  await db
-    .insert(workspaceRuntimeServices)
-    .values(values)
-    .onConflictDoUpdate({
-      target: workspaceRuntimeServices.id,
-      set: {
-        projectId: values.projectId,
-        projectWorkspaceId: values.projectWorkspaceId,
-        executionWorkspaceId: values.executionWorkspaceId,
-        issueId: values.issueId,
-        scopeType: values.scopeType,
-        scopeId: values.scopeId,
-        serviceName: values.serviceName,
-        status: values.status,
-        lifecycle: values.lifecycle,
-        reuseKey: values.reuseKey,
-        command: values.command,
-        cwd: values.cwd,
-        port: values.port,
-        url: values.url,
-        provider: values.provider,
-        providerRef: values.providerRef,
-        ownerAgentId: values.ownerAgentId,
-        startedByRunId: values.startedByRunId,
-        lastUsedAt: values.lastUsedAt,
-        startedAt: values.startedAt,
-        stoppedAt: values.stoppedAt,
-        stopPolicy: values.stopPolicy,
-        healthStatus: values.healthStatus,
-        updatedAt: values.updatedAt,
-      },
-    });
+  const previous = record.persistenceTail;
+  const next = previous.catch(() => undefined).then(async () => {
+    await db
+      .insert(workspaceRuntimeServices)
+      .values(values)
+      .onConflictDoUpdate({
+        target: workspaceRuntimeServices.id,
+        set: {
+          projectId: values.projectId,
+          projectWorkspaceId: values.projectWorkspaceId,
+          executionWorkspaceId: values.executionWorkspaceId,
+          issueId: values.issueId,
+          scopeType: values.scopeType,
+          scopeId: values.scopeId,
+          serviceName: values.serviceName,
+          status: values.status,
+          lifecycle: values.lifecycle,
+          reuseKey: values.reuseKey,
+          command: values.command,
+          cwd: values.cwd,
+          port: values.port,
+          url: values.url,
+          provider: values.provider,
+          providerRef: values.providerRef,
+          ownerAgentId: values.ownerAgentId,
+          startedByRunId: values.startedByRunId,
+          lastUsedAt: values.lastUsedAt,
+          startedAt: values.startedAt,
+          stoppedAt: values.stoppedAt,
+          stopPolicy: values.stopPolicy,
+          healthStatus: values.healthStatus,
+          updatedAt: values.updatedAt,
+        },
+      });
+  });
+  record.persistenceTail = next;
+  await next;
 }
 
 function clearIdleTimer(record: RuntimeServiceRecord) {
@@ -1039,7 +1490,7 @@ export function normalizeAdapterManagedRuntimeServices(input: {
     const healthStatus =
       report.healthStatus ??
       (status === "running" ? "healthy" : status === "failed" ? "unhealthy" : "unknown");
-    return {
+    const ref: RuntimeServiceRef = {
       id: stableRuntimeServiceId({
         adapterType: input.adapterType,
         runId: input.runId,
@@ -1076,6 +1527,17 @@ export function normalizeAdapterManagedRuntimeServices(input: {
       healthStatus,
       reused: false,
     };
+    const collectedReportSecrets = collectSensitivePayloadValues(report);
+    return {
+      ...ref,
+      ...projectRuntimeServiceDiagnosticFields(
+        ref,
+        mergeRuntimeServiceSecretValues(
+          [collectedReportSecrets.values],
+          collectedReportSecrets.overflow,
+        ),
+      ),
+    };
   });
 }
 
@@ -1087,111 +1549,198 @@ async function startLocalRuntimeService(input: {
   workspace: RealizedExecutionWorkspace;
   executionWorkspaceId?: string | null;
   adapterEnv: Record<string, string>;
+  resolvedSecrets: RuntimeServiceSecretValues;
   service: Record<string, unknown>;
   onLog?: (stream: "stdout" | "stderr", chunk: string) => Promise<void>;
   reuseKey: string | null;
+  launchFingerprint: string;
   scopeType: "project_workspace" | "execution_workspace" | "run" | "agent";
   scopeId: string | null;
 }): Promise<RuntimeServiceRecord> {
-  const serviceName = asString(input.service.name, "service");
-  const lifecycle = asString(input.service.lifecycle, "shared") === "ephemeral" ? "ephemeral" : "shared";
-  const command = asString(input.service.command, "");
-  if (!command) throw new Error(`Runtime service "${serviceName}" is missing command`);
-  const serviceCwdTemplate = asString(input.service.cwd, ".");
   const portConfig = parseObject(input.service.port);
   const port = asString(portConfig.type, "") === "auto" ? await allocatePort() : null;
-  const envConfig = parseObject(input.service.env);
-  const templateData = buildTemplateData({
-    workspace: input.workspace,
-    agent: input.agent,
-    issue: input.issue,
-    adapterEnv: input.adapterEnv,
-    port,
-  });
-  const serviceCwd = resolveConfiguredPath(renderTemplate(serviceCwdTemplate, templateData), input.workspace.cwd);
-  const env: Record<string, string> = {
-    ...sanitizeRuntimeServiceBaseEnv(process.env),
-    ...input.adapterEnv,
-  } as Record<string, string>;
-  for (const [key, value] of Object.entries(envConfig)) {
-    if (typeof value === "string") {
-      env[key] = renderTemplate(value, templateData);
-    }
+  const launch = resolveRuntimeServiceLaunchSpec(input, port);
+  const displayServiceName = runtimeServiceDisplayName(
+    launch.serviceName,
+    launch.logSecrets,
+  );
+  if (!launch.command) {
+    throw new Error(`Runtime service "${displayServiceName}" is missing command`);
   }
-  if (port) {
-    const portEnvKey = asString(portConfig.envKey, "PORT");
-    env[portEnvKey] = String(port);
-  }
-  const shell = process.env.SHELL?.trim() || "/bin/sh";
-  const child = spawn(shell, ["-lc", command], {
-    cwd: serviceCwd,
-    env,
+  const child = spawn(launch.shell, ["-lc", launch.command], {
+    cwd: launch.serviceCwd,
+    env: launch.env,
     detached: process.platform !== "win32",
     stdio: ["ignore", "pipe", "pipe"],
   });
-  let stderrExcerpt = "";
-  let stdoutExcerpt = "";
-  child.stdout?.on("data", async (chunk) => {
-    const text = String(chunk);
-    stdoutExcerpt = (stdoutExcerpt + text).slice(-4096);
-    if (input.onLog) await input.onLog("stdout", `[service:${serviceName}] ${text}`);
-  });
-  child.stderr?.on("data", async (chunk) => {
-    const text = String(chunk);
-    stderrExcerpt = (stderrExcerpt + text).slice(-4096);
-    if (input.onLog) await input.onLog("stderr", `[service:${serviceName}] ${text}`);
-  });
-
-  const expose = parseObject(input.service.expose);
-  const readiness = parseObject(input.service.readiness);
-  const urlTemplate =
-    asString(expose.urlTemplate, "") ||
-    asString(readiness.urlTemplate, "");
-  const url = urlTemplate ? renderTemplate(urlTemplate, templateData) : null;
-
-  try {
-    await waitForReadiness({ service: input.service, url });
-  } catch (err) {
-    terminateChildProcess(child);
-    throw new Error(
-      `Failed to start runtime service "${serviceName}": ${err instanceof Error ? err.message : String(err)}${stderrExcerpt ? ` | stderr: ${stderrExcerpt.trim()}` : ""}`,
+  const logSinks = new Map<string, RuntimeServiceLogSink>();
+  if (input.onLog) {
+    logSinks.set(
+      input.runId,
+      createRuntimeServiceLogSink(input.onLog, launch.logSecrets),
     );
   }
+  const diagnosticRedactor = new OrderedStreamingTextRedactor<RuntimeServiceLogStream>({
+    enabled: false,
+    secretValues: launch.logSecrets.values,
+    secretValuesOverflow: launch.logSecrets.overflow,
+  });
+  let stderrExcerpt = "";
+  let stdoutExcerpt = "";
+  const appendDiagnosticChunks = (
+    chunks: ReturnType<typeof diagnosticRedactor.push>,
+  ) => {
+    for (const output of chunks) {
+      if (output.stream === "stdout") {
+        stdoutExcerpt = (stdoutExcerpt + output.chunk).slice(-4096);
+      } else {
+        stderrExcerpt = (stderrExcerpt + output.chunk).slice(-4096);
+      }
+    }
+  };
+  child.stdout?.on("data", (chunk) => {
+    const text = String(chunk);
+    appendDiagnosticChunks(diagnosticRedactor.push("stdout", text));
+    dispatchRuntimeServiceLog(logSinks, displayServiceName, "stdout", text);
+  });
+  child.stderr?.on("data", (chunk) => {
+    const text = String(chunk);
+    appendDiagnosticChunks(diagnosticRedactor.push("stderr", text));
+    dispatchRuntimeServiceLog(logSinks, displayServiceName, "stderr", text);
+  });
 
-  const envFingerprint = createHash("sha256").update(stableStringify(envConfig)).digest("hex");
-  return {
+  const nowIso = new Date().toISOString();
+  const record: RuntimeServiceRecord = {
     id: randomUUID(),
     companyId: input.agent.companyId,
     projectId: input.workspace.projectId,
     projectWorkspaceId: input.workspace.workspaceId,
     executionWorkspaceId: input.executionWorkspaceId ?? null,
     issueId: input.issue?.id ?? null,
-    serviceName,
-    status: "running",
-    lifecycle,
+    serviceName: launch.serviceName,
+    status: "starting",
+    lifecycle: launch.lifecycle,
     scopeType: input.scopeType,
     scopeId: input.scopeId,
     reuseKey: input.reuseKey,
-    command,
-    cwd: serviceCwd,
+    command: launch.command,
+    cwd: launch.serviceCwd,
     port,
-    url,
+    url: launch.url,
     provider: "local_process",
     providerRef: child.pid ? String(child.pid) : null,
     ownerAgentId: input.agent.id,
     startedByRunId: input.runId,
-    lastUsedAt: new Date().toISOString(),
-    startedAt: new Date().toISOString(),
+    lastUsedAt: nowIso,
+    startedAt: nowIso,
     stoppedAt: null,
-    stopPolicy: parseObject(input.service.stopPolicy),
-    healthStatus: "healthy",
+    stopPolicy: launch.stopPolicy,
+    healthStatus: "unknown",
     reused: false,
     db: input.db,
     child,
+    displayServiceName,
     leaseRunIds: new Set([input.runId]),
+    logSinks,
+    logSecrets: launch.logSecrets,
     idleTimer: null,
-    envFingerprint,
+    launchFingerprint: input.launchFingerprint,
+    persistenceTail: Promise.resolve(),
+    terminationPromise: null,
+    stopPromise: null,
+    terminationRequested: false,
+    childClosed: false,
   };
+
+  registerRuntimeService(input.db, record);
+
+  try {
+    await persistRuntimeServiceRecord(input.db, record);
+    await waitForReadiness({ service: input.service, url: launch.url });
+    if (
+      record.status !== "starting" ||
+      child.exitCode !== null ||
+      child.signalCode !== null
+    ) {
+      throw new Error("runtime service process exited during startup");
+    }
+    record.status = "running";
+    record.healthStatus = "healthy";
+    record.lastUsedAt = new Date().toISOString();
+    await persistRuntimeServiceRecord(input.db, record);
+    return record;
+  } catch (err) {
+    let cleanupError: unknown = null;
+    try {
+      await terminateRuntimeServiceChildAndWait(record);
+    } catch (error) {
+      cleanupError = error;
+    }
+    appendDiagnosticChunks(diagnosticRedactor.flush());
+    let finalizationError: unknown = null;
+    if (!cleanupError) {
+      try {
+        await finalizeRuntimeServiceTermination(record, "failed");
+      } catch (error) {
+        finalizationError = error;
+      }
+    }
+    const errorDiagnostic = redactThrownDiagnosticError(
+      err,
+      {
+        enabled: false,
+        secretValues: launch.logSecrets.values,
+        secretValuesOverflow: launch.logSecrets.overflow,
+      },
+      { fallbackMessage: "Runtime service failed" },
+    );
+    const cleanupDiagnostic = cleanupError
+      ? redactThrownDiagnosticError(
+          cleanupError,
+          {
+            enabled: false,
+            secretValues: launch.logSecrets.values,
+            secretValuesOverflow: launch.logSecrets.overflow,
+          },
+          { fallbackMessage: "Runtime service cleanup failed" },
+        ).message
+      : finalizationError
+        ? redactThrownDiagnosticError(
+            finalizationError,
+            {
+              enabled: false,
+              secretValues: launch.logSecrets.values,
+              secretValuesOverflow: launch.logSecrets.overflow,
+            },
+            { fallbackMessage: "Runtime service finalization failed" },
+          ).message
+        : "";
+    const failure = launch.logSecrets.overflow
+      ? {
+          serviceName: SECRET_REDACTION_TOKEN,
+          error: SECRET_REDACTION_TOKEN,
+          stderr: SECRET_REDACTION_TOKEN,
+          cleanupError: SECRET_REDACTION_TOKEN,
+        }
+      : redactDiagnosticResponseValue(
+          {
+            payload: {
+              serviceName: launch.serviceName,
+              error: errorDiagnostic.message,
+              stderr: stderrExcerpt.trim(),
+              cleanupError: cleanupDiagnostic,
+            },
+          },
+          {
+            enabled: false,
+            secretValues: launch.logSecrets.values,
+            secretValuesOverflow: launch.logSecrets.overflow,
+          },
+        ).payload;
+    throw new Error(
+      `Failed to start runtime service "${failure.serviceName}": ${failure.error}${failure.stderr ? ` | stderr: ${failure.stderr}` : ""}${failure.cleanupError ? ` | cleanup: ${failure.cleanupError}` : ""}`,
+    );
+  }
 }
 
 function scheduleIdleStop(record: RuntimeServiceRecord) {
@@ -1204,21 +1753,127 @@ function scheduleIdleStop(record: RuntimeServiceRecord) {
   }, idleSeconds * 1000);
 }
 
+async function finalizeRuntimeServiceTermination(
+  record: RuntimeServiceRecord,
+  status: "stopped" | "failed",
+) {
+  if (record.terminationPromise) {
+    await record.terminationPromise;
+    return;
+  }
+  const terminationPromise = (async () => {
+    clearIdleTimer(record);
+    record.status = record.status === "failed" ? "failed" : status;
+    record.healthStatus = record.status === "failed" ? "unhealthy" : "unknown";
+    record.lastUsedAt = new Date().toISOString();
+    record.stoppedAt = new Date().toISOString();
+    const detachedLogSinks = new Map(record.logSinks);
+    record.logSinks.clear();
+    await flushRuntimeServiceLogSinks(
+      detachedLogSinks,
+      record.displayServiceName,
+    );
+    await persistRuntimeServiceRecord(record.db, record);
+    if (runtimeServicesById.get(record.id) === record) {
+      runtimeServicesById.delete(record.id);
+    }
+    if (
+      record.reuseKey &&
+      runtimeServicesByReuseKey.get(record.reuseKey) === record.id
+    ) {
+      runtimeServicesByReuseKey.delete(record.reuseKey);
+    }
+  })();
+  record.terminationPromise = terminationPromise;
+  try {
+    await terminationPromise;
+  } catch (error) {
+    if (record.terminationPromise === terminationPromise) {
+      record.terminationPromise = null;
+    }
+    throw error;
+  }
+}
+
+function runtimeServiceProcessGroupIsAlive(child: ChildProcess) {
+  if (!child.pid || process.platform === "win32") return false;
+  try {
+    process.kill(-child.pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
+async function waitForRuntimeServiceChildClose(
+  record: RuntimeServiceRecord,
+  timeoutMs: number,
+): Promise<boolean> {
+  const child = record.child;
+  if (!child) return true;
+  if (
+    record.childClosed &&
+    (process.platform === "win32" || !runtimeServiceProcessGroupIsAlive(child))
+  ) {
+    return true;
+  }
+  const deadline = Date.now() + Math.max(1, timeoutMs);
+  while (true) {
+    if (
+      record.childClosed &&
+      (process.platform === "win32" || !runtimeServiceProcessGroupIsAlive(child))
+    ) {
+      return true;
+    }
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) return false;
+    await delay(Math.min(25, remainingMs));
+  }
+}
+
+async function terminateRuntimeServiceChildAndWait(record: RuntimeServiceRecord) {
+  record.terminationRequested = true;
+  const child = record.child;
+  if (!child || !child.pid) return;
+  if (
+    record.childClosed &&
+    (process.platform === "win32" || !runtimeServiceProcessGroupIsAlive(child))
+  ) {
+    return;
+  }
+  terminateChildProcess(child);
+  if (await waitForRuntimeServiceChildClose(record, WORKSPACE_PROCESS_KILL_GRACE_MS)) return;
+  terminateChildProcess(child, "SIGKILL");
+  if (
+    await waitForRuntimeServiceChildClose(
+      record,
+      RUNTIME_SERVICE_FORCE_KILL_CLOSE_GRACE_MS,
+    )
+  ) {
+    return;
+  }
+  throw new Error("Runtime service process did not close after forced termination");
+}
+
 async function stopRuntimeService(serviceId: string) {
   const record = runtimeServicesById.get(serviceId);
   if (!record) return;
-  clearIdleTimer(record);
-  record.status = "stopped";
-  record.lastUsedAt = new Date().toISOString();
-  record.stoppedAt = new Date().toISOString();
-  if (record.child && record.child.pid) {
-    terminateChildProcess(record.child);
+  if (record.stopPromise) {
+    await record.stopPromise;
+    return;
   }
-  runtimeServicesById.delete(serviceId);
-  if (record.reuseKey) {
-    runtimeServicesByReuseKey.delete(record.reuseKey);
+  const stopPromise = Promise.resolve().then(async () => {
+    await terminateRuntimeServiceChildAndWait(record);
+    await finalizeRuntimeServiceTermination(record, "stopped");
+  });
+  record.stopPromise = stopPromise;
+  try {
+    await stopPromise;
+  } finally {
+    if (record.stopPromise === stopPromise) {
+      record.stopPromise = null;
+    }
   }
-  await persistRuntimeServiceRecord(record.db, record);
 }
 
 async function markPersistedRuntimeServicesStoppedForExecutionWorkspace(input: {
@@ -1250,19 +1905,41 @@ function registerRuntimeService(db: Db | undefined, record: RuntimeServiceRecord
     runtimeServicesByReuseKey.set(record.reuseKey, record.id);
   }
 
-  record.child?.on("exit", (code, signal) => {
-    const current = runtimeServicesById.get(record.id);
-    if (!current) return;
-    clearIdleTimer(current);
-    current.status = code === 0 || signal === "SIGTERM" ? "stopped" : "failed";
-    current.healthStatus = current.status === "failed" ? "unhealthy" : "unknown";
-    current.lastUsedAt = new Date().toISOString();
-    current.stoppedAt = new Date().toISOString();
-    runtimeServicesById.delete(current.id);
-    if (current.reuseKey && runtimeServicesByReuseKey.get(current.reuseKey) === current.id) {
-      runtimeServicesByReuseKey.delete(current.reuseKey);
+  record.child?.once("error", () => {
+    if (
+      record.child?.pid &&
+      !record.childClosed &&
+      record.child.exitCode === null &&
+      record.child.signalCode === null
+    ) {
+      logger.warn(
+        { serviceId: record.id, serviceName: record.displayServiceName },
+        "runtime service process emitted an error before closing",
+      );
+      return;
     }
-    void persistRuntimeServiceRecord(db, current);
+    void finalizeRuntimeServiceTermination(record, "failed").catch(() => {
+      logger.warn(
+        { serviceId: record.id, serviceName: record.displayServiceName },
+        "failed to finalize errored runtime service",
+      );
+    });
+  });
+  record.child?.once("close", (code, signal) => {
+    record.childClosed = true;
+    if (record.terminationRequested || record.stopPromise) return;
+    const status =
+      record.status === "starting"
+        ? "failed"
+        : code === 0 || signal === "SIGTERM"
+          ? "stopped"
+          : "failed";
+    void finalizeRuntimeServiceTermination(record, status).catch(() => {
+      logger.warn(
+        { serviceId: record.id, serviceName: record.displayServiceName },
+        "failed to finalize closed runtime service",
+      );
+    });
   });
 }
 
@@ -1275,8 +1952,10 @@ export async function ensureRuntimeServicesForRun(input: {
   executionWorkspaceId?: string | null;
   config: Record<string, unknown>;
   adapterEnv: Record<string, string>;
+  resolvedSecretValues?: Iterable<string>;
   onLog?: (stream: "stdout" | "stderr", chunk: string) => Promise<void>;
 }): Promise<RuntimeServiceRef[]> {
+  const resolvedSecrets = normalizeSensitiveValues(input.resolvedSecretValues ?? []);
   const runtime = parseObject(input.config.workspaceRuntime);
   const rawServices = Array.isArray(runtime.services)
     ? runtime.services.filter((entry): entry is Record<string, unknown> => typeof entry === "object" && entry !== null)
@@ -1296,19 +1975,57 @@ export async function ensureRuntimeServicesForRun(input: {
         runId: input.runId,
         agent: input.agent,
       });
-      const envConfig = parseObject(service.env);
-      const envFingerprint = createHash("sha256").update(stableStringify(envConfig)).digest("hex");
       const serviceName = asString(service.name, "service");
+      const launchFingerprint = buildRuntimeServiceLaunchFingerprint({
+        runId: input.runId,
+        agent: input.agent,
+        issue: input.issue,
+        workspace: input.workspace,
+        adapterEnv: input.adapterEnv,
+        resolvedSecrets,
+        service,
+      });
       const reuseKey =
         lifecycle === "shared"
-          ? [scopeType, scopeId ?? "", serviceName, envFingerprint].join(":")
+          ? [scopeType, scopeId ?? "", serviceName, launchFingerprint].join(":")
           : null;
 
       if (reuseKey) {
         const existingId = runtimeServicesByReuseKey.get(reuseKey);
         const existing = existingId ? runtimeServicesById.get(existingId) : null;
-        if (existing && existing.status === "running") {
+        if (
+          existing &&
+          existing.status === "running" &&
+          existing.child?.exitCode === null &&
+          existing.child.signalCode === null
+        ) {
           existing.leaseRunIds.add(input.runId);
+          const collectedAdapterEnvSecrets = collectSensitivePayloadValues(input.adapterEnv);
+          existing.logSecrets = mergeRuntimeServiceSecretValues(
+            [
+              existing.logSecrets.values,
+              collectedAdapterEnvSecrets.values,
+              resolvedSecrets.values,
+            ],
+            existing.logSecrets.overflow ||
+              collectedAdapterEnvSecrets.overflow ||
+              resolvedSecrets.overflow,
+          );
+          existing.displayServiceName = runtimeServiceDisplayName(
+            existing.serviceName,
+            existing.logSecrets,
+          );
+          rotateRuntimeServiceLogSinks(
+            existing.logSinks,
+            existing.displayServiceName,
+            existing.logSecrets,
+          );
+          if (input.onLog) {
+            existing.logSinks.set(
+              input.runId,
+              createRuntimeServiceLogSink(input.onLog, existing.logSecrets),
+            );
+          }
           existing.lastUsedAt = new Date().toISOString();
           existing.stoppedAt = null;
           clearIdleTimer(existing);
@@ -1327,14 +2044,14 @@ export async function ensureRuntimeServicesForRun(input: {
         workspace: input.workspace,
         executionWorkspaceId: input.executionWorkspaceId,
         adapterEnv: input.adapterEnv,
+        resolvedSecrets,
         service,
         onLog: input.onLog,
         reuseKey,
+        launchFingerprint,
         scopeType,
         scopeId,
       });
-      registerRuntimeService(input.db, record);
-      await persistRuntimeServiceRecord(input.db, record);
       acquiredServiceIds.push(record.id);
       refs.push(toRuntimeServiceRef(record));
     }
@@ -1353,6 +2070,15 @@ export async function releaseRuntimeServicesForRun(runId: string) {
     const record = runtimeServicesById.get(serviceId);
     if (!record) continue;
     record.leaseRunIds.delete(runId);
+    const detachedLogSink = record.logSinks.get(runId);
+    record.logSinks.delete(runId);
+    if (detachedLogSink) {
+      await flushRuntimeServiceLogSink(
+        detachedLogSink,
+        runId,
+        record.displayServiceName,
+      );
+    }
     record.lastUsedAt = new Date().toISOString();
     const stopType = asString(record.stopPolicy?.type, record.lifecycle === "ephemeral" ? "on_run_finish" : "manual");
     await persistRuntimeServiceRecord(record.db, record);

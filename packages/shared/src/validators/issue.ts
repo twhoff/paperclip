@@ -80,7 +80,7 @@ export const checkoutIssueSchema = z.object({
 export type CheckoutIssue = z.infer<typeof checkoutIssueSchema>;
 
 export const addIssueCommentSchema = z.object({
-  body: z.string().min(1),
+  body: z.string().min(1).max(64 * 1024),
   reopen: z.boolean().optional(),
   interrupt: z.boolean().optional(),
 });

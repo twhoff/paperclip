@@ -1,5 +1,5 @@
 import type { AdapterModel } from "@paperclipai/adapter-utils";
-import { runChildProcess } from "@paperclipai/adapter-utils/server-utils";
+import { runProviderProbeChildProcess } from "@paperclipai/adapter-utils/server-utils";
 import { models as staticModels } from "../index.js";
 
 function parseOzModelList(stdout: string): AdapterModel[] {
@@ -21,7 +21,7 @@ function parseOzModelList(stdout: string): AdapterModel[] {
 
 export async function listOzModels(command = "oz"): Promise<AdapterModel[]> {
   try {
-    const probe = await runChildProcess(
+    const probe = await runProviderProbeChildProcess(
       `oz-model-list-${Date.now()}`,
       command,
       ["model", "list", "--output-format", "json"],

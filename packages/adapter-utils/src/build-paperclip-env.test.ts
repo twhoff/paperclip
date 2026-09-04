@@ -6,7 +6,8 @@ import {
 } from "./server-utils.js";
 
 const agent = { id: "agent-1", companyId: "company-1" };
-const agentWithAdapter = { id: "agent-1", companyId: "company-1", adapterType: "copilot_cli" };
+const copilotAgent = { id: "agent-1", companyId: "company-1", adapterType: "copilot_cli" };
+const nonLocalAgent = { id: "agent-1", companyId: "company-1", adapterType: "process" };
 const localAgent = {
   id: "ABCDEF12-3456-4789-ABCD-0123456789AB",
   companyId: "company-1",
@@ -84,7 +85,7 @@ describe("buildPaperclipEnv", () => {
   });
 
   it("sets PAPERCLIP_ADAPTER_TYPE when adapterType is provided", () => {
-    const env = buildPaperclipEnv(agentWithAdapter);
+    const env = buildPaperclipEnv(copilotAgent);
     expect(env.PAPERCLIP_ADAPTER_TYPE).toBe("copilot_cli");
   });
 
@@ -107,7 +108,8 @@ describe("buildPaperclipEnv", () => {
       companyId: "company-1",
       adapterType: "cursor",
     });
-    const nonLocalEnv = buildPaperclipEnv(agentWithAdapter);
+    const copilotEnv = buildPaperclipEnv(copilotAgent);
+    const nonLocalEnv = buildPaperclipEnv(nonLocalAgent);
 
     expect(localEnv.HOLLY_SESSION_ID).toBe(
       "agent-ABCDEF12-3456-4789-ABCD-0123456789AB",
@@ -115,6 +117,7 @@ describe("buildPaperclipEnv", () => {
     expect(cursorEnv.HOLLY_SESSION_ID).toBe(
       "agent-00000000-0000-4000-8000-000000000003",
     );
+    expect(copilotEnv.HOLLY_SESSION_ID).toBe("agent-agent-1");
     expect(nonLocalEnv.HOLLY_SESSION_ID).toBeUndefined();
   });
 
@@ -201,7 +204,7 @@ describe("finalizeLocalAdapterEnv", () => {
   it("leaves non-local adapter environments unchanged", () => {
     const env = { CUSTOM_VALUE: "preserved", PCLI_SESSION_ID: "existing" };
 
-    finalizeLocalAdapterEnv(agentWithAdapter, env, {
+    finalizeLocalAdapterEnv(nonLocalAgent, env, {
       HOLLY_SESSION_ID: "configured-non-local",
       PCLI_SESSION_ID: "existing",
     });

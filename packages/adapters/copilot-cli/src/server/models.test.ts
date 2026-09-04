@@ -1,5 +1,12 @@
-import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
-import { parseCopilotHelpConfigModels, resetCopilotModelsCacheForTests } from "./models.js";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  listCopilotCliModels,
+  parseCopilotHelpConfigModels,
+  resetCopilotModelsCacheForTests,
+} from "./models.js";
 
 const HELP_CONFIG_SNIPPET = `
 Configuration Settings:
@@ -31,6 +38,10 @@ Configuration Settings:
 describe("parseCopilotHelpConfigModels", () => {
   beforeEach(() => {
     resetCopilotModelsCacheForTests();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it("extracts all model ids from help config output", () => {
@@ -94,5 +105,62 @@ describe("parseCopilotHelpConfigModels", () => {
     // Only "gpt-5.4" has content — empty string gets filtered, "  " trims to empty
     expect(models.map((m) => m.id)).not.toContain("");
     expect(models.some((m) => m.id === "gpt-5.4")).toBe(true);
+  });
+
+  it("keeps provider auth but strips injected control-plane identity from model discovery", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "paperclip-copilot-model-env-"));
+    const capturePath = path.join(tempDir, "env.json");
+    const commandPath = path.join(tempDir, "copilot");
+    const keys = [
+      "PAPERCLIP_API_KEY",
+      "PAPERCLIP_AGENT_JWT_SECRET",
+      "PAPERCLIP_TEST_OVERRIDE",
+      "PCLI_SESSION_ID",
+      "HOLLY_SESSION_ID",
+      "GITHUB_TOKEN",
+    ];
+
+    await writeFile(
+      commandPath,
+      `#!/usr/bin/env node
+const fs = require("node:fs");
+const keys = ${JSON.stringify(keys)};
+fs.writeFileSync(
+  process.env.PROBE_CAPTURE_PATH,
+  JSON.stringify(Object.fromEntries(keys.map((key) => [key, process.env[key] ?? null]))),
+);
+process.stdout.write(${JSON.stringify(HELP_CONFIG_SNIPPET)});
+`,
+      "utf8",
+    );
+    await chmod(commandPath, 0o755);
+
+    vi.stubEnv("PROBE_CAPTURE_PATH", capturePath);
+    vi.stubEnv("PAPERCLIP_API_KEY", "ambient-run-token");
+    vi.stubEnv("PAPERCLIP_AGENT_JWT_SECRET", "jwt-signing-secret");
+    vi.stubEnv("PAPERCLIP_TEST_OVERRIDE", "explicit-control-plane-value");
+    vi.stubEnv("PCLI_SESSION_ID", "operator-session");
+    vi.stubEnv("HOLLY_SESSION_ID", "operator-holly-session");
+    vi.stubEnv("GITHUB_TOKEN", "github-provider-token");
+
+    try {
+      const models = await listCopilotCliModels(commandPath);
+      const childEnv = JSON.parse(await readFile(capturePath, "utf8")) as Record<
+        string,
+        string | null
+      >;
+
+      expect(models.some((model) => model.id === "gpt-5.4")).toBe(true);
+      expect(childEnv).toEqual({
+        PAPERCLIP_API_KEY: null,
+        PAPERCLIP_AGENT_JWT_SECRET: null,
+        PAPERCLIP_TEST_OVERRIDE: null,
+        PCLI_SESSION_ID: null,
+        HOLLY_SESSION_ID: null,
+        GITHUB_TOKEN: "github-provider-token",
+      });
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
   });
 });

@@ -46,14 +46,26 @@ import {
   workspaceOperationService,
   adapterStatusService,
 } from "../services/index.js";
-import { conflict, forbidden, notFound, unprocessable } from "../errors.js";
+import { HttpError, conflict, forbidden, notFound, unprocessable } from "../errors.js";
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
 import { findServerAdapter, listAdapterModels } from "../adapters/index.js";
-import { redactEventPayload } from "../redaction.js";
-import { redactCurrentUserValue } from "../log-redaction.js";
+import { collectSensitivePayloadValues, redactEventPayload } from "../redaction.js";
+import {
+  redactCurrentUserValue,
+  redactDiagnosticResponseValue,
+  redactStatelessDiagnosticResponseValue,
+  redactStatelessDiagnosticValue,
+  redactThrownDiagnosticError,
+  type CurrentUserRedactionOptions,
+  type DiagnosticResponseRedactionOptions,
+} from "../log-redaction.js";
 import { renderOrgChartSvg, renderOrgChartPng, type OrgNode, type OrgChartStyle, ORG_CHART_STYLES } from "./org-chart-svg.js";
 import { instanceSettingsService } from "../services/instance-settings.js";
-import { normalizeHeartbeatRunListLimit } from "../services/heartbeat.js";
+import { redactApprovalRecord } from "../services/approval-redaction.js";
+import {
+  normalizeAgentTaskSessionListLimit,
+  normalizeHeartbeatRunListLimit,
+} from "../services/heartbeat.js";
 import { runClaudeLogin } from "@paperclipai/adapter-claude-local/server";
 import {
   DEFAULT_CODEX_LOCAL_BYPASS_APPROVALS_AND_SANDBOX,
@@ -169,7 +181,9 @@ export function agentRoutes(db: Db) {
     }
 
     return {
-      ...(options?.restricted ? redactForRestrictedAgentView(agent) : agent),
+      ...redactAgentForResponse(
+        options?.restricted ? redactForRestrictedAgentView(agent) : agent,
+      ),
       chainOfCommand,
       access: accessState,
       workspacePath,
@@ -316,6 +330,173 @@ export function agentRoutes(db: Db) {
     return value as Record<string, unknown>;
   }
 
+  function resolvedAdapterSecretValues(
+    runtimeConfig: Record<string, unknown>,
+    secretKeys: ReadonlySet<string>,
+  ): { values: string[]; overflow: boolean } {
+    const env = asRecord(runtimeConfig.env);
+    const resolvedBindings = env
+      ? Array.from(secretKeys)
+          .map((key) => env[key])
+          .filter((value): value is string => typeof value === "string" && value.length > 0)
+      : [];
+    const collectedSecrets = collectSensitivePayloadValues(runtimeConfig);
+    return {
+      values: Array.from(new Set([
+      ...resolvedBindings,
+        ...collectedSecrets.values,
+      ])),
+      overflow: collectedSecrets.overflow,
+    };
+  }
+
+  function redactWholeDiagnosticValue<T>(
+    value: T,
+    redactionOptions: DiagnosticResponseRedactionOptions = { enabled: false },
+  ): T {
+    return redactStatelessDiagnosticResponseValue(value, redactionOptions);
+  }
+
+  function adapterSkillRedactionOptions(
+    runtimeConfig: Record<string, unknown>,
+    secretKeys: ReadonlySet<string>,
+  ): DiagnosticResponseRedactionOptions {
+    const adapterSecrets = resolvedAdapterSecretValues(runtimeConfig, secretKeys);
+    return {
+      enabled: false,
+      secretValues: adapterSecrets.values,
+      secretValuesOverflow: adapterSecrets.overflow,
+      extraDiagnosticKeys: [
+        "detail",
+        "locationLabel",
+        "originLabel",
+        "requiredReason",
+        "sourcePath",
+        "targetPath",
+        "warnings",
+      ],
+    };
+  }
+
+  function redactAdapterSkillSnapshotForResponse<T>(
+    snapshot: T,
+    redactionOptions: DiagnosticResponseRedactionOptions,
+  ): T {
+    return redactStatelessDiagnosticResponseValue(snapshot, redactionOptions);
+  }
+
+  async function instructionArtifactRedactionOptions(agent: {
+    companyId: string;
+    adapterConfig: unknown;
+  }): Promise<DiagnosticResponseRedactionOptions> {
+    const { config, secretKeys } = await secretsSvc.resolveAdapterConfigForRuntime(
+      agent.companyId,
+      asRecord(agent.adapterConfig) ?? {},
+    );
+    const base = adapterSkillRedactionOptions(config, secretKeys);
+    return {
+      ...base,
+      extraDiagnosticKeys: [
+        ...(base.extraDiagnosticKeys ?? []),
+        "content",
+        "entryFile",
+        "managedRootPath",
+        "path",
+        "resolvedEntryPath",
+        "rootPath",
+        "warnings",
+      ],
+    };
+  }
+
+  function redactInstructionArtifactForResponse<T>(
+    value: T,
+    redactionOptions: DiagnosticResponseRedactionOptions,
+  ): T {
+    // Instruction content is editable operational data. Mask complete JWTs and
+    // known exact secrets without treating an ordinary trailing `e`/`ey` as a
+    // cross-request fragment.
+    return redactDiagnosticResponseValue(value, redactionOptions);
+  }
+
+  function redactAdapterStatusForResponse<T extends Record<string, unknown>>(status: T): T {
+    const options = {
+      enabled: false,
+      extraDiagnosticKeys: ["statusMessage", "lastError", "lastProbeMessage"],
+    };
+    const projected = redactDiagnosticResponseValue(status, options);
+    return {
+      ...projected,
+      statusMessage: typeof status.statusMessage === "string"
+        ? redactStatelessDiagnosticValue(status.statusMessage, options)
+        : (status.statusMessage ?? null),
+      lastError: typeof status.lastError === "string"
+        ? redactStatelessDiagnosticValue(status.lastError, options)
+        : (status.lastError ?? null),
+      lastProbeMessage: typeof status.lastProbeMessage === "string"
+        ? redactStatelessDiagnosticValue(status.lastProbeMessage, options)
+        : (status.lastProbeMessage ?? null),
+    } as T;
+  }
+
+  function redactAdapterDiagnosticError(
+    error: unknown,
+    redactionOptions: CurrentUserRedactionOptions,
+  ): unknown {
+    let httpError = false;
+    try {
+      httpError = error instanceof HttpError;
+    } catch {
+      httpError = false;
+    }
+    let status = 500;
+    if (httpError) {
+      try {
+        const candidate = Reflect.get(error as object, "status");
+        if (
+          typeof candidate === "number" &&
+          Number.isInteger(candidate) &&
+          candidate >= 400 &&
+          candidate <= 599
+        ) {
+          status = candidate;
+        }
+      } catch {
+        status = 500;
+      }
+    }
+    const redactedDiagnostic = redactThrownDiagnosticError(
+      error,
+      redactionOptions,
+      {
+        fallbackMessage: "Adapter operation failed",
+        includeStack: true,
+        includeDetails: httpError,
+      },
+    );
+    const redactedError = httpError
+      ? new HttpError(
+          status,
+          redactedDiagnostic.message,
+          redactedDiagnostic.details,
+        )
+      : new Error(redactedDiagnostic.message);
+    redactedError.name = redactedDiagnostic.name;
+    redactedError.stack = redactedDiagnostic.stack;
+    return redactedError;
+  }
+
+  async function withAdapterDiagnosticRedaction<T>(
+    operation: () => Promise<T>,
+    redactionOptions: CurrentUserRedactionOptions,
+  ): Promise<T> {
+    try {
+      return await operation();
+    } catch (error) {
+      throw redactAdapterDiagnosticError(error, redactionOptions);
+    }
+  }
+
   function asNonEmptyString(value: unknown): string | null {
     if (typeof value !== "string") return null;
     const trimmed = value.trim();
@@ -417,8 +598,15 @@ export function agentRoutes(db: Db) {
     adapterConfig: Record<string, unknown>,
   ) {
     if (adapterType !== "opencode_local") return;
-    const { config: runtimeConfig } = await secretsSvc.resolveAdapterConfigForRuntime(companyId, adapterConfig);
+    const { config: runtimeConfig, secretKeys } =
+      await secretsSvc.resolveAdapterConfigForRuntime(companyId, adapterConfig);
     const runtimeEnv = asRecord(runtimeConfig.env) ?? {};
+    const adapterSecrets = resolvedAdapterSecretValues(runtimeConfig, secretKeys);
+    const redactionOptions: CurrentUserRedactionOptions = {
+      enabled: false,
+      secretValues: adapterSecrets.values,
+      secretValuesOverflow: adapterSecrets.overflow,
+    };
     try {
       await ensureOpenCodeModelConfiguredAndAvailable({
         model: runtimeConfig.model,
@@ -427,8 +615,10 @@ export function agentRoutes(db: Db) {
         env: runtimeEnv,
       });
     } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err);
-      throw unprocessable(`Invalid opencode_local adapterConfig: ${reason}`);
+      const diagnostic = redactThrownDiagnosticError(err, redactionOptions, {
+        fallbackMessage: "OpenCode model validation failed",
+      });
+      throw unprocessable(`Invalid opencode_local adapterConfig: ${diagnostic.message}`);
     }
   }
 
@@ -597,21 +787,45 @@ export function agentRoutes(db: Db) {
     };
   }
 
+  function redactAgentForResponse<T>(agent: T): T {
+    const record = asRecord(agent);
+    if (!record) {
+      return redactStatelessDiagnosticResponseValue(agent, {
+        enabled: false,
+        extraDiagnosticKeys: ["pauseReason"],
+      });
+    }
+    const adapterConfig = asRecord(record.adapterConfig);
+    const runtimeConfig = asRecord(record.runtimeConfig);
+    return redactStatelessDiagnosticResponseValue(
+      {
+        ...record,
+        adapterConfig: adapterConfig ? redactEventPayload(adapterConfig) : {},
+        runtimeConfig: runtimeConfig ? redactEventPayload(runtimeConfig) : {},
+      },
+      {
+        enabled: false,
+        extraDiagnosticKeys: ["pauseReason"],
+      },
+    ) as T;
+  }
+
   function redactAgentConfiguration(agent: Awaited<ReturnType<typeof svc.getById>>) {
     if (!agent) return null;
+    const projected = redactAgentForResponse(agent);
     return {
-      id: agent.id,
-      companyId: agent.companyId,
-      name: agent.name,
-      role: agent.role,
-      title: agent.title,
-      status: agent.status,
-      reportsTo: agent.reportsTo,
-      adapterType: agent.adapterType,
-      adapterConfig: redactEventPayload(agent.adapterConfig),
-      runtimeConfig: redactEventPayload(agent.runtimeConfig),
-      permissions: agent.permissions,
-      updatedAt: agent.updatedAt,
+      id: projected.id,
+      companyId: projected.companyId,
+      name: projected.name,
+      role: projected.role,
+      title: projected.title,
+      status: projected.status,
+      reportsTo: projected.reportsTo,
+      adapterType: projected.adapterType,
+      adapterConfig: projected.adapterConfig,
+      runtimeConfig: projected.runtimeConfig,
+      permissions: projected.permissions,
+      updatedAt: projected.updatedAt,
     };
   }
 
@@ -674,7 +888,10 @@ export function agentRoutes(db: Db) {
     assertCompanyAccess(req, companyId);
     const type = req.params.type as string;
     const models = await listAdapterModels(type);
-    res.json(models);
+    res.json(redactWholeDiagnosticValue(models, {
+      enabled: false,
+      extraDiagnosticKeys: ["id", "label", "name", "description"],
+    }));
   });
 
   router.post(
@@ -698,18 +915,27 @@ export function agentRoutes(db: Db) {
         inputAdapterConfig,
         { strictMode: strictSecretsMode },
       );
-      const { config: runtimeAdapterConfig } = await secretsSvc.resolveAdapterConfigForRuntime(
+      const { config: runtimeAdapterConfig, secretKeys } = await secretsSvc.resolveAdapterConfigForRuntime(
         companyId,
         normalizedAdapterConfig,
       );
+      const adapterSecrets = resolvedAdapterSecretValues(runtimeAdapterConfig, secretKeys);
+      const redactionOptions: CurrentUserRedactionOptions = {
+        enabled: false,
+        secretValues: adapterSecrets.values,
+        secretValuesOverflow: adapterSecrets.overflow,
+      };
 
-      const result = await adapter.testEnvironment({
-        companyId,
-        adapterType: type,
-        config: runtimeAdapterConfig,
-      });
+      const result = await withAdapterDiagnosticRedaction(
+        () => adapter.testEnvironment({
+          companyId,
+          adapterType: type,
+          config: runtimeAdapterConfig,
+        }),
+        redactionOptions,
+      );
 
-      res.json(result);
+      res.json(redactStatelessDiagnosticResponseValue(result, redactionOptions));
     },
   );
 
@@ -720,7 +946,7 @@ export function agentRoutes(db: Db) {
     // Reset adapters past their retry window before returning status.
     await adapterStatusSvc.resetExpiredStatuses().catch(() => undefined);
     const statuses = await adapterStatusSvc.listAll();
-    res.json(statuses);
+    res.json(statuses.map((status) => redactAdapterStatusForResponse(status)));
   });
 
   router.get("/adapters/:type/status", async (req, res) => {
@@ -733,7 +959,7 @@ export function agentRoutes(db: Db) {
       res.json({ adapterType: type, status: "unknown" });
       return;
     }
-    res.json(status);
+    res.json(redactAdapterStatusForResponse(status));
   });
 
   router.get("/agents/:id/skills", async (req, res) => {
@@ -754,26 +980,39 @@ export function agentRoutes(db: Db) {
         materializeMissing: false,
       });
       const requiredSkills = runtimeSkillEntries.filter((entry) => entry.required).map((entry) => entry.key);
-      res.json(buildUnsupportedSkillSnapshot(agent.adapterType, Array.from(new Set([...requiredSkills, ...preference.desiredSkills]))));
+      res.json(redactAdapterSkillSnapshotForResponse(
+        buildUnsupportedSkillSnapshot(
+          agent.adapterType,
+          Array.from(new Set([...requiredSkills, ...preference.desiredSkills])),
+        ),
+        { enabled: false },
+      ));
       return;
     }
+    const listSkills = adapter.listSkills;
 
-    const { config: runtimeConfig } = await secretsSvc.resolveAdapterConfigForRuntime(
+    const { config: runtimeConfig, secretKeys } = await secretsSvc.resolveAdapterConfigForRuntime(
       agent.companyId,
       agent.adapterConfig,
     );
-    const runtimeSkillConfig = await buildRuntimeSkillConfig(
-      agent.companyId,
-      agent.adapterType,
-      runtimeConfig,
+    const redactionOptions = adapterSkillRedactionOptions(runtimeConfig, secretKeys);
+    const snapshot = await withAdapterDiagnosticRedaction(
+      async () => {
+        const runtimeSkillConfig = await buildRuntimeSkillConfig(
+          agent.companyId,
+          agent.adapterType,
+          runtimeConfig,
+        );
+        return await listSkills({
+          agentId: agent.id,
+          companyId: agent.companyId,
+          adapterType: agent.adapterType,
+          config: runtimeSkillConfig,
+        });
+      },
+      redactionOptions,
     );
-    const snapshot = await adapter.listSkills({
-      agentId: agent.id,
-      companyId: agent.companyId,
-      adapterType: agent.adapterType,
-      config: runtimeSkillConfig,
-    });
-    res.json(snapshot);
+    res.json(redactAdapterSkillSnapshotForResponse(snapshot, redactionOptions));
   });
 
   router.post(
@@ -824,29 +1063,33 @@ export function agentRoutes(db: Db) {
       }
 
       const adapter = findServerAdapter(updated.adapterType);
-      const { config: runtimeConfig } = await secretsSvc.resolveAdapterConfigForRuntime(
+      const { config: runtimeConfig, secretKeys } = await secretsSvc.resolveAdapterConfigForRuntime(
         updated.companyId,
         updated.adapterConfig,
       );
+      const redactionOptions = adapterSkillRedactionOptions(runtimeConfig, secretKeys);
       const runtimeSkillConfig = {
         ...runtimeConfig,
         paperclipRuntimeSkills: runtimeSkillEntries,
       };
-      const snapshot = adapter?.syncSkills
-        ? await adapter.syncSkills({
-            agentId: updated.id,
-            companyId: updated.companyId,
-            adapterType: updated.adapterType,
-            config: runtimeSkillConfig,
-          }, desiredSkills)
-        : adapter?.listSkills
-          ? await adapter.listSkills({
+      const snapshot = await withAdapterDiagnosticRedaction(
+        async () => adapter?.syncSkills
+          ? await adapter.syncSkills({
               agentId: updated.id,
               companyId: updated.companyId,
               adapterType: updated.adapterType,
               config: runtimeSkillConfig,
-            })
-          : buildUnsupportedSkillSnapshot(updated.adapterType, desiredSkills);
+            }, desiredSkills)
+          : adapter?.listSkills
+            ? await adapter.listSkills({
+                agentId: updated.id,
+                companyId: updated.companyId,
+                adapterType: updated.adapterType,
+                config: runtimeSkillConfig,
+              })
+            : buildUnsupportedSkillSnapshot(updated.adapterType, desiredSkills),
+        redactionOptions,
+      );
 
       await logActivity(db, {
         companyId: updated.companyId,
@@ -867,7 +1110,7 @@ export function agentRoutes(db: Db) {
         },
       });
 
-      res.json(snapshot);
+      res.json(redactAdapterSkillSnapshotForResponse(snapshot, redactionOptions));
     },
   );
 
@@ -877,10 +1120,14 @@ export function agentRoutes(db: Db) {
     const result = await svc.list(companyId);
     const canReadConfigs = await actorCanReadConfigurationsForCompany(req, companyId);
     if (canReadConfigs || req.actor.type === "board") {
-      res.json(result);
+      res.json(result.map((agent) => redactAgentForResponse(agent)));
       return;
     }
-    res.json(result.map((agent) => redactForRestrictedAgentView(agent)));
+    res.json(
+      result.map((agent) =>
+        redactAgentForResponse(redactForRestrictedAgentView(agent)),
+      ),
+    );
   });
 
   router.get("/instance/scheduler-heartbeats", async (req, res) => {
@@ -1158,7 +1405,7 @@ export function agentRoutes(db: Db) {
       details: { revisionId },
     });
 
-    res.json(updated);
+    res.json(redactAgentForResponse(updated));
   });
 
   router.get("/agents/:id/runtime-state", async (req, res) => {
@@ -1172,7 +1419,10 @@ export function agentRoutes(db: Db) {
     assertCompanyAccess(req, agent.companyId);
 
     const state = await heartbeat.getRuntimeState(id);
-    res.json(state);
+    res.json(redactWholeDiagnosticValue(state, {
+      enabled: false,
+      extraDiagnosticKeys: ["sessionId"],
+    }));
   });
 
   router.get("/agents/:id/task-sessions", async (req, res) => {
@@ -1185,12 +1435,19 @@ export function agentRoutes(db: Db) {
     }
     assertCompanyAccess(req, agent.companyId);
 
-    const sessions = await heartbeat.listTaskSessions(id);
+    const limitParam = req.query.limit as string | undefined;
+    const limit = normalizeAgentTaskSessionListLimit(
+      limitParam ? parseInt(limitParam, 10) : undefined,
+    );
+    const sessions = await heartbeat.listTaskSessions(id, limit);
     res.json(
-      sessions.map((session) => ({
-        ...session,
-        sessionParamsJson: redactEventPayload(session.sessionParamsJson ?? null),
-      })),
+      redactWholeDiagnosticValue(
+        sessions.map((session) => ({
+          ...session,
+          sessionParamsJson: redactEventPayload(session.sessionParamsJson ?? null),
+        })),
+        { enabled: false, extraDiagnosticKeys: ["sessionDisplayId"] },
+      ),
     );
   });
 
@@ -1220,7 +1477,10 @@ export function agentRoutes(db: Db) {
       details: { taskKey: taskKey ?? null },
     });
 
-    res.json(state);
+    res.json(redactWholeDiagnosticValue(state, {
+      enabled: false,
+      extraDiagnosticKeys: ["sessionId"],
+    }));
   });
 
   router.post("/companies/:companyId/agent-hires", validate(createAgentHireSchema), async (req, res) => {
@@ -1378,7 +1638,10 @@ export function agentRoutes(db: Db) {
       });
     }
 
-    res.status(201).json({ agent, approval });
+    res.status(201).json({
+      agent: redactAgentForResponse(agent),
+      approval: approval ? redactApprovalRecord(approval) : null,
+    });
   });
 
   router.post("/companies/:companyId/agents", validate(createAgentSchema), async (req, res) => {
@@ -1459,7 +1722,7 @@ export function agentRoutes(db: Db) {
       );
     }
 
-    res.status(201).json(agent);
+    res.status(201).json(redactAgentForResponse(agent));
   });
 
   router.patch("/agents/:id/permissions", validate(updateAgentPermissionsSchema), async (req, res) => {
@@ -1606,7 +1869,12 @@ export function agentRoutes(db: Db) {
       return;
     }
     await assertCanReadAgent(req, existing);
-    res.json(await instructions.getBundle(existing));
+    const redactionOptions = await instructionArtifactRedactionOptions(existing);
+    const bundle = await withAdapterDiagnosticRedaction(
+      () => instructions.getBundle(existing),
+      redactionOptions,
+    );
+    res.json(redactInstructionArtifactForResponse(bundle, redactionOptions));
   });
 
   router.patch("/agents/:id/instructions-bundle", validate(updateAgentInstructionsBundleSchema), async (req, res) => {
@@ -1619,7 +1887,12 @@ export function agentRoutes(db: Db) {
     await assertCanManageInstructionsPath(req, existing);
 
     const actor = getActorInfo(req);
-    const { bundle, adapterConfig } = await instructions.updateBundle(existing, req.body);
+    const redactionOptions = await instructionArtifactRedactionOptions(existing);
+    const { bundle, adapterConfig } = await withAdapterDiagnosticRedaction(
+      () => instructions.updateBundle(existing, req.body),
+      redactionOptions,
+    );
+    const bundleForResponse = redactInstructionArtifactForResponse(bundle, redactionOptions);
     const normalizedAdapterConfig = await secretsSvc.normalizeAdapterConfigForPersistence(
       existing.companyId,
       adapterConfig,
@@ -1647,14 +1920,14 @@ export function agentRoutes(db: Db) {
       entityType: "agent",
       entityId: existing.id,
       details: {
-        mode: bundle.mode,
-        rootPath: bundle.rootPath,
-        entryFile: bundle.entryFile,
+        mode: bundleForResponse.mode,
+        rootPath: bundleForResponse.rootPath,
+        entryFile: bundleForResponse.entryFile,
         clearLegacyPromptTemplate: req.body.clearLegacyPromptTemplate === true,
       },
     });
 
-    res.json(bundle);
+    res.json(bundleForResponse);
   });
 
   router.get("/agents/:id/instructions-bundle/file", async (req, res) => {
@@ -1672,7 +1945,12 @@ export function agentRoutes(db: Db) {
       return;
     }
 
-    res.json(await instructions.readFile(existing, relativePath));
+    const redactionOptions = await instructionArtifactRedactionOptions(existing);
+    const file = await withAdapterDiagnosticRedaction(
+      () => instructions.readFile(existing, relativePath),
+      redactionOptions,
+    );
+    res.json(redactInstructionArtifactForResponse(file, redactionOptions));
   });
 
   router.put("/agents/:id/instructions-bundle/file", validate(upsertAgentInstructionsFileSchema), async (req, res) => {
@@ -1685,9 +1963,14 @@ export function agentRoutes(db: Db) {
     await assertCanManageInstructionsPath(req, existing);
 
     const actor = getActorInfo(req);
-    const result = await instructions.writeFile(existing, req.body.path, req.body.content, {
-      clearLegacyPromptTemplate: req.body.clearLegacyPromptTemplate,
-    });
+    const redactionOptions = await instructionArtifactRedactionOptions(existing);
+    const result = await withAdapterDiagnosticRedaction(
+      () => instructions.writeFile(existing, req.body.path, req.body.content, {
+        clearLegacyPromptTemplate: req.body.clearLegacyPromptTemplate,
+      }),
+      redactionOptions,
+    );
+    const fileForResponse = redactInstructionArtifactForResponse(result.file, redactionOptions);
     const normalizedAdapterConfig = await secretsSvc.normalizeAdapterConfigForPersistence(
       existing.companyId,
       result.adapterConfig,
@@ -1715,13 +1998,13 @@ export function agentRoutes(db: Db) {
       entityType: "agent",
       entityId: existing.id,
       details: {
-        path: result.file.path,
-        size: result.file.size,
+        path: fileForResponse.path,
+        size: fileForResponse.size,
         clearLegacyPromptTemplate: req.body.clearLegacyPromptTemplate === true,
       },
     });
 
-    res.json(result.file);
+    res.json(fileForResponse);
   });
 
   router.delete("/agents/:id/instructions-bundle/file", async (req, res) => {
@@ -1740,7 +2023,15 @@ export function agentRoutes(db: Db) {
     }
 
     const actor = getActorInfo(req);
-    const result = await instructions.deleteFile(existing, relativePath);
+    const redactionOptions = await instructionArtifactRedactionOptions(existing);
+    const result = await withAdapterDiagnosticRedaction(
+      () => instructions.deleteFile(existing, relativePath),
+      redactionOptions,
+    );
+    const bundleForResponse = redactInstructionArtifactForResponse(
+      result.bundle,
+      redactionOptions,
+    );
     await logActivity(db, {
       companyId: existing.companyId,
       actorType: actor.actorType,
@@ -1755,7 +2046,7 @@ export function agentRoutes(db: Db) {
       },
     });
 
-    res.json(result.bundle);
+    res.json(bundleForResponse);
   });
 
   router.patch("/agents/:id", validate(updateAgentSchema), async (req, res) => {
@@ -1847,7 +2138,7 @@ export function agentRoutes(db: Db) {
       details: summarizeAgentUpdateDetails(patchData),
     });
 
-    res.json(agent);
+    res.json(redactAgentForResponse(agent));
   });
 
   router.post("/agents/:id/emulation", validate(startAgentEmulationSchema), async (req, res) => {
@@ -1882,7 +2173,7 @@ export function agentRoutes(db: Db) {
       },
     });
 
-    res.json(result);
+    res.json({ ...result, agent: redactAgentForResponse(result.agent) });
   });
 
   router.post("/agents/:id/emulation/end", validate(endAgentEmulationSchema), async (req, res) => {
@@ -1919,7 +2210,7 @@ export function agentRoutes(db: Db) {
       });
     }
 
-    res.json(result);
+    res.json({ ...result, agent: redactAgentForResponse(result.agent) });
   });
 
   router.post("/agents/:id/pause", async (req, res) => {
@@ -1942,7 +2233,7 @@ export function agentRoutes(db: Db) {
       entityId: agent.id,
     });
 
-    res.json(agent);
+    res.json(redactAgentForResponse(agent));
   });
 
   router.post("/agents/:id/resume", async (req, res) => {
@@ -1963,7 +2254,7 @@ export function agentRoutes(db: Db) {
       entityId: agent.id,
     });
 
-    res.json(agent);
+    res.json(redactAgentForResponse(agent));
   });
 
   router.post("/agents/:id/terminate", async (req, res) => {
@@ -1986,7 +2277,7 @@ export function agentRoutes(db: Db) {
       entityId: agent.id,
     });
 
-    res.json(agent);
+    res.json(redactAgentForResponse(agent));
   });
 
   router.delete("/agents/:id", async (req, res) => {
@@ -2096,7 +2387,7 @@ export function agentRoutes(db: Db) {
       details: { agentId: id },
     });
 
-    res.status(202).json(run);
+    res.status(202).json(redactStatelessDiagnosticResponseValue(run, { enabled: false }));
   });
 
   router.post("/agents/:id/heartbeat/invoke", async (req, res) => {
@@ -2145,7 +2436,7 @@ export function agentRoutes(db: Db) {
       details: { agentId: id },
     });
 
-    res.status(202).json(run);
+    res.status(202).json(redactStatelessDiagnosticResponseValue(run, { enabled: false }));
   });
 
   router.post("/agents/:id/claude-login", async (req, res) => {
@@ -2163,20 +2454,32 @@ export function agentRoutes(db: Db) {
     }
 
     const config = asRecord(agent.adapterConfig) ?? {};
-    const { config: runtimeConfig } = await secretsSvc.resolveAdapterConfigForRuntime(agent.companyId, config);
-    const result = await runClaudeLogin({
-      runId: `claude-login-${randomUUID()}`,
-      agent: {
-        id: agent.id,
-        companyId: agent.companyId,
-        name: agent.name,
-        adapterType: agent.adapterType,
-        adapterConfig: agent.adapterConfig,
-      },
-      config: runtimeConfig,
-    });
+    const { config: runtimeConfig, secretKeys } = await secretsSvc.resolveAdapterConfigForRuntime(
+      agent.companyId,
+      config,
+    );
+    const adapterSecrets = resolvedAdapterSecretValues(runtimeConfig, secretKeys);
+    const redactionOptions: CurrentUserRedactionOptions = {
+      enabled: false,
+      secretValues: adapterSecrets.values,
+      secretValuesOverflow: adapterSecrets.overflow,
+    };
+    const result = await withAdapterDiagnosticRedaction(
+      () => runClaudeLogin({
+        runId: `claude-login-${randomUUID()}`,
+        agent: {
+          id: agent.id,
+          companyId: agent.companyId,
+          name: agent.name,
+          adapterType: agent.adapterType,
+          adapterConfig: agent.adapterConfig,
+        },
+        config: runtimeConfig,
+      }),
+      redactionOptions,
+    );
 
-    res.json(result);
+    res.json(redactStatelessDiagnosticResponseValue(result, redactionOptions));
   });
 
   router.get("/companies/:companyId/heartbeat-runs", async (req, res) => {
@@ -2186,7 +2489,8 @@ export function agentRoutes(db: Db) {
     const limitParam = req.query.limit as string | undefined;
     const limit = normalizeHeartbeatRunListLimit(limitParam ? parseInt(limitParam, 10) : undefined);
     const runs = await heartbeat.list(companyId, agentId, limit);
-    res.json(runs);
+    const redactionOptions = await getCurrentUserRedactionOptions();
+    res.json(redactWholeDiagnosticValue(runs, redactionOptions));
   });
 
   router.get("/companies/:companyId/live-runs", async (req, res) => {
@@ -2238,11 +2542,15 @@ export function agentRoutes(db: Db) {
         .orderBy(desc(heartbeatRuns.createdAt))
         .limit(minCount - liveRuns.length);
 
-      res.json([...liveRuns, ...recentRuns]);
+      const redactionOptions = await getCurrentUserRedactionOptions();
+      res.json(
+        redactWholeDiagnosticValue([...liveRuns, ...recentRuns], redactionOptions),
+      );
       return;
     }
 
-    res.json(liveRuns);
+    const redactionOptions = await getCurrentUserRedactionOptions();
+    res.json(redactWholeDiagnosticValue(liveRuns, redactionOptions));
   });
 
   router.get("/heartbeat-runs/:runId", async (req, res) => {
@@ -2253,12 +2561,18 @@ export function agentRoutes(db: Db) {
       return;
     }
     assertCompanyAccess(req, run.companyId);
-    res.json(redactCurrentUserValue(run, await getCurrentUserRedactionOptions()));
+    res.json(redactWholeDiagnosticValue(run, await getCurrentUserRedactionOptions()));
   });
 
   router.post("/heartbeat-runs/:runId/cancel", async (req, res) => {
     assertBoard(req);
     const runId = req.params.runId as string;
+    const existingRun = await heartbeat.getRun(runId);
+    if (!existingRun) {
+      res.status(404).json({ error: "Heartbeat run not found" });
+      return;
+    }
+    assertCompanyAccess(req, existingRun.companyId);
     const run = await heartbeat.cancelRun(runId);
 
     if (run) {
@@ -2273,7 +2587,10 @@ export function agentRoutes(db: Db) {
       });
     }
 
-    res.json(run);
+    res.json(redactStatelessDiagnosticResponseValue(
+      run,
+      await getCurrentUserRedactionOptions(),
+    ));
   });
 
   router.get("/heartbeat-runs/:runId/events", async (req, res) => {
@@ -2289,12 +2606,13 @@ export function agentRoutes(db: Db) {
     const limit = Number(req.query.limit ?? 200);
     const events = await heartbeat.listEvents(runId, Number.isFinite(afterSeq) ? afterSeq : 0, Number.isFinite(limit) ? limit : 200);
     const currentUserRedactionOptions = await getCurrentUserRedactionOptions();
-    const redactedEvents = events.map((event) =>
-      redactCurrentUserValue({
-        ...event,
-        payload: redactEventPayload(event.payload),
-      }, currentUserRedactionOptions),
-    );
+    const collectedSecrets = collectSensitivePayloadValues(events);
+    const redactedEvents = redactStatelessDiagnosticResponseValue(events, {
+      ...currentUserRedactionOptions,
+      secretValues: collectedSecrets.values,
+      secretValuesOverflow: collectedSecrets.overflow,
+      extraDiagnosticKeys: ["eventType"],
+    });
     res.json(redactedEvents);
   });
 
@@ -2314,7 +2632,7 @@ export function agentRoutes(db: Db) {
       limitBytes: Number.isFinite(limitBytes) ? limitBytes : 256000,
     });
 
-    res.json(result);
+    res.json(redactWholeDiagnosticValue(result, await getCurrentUserRedactionOptions()));
   });
 
   router.get("/heartbeat-runs/:runId/workspace-operations", async (req, res) => {
@@ -2329,7 +2647,7 @@ export function agentRoutes(db: Db) {
     const context = asRecord(run.contextSnapshot);
     const executionWorkspaceId = asNonEmptyString(context?.executionWorkspaceId);
     const operations = await workspaceOperations.listForRun(runId, executionWorkspaceId);
-    res.json(redactCurrentUserValue(operations, await getCurrentUserRedactionOptions()));
+    res.json(redactWholeDiagnosticValue(operations, await getCurrentUserRedactionOptions()));
   });
 
   router.get("/workspace-operations/:operationId/log", async (req, res) => {
@@ -2386,7 +2704,8 @@ export function agentRoutes(db: Db) {
       )
       .orderBy(desc(heartbeatRuns.createdAt));
 
-    res.json(liveRuns);
+    const redactionOptions = await getCurrentUserRedactionOptions();
+    res.json(redactWholeDiagnosticValue(liveRuns, redactionOptions));
   });
 
   router.get("/issues/:issueId/active-run", async (req, res) => {
@@ -2424,12 +2743,17 @@ export function agentRoutes(db: Db) {
       return;
     }
 
-    res.json({
-      ...redactCurrentUserValue(run, await getCurrentUserRedactionOptions()),
-      agentId: agent.id,
-      agentName: agent.name,
-      adapterType: agent.adapterType,
-    });
+    res.json(
+      redactWholeDiagnosticValue(
+        {
+          ...run,
+          agentId: agent.id,
+          agentName: agent.name,
+          adapterType: agent.adapterType,
+        },
+        await getCurrentUserRedactionOptions(),
+      ),
+    );
   });
 
   return router;

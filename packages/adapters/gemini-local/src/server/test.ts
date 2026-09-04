@@ -13,7 +13,7 @@ import {
   ensureCommandResolvable,
   ensurePathInEnv,
   parseObject,
-  runChildProcess,
+  runProviderProbeChildProcess,
 } from "@paperclipai/adapter-utils/server-utils";
 import { DEFAULT_GEMINI_LOCAL_MODEL } from "../index.js";
 import { detectGeminiAuthRequired, detectGeminiQuotaExhausted, parseGeminiJsonl } from "./parse.js";
@@ -152,7 +152,7 @@ export async function testEnvironment(
       }
       if (extraArgs.length > 0) args.push(...extraArgs);
 
-      const probe = await runChildProcess(
+      const probe = await runProviderProbeChildProcess(
         `gemini-envtest-${Date.now()}-${Math.random().toString(16).slice(2)}`,
         command,
         args,
@@ -161,6 +161,7 @@ export async function testEnvironment(
           env,
           timeoutSec: helloProbeTimeoutSec,
           graceSec: 5,
+          signal: ctx.signal,
           onLog: async () => { },
         },
       );

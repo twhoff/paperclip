@@ -97,7 +97,9 @@ async function probeGateway(input: {
   role: string;
   scopes: string[];
   timeoutMs: number;
+  signal?: AbortSignal;
 }): Promise<"ok" | "challenge_only" | "failed"> {
+  if (input.signal?.aborted) return "failed";
   return await new Promise((resolve) => {
     const ws = new WebSocket(input.url, { headers: input.headers, maxPayload: 2 * 1024 * 1024 });
     const timeout = setTimeout(() => {
@@ -115,6 +117,7 @@ async function probeGateway(input: {
       if (completed) return;
       completed = true;
       clearTimeout(timeout);
+      input.signal?.removeEventListener("abort", abortListener);
       try {
         ws.close();
       } catch {
@@ -122,6 +125,9 @@ async function probeGateway(input: {
       }
       resolve(status);
     };
+    const abortListener = () => finish("failed");
+    input.signal?.addEventListener("abort", abortListener, { once: true });
+    if (input.signal?.aborted) abortListener();
 
     ws.on("message", (raw) => {
       let parsed: unknown;
@@ -276,6 +282,7 @@ export async function testEnvironment(
         role,
         scopes: scopes.length > 0 ? scopes : ["operator.admin"],
         timeoutMs: 3_000,
+        signal: ctx.signal,
       });
 
       if (probeResult === "ok") {

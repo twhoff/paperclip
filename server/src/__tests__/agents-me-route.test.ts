@@ -38,9 +38,6 @@ vi.mock("../adapters/index.js", () => ({
   listAdapterModels: vi.fn(),
 }));
 
-vi.mock("../redaction.js", () => ({ redactEventPayload: (x: unknown) => x }));
-vi.mock("../log-redaction.js", () => ({ redactCurrentUserValue: (x: unknown) => x }));
-
 function createAgentApp(agentId = "35a79d4c-c188-4bfd-b1d7-304ee7479df3", companyId = "company-1") {
   const app = express();
   app.use(express.json());
@@ -108,12 +105,22 @@ describe("GET /agents/me", () => {
 
   it("returns workspacePath derived from the agent's UUID", async () => {
     const agentId = "35a79d4c-c188-4bfd-b1d7-304ee7479df3";
-    mockAgentService.getById.mockResolvedValue(buildAgentRow(agentId));
+    const storedSecret = "stored-plain-agent-secret";
+    mockAgentService.getById.mockResolvedValue(
+      buildAgentRow(agentId, {
+        adapterConfig: {
+          instructionsRootPath: "/tmp/instructions",
+          apiKey: storedSecret,
+        },
+      }),
+    );
 
     const res = await request(createAgentApp(agentId)).get("/api/agents/me");
     expect(res.status).toBe(200);
     expect(res.body.workspacePath).toBe(resolveDefaultAgentWorkspaceDir(agentId));
     expect(res.body.workspacePath).toMatch(/\/workspaces\/35a79d4c-c188-4bfd-b1d7-304ee7479df3$/);
+    expect(res.body.adapterConfig.apiKey).toBe("***REDACTED***");
+    expect(JSON.stringify(res.body)).not.toContain(storedSecret);
   });
 
   it("workspacePath is identical for managed vs external instructions bundles", async () => {

@@ -120,13 +120,17 @@ describe("buildPaperclipEnv", () => {
     });
   });
 
-  it("preserves ambient PCLI identity for non-local child launches", async () => {
+  it("strips ambient orchestration identity from generic process child launches", async () => {
     process.env.PCLI_SESSION_ID = "ambient-non-local";
+    process.env.HOLLY_SESSION_ID = "agent-ambient-non-local";
 
     const result = await runChildProcess(
       "paperclip-env-non-local-child",
       process.execPath,
-      ["-e", "process.stdout.write(process.env.PCLI_SESSION_ID??'missing')"],
+      [
+        "-e",
+        "process.stdout.write(JSON.stringify({pcli:process.env.PCLI_SESSION_ID??null,holly:process.env.HOLLY_SESSION_ID??null}))",
+      ],
       {
         cwd: process.cwd(),
         env: buildPaperclipEnv({
@@ -140,6 +144,6 @@ describe("buildPaperclipEnv", () => {
       },
     );
 
-    expect(result.stdout).toBe("ambient-non-local");
+    expect(JSON.parse(result.stdout)).toEqual({ pcli: null, holly: null });
   });
 });

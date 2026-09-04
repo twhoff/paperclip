@@ -29,6 +29,7 @@ import { logger, serverLogDir, serverLogFile } from "./middleware/logger.js";
 import { setupLiveEventsWebSocketServer } from "./realtime/live-events-ws.js";
 import { createBatchJobService, heartbeatService, reconcilePersistedRuntimeServicesOnStartup, routineService } from "./services/index.js";
 import { configureRunLogStore, getConfiguredRunLogBasePath, pruneRunLogs } from "./services/run-log-store.js";
+import { getSanitizedNdjsonLogCache } from "./services/sanitized-log-cache.js";
 import { pruneServerLogs } from "./services/server-log-store.js";
 import { createStorageServiceFromConfig } from "./storage/index.js";
 import { printStartupBanner } from "./startup-banner.js";
@@ -748,10 +749,17 @@ export async function startServer(): Promise<StartedServer> {
       if (pruneInFlight) return;
       pruneInFlight = true;
       try {
-        const result = await pruneRunLogs({
-          basePath: getConfiguredRunLogBasePath(),
-          retentionDays: config.runLogRetentionDays,
-        });
+        const sanitizedLogCache = getSanitizedNdjsonLogCache();
+        sanitizedLogCache.invalidateNamespace("heartbeat-run");
+        let result: Awaited<ReturnType<typeof pruneRunLogs>>;
+        try {
+          result = await pruneRunLogs({
+            basePath: getConfiguredRunLogBasePath(),
+            retentionDays: config.runLogRetentionDays,
+          });
+        } finally {
+          sanitizedLogCache.invalidateNamespace("heartbeat-run");
+        }
         if (result.deletedFiles > 0 || result.removedDirs > 0) {
           logger.info(
             {

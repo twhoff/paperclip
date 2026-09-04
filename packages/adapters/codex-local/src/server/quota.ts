@@ -3,6 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ProviderQuotaResult, QuotaWindow } from "@paperclipai/adapter-utils";
+import {
+  stripLocalAdapterProviderEnv,
+  terminateLocalAdapterProcess,
+} from "@paperclipai/adapter-utils/server-utils";
 
 const CODEX_USAGE_SOURCE_RPC = "codex-rpc";
 const CODEX_USAGE_SOURCE_WHAM = "codex-wham";
@@ -406,41 +410,136 @@ type PendingRequest = {
   timer: NodeJS.Timeout;
 };
 
+const MAX_CODEX_RPC_STDOUT_LINE_BYTES = 1024 * 1024;
+const MAX_CODEX_RPC_STDERR_BYTES = 1024 * 1024;
+const CODEX_RPC_TERMINATION_GRACE_MS = 500;
+const CODEX_RPC_FORCE_KILL_GRACE_MS = 1_000;
+
 class CodexRpcClient {
   private proc = spawn(
     "codex",
     ["-s", "read-only", "-a", "untrusted", "app-server"],
-    { stdio: ["pipe", "pipe", "pipe"], env: process.env },
+    {
+      stdio: ["pipe", "pipe", "pipe"],
+      env: stripLocalAdapterProviderEnv(process.env),
+      detached: process.platform !== "win32",
+    },
   );
 
   private nextId = 1;
   private buffer = "";
+  private bufferBytes = 0;
   private pending = new Map<number, PendingRequest>();
   private stderr = "";
+  private stderrBytes = 0;
+  private terminalError: Error | null = null;
+  private closed = false;
+  private readonly closedPromise: Promise<void>;
+  private resolveClosed: (() => void) | null = null;
+  private terminationPromise: Promise<void> | null = null;
 
   constructor() {
+    this.closedPromise = new Promise((resolve) => {
+      this.resolveClosed = resolve;
+    });
     this.proc.stdout.setEncoding("utf8");
     this.proc.stderr.setEncoding("utf8");
     this.proc.stdout.on("data", (chunk: string) => this.onStdout(chunk));
+    this.proc.stdout.on("error", () => {
+      this.fail(new Error("codex app-server stdout failed"));
+    });
     this.proc.stderr.on("data", (chunk: string) => {
+      const chunkBytes = Buffer.byteLength(chunk, "utf8");
+      if (this.stderrBytes + chunkBytes > MAX_CODEX_RPC_STDERR_BYTES) {
+        this.fail(new Error("codex app-server stderr exceeded its buffer bound"));
+        return;
+      }
       this.stderr += chunk;
+      this.stderrBytes += chunkBytes;
+    });
+    this.proc.stderr.on("error", () => {
+      this.fail(new Error("codex app-server stderr failed"));
+    });
+    this.proc.stdin.on("error", () => {
+      this.fail(new Error("codex app-server stdin failed"));
+    });
+    this.proc.on("error", () => {
+      if (this.proc.pid === undefined) this.markClosed();
+      this.fail(new Error("codex app-server failed to start"), false);
     });
     this.proc.on("exit", () => {
-      for (const request of this.pending.values()) {
-        clearTimeout(request.timer);
-        request.reject(new Error(this.stderr.trim() || "codex app-server closed unexpectedly"));
-      }
-      this.pending.clear();
+      this.fail(new Error("codex app-server closed unexpectedly"), false);
+    });
+    this.proc.once("close", () => this.markClosed());
+  }
+
+  private markClosed() {
+    if (this.closed) return;
+    this.closed = true;
+    this.resolveClosed?.();
+    this.resolveClosed = null;
+  }
+
+  private waitForClose(timeoutMs: number) {
+    if (this.closed) return Promise.resolve(true);
+    return new Promise<boolean>((resolve) => {
+      let settled = false;
+      const finish = (closed: boolean) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(closed);
+      };
+      const timer = setTimeout(() => finish(false), timeoutMs);
+      this.closedPromise.then(() => finish(true));
     });
   }
 
+  private terminate() {
+    if (this.terminationPromise) return this.terminationPromise;
+    this.terminationPromise = (async () => {
+      if (this.closed && (process.platform === "win32" || this.proc.pid === undefined)) return;
+      const terminated = await terminateLocalAdapterProcess(this.proc, {
+        processGroup: process.platform !== "win32",
+        graceMs: CODEX_RPC_TERMINATION_GRACE_MS,
+        killWaitMs: CODEX_RPC_FORCE_KILL_GRACE_MS,
+      });
+      const closed = await this.waitForClose(CODEX_RPC_FORCE_KILL_GRACE_MS);
+      if (!terminated || !closed) {
+        throw new Error("codex app-server process tree could not be terminated");
+      }
+    })();
+    return this.terminationPromise;
+  }
+
+  private fail(error: Error, terminate = true) {
+    if (this.terminalError) return;
+    this.terminalError = error;
+    for (const request of this.pending.values()) {
+      clearTimeout(request.timer);
+      request.reject(error);
+    }
+    this.pending.clear();
+    if (terminate) void this.terminate().catch(() => undefined);
+  }
+
   private onStdout(chunk: string) {
-    this.buffer += chunk;
     while (true) {
-      const newlineIndex = this.buffer.indexOf("\n");
-      if (newlineIndex < 0) break;
-      const line = this.buffer.slice(0, newlineIndex).trim();
-      this.buffer = this.buffer.slice(newlineIndex + 1);
+      const newlineIndex = chunk.indexOf("\n");
+      const segment = newlineIndex < 0 ? chunk : chunk.slice(0, newlineIndex);
+      const segmentBytes = Buffer.byteLength(segment, "utf8");
+      if (this.bufferBytes + segmentBytes > MAX_CODEX_RPC_STDOUT_LINE_BYTES) {
+        this.fail(new Error("codex app-server stdout exceeded its buffer bound"));
+        return;
+      }
+      this.buffer += segment;
+      this.bufferBytes += segmentBytes;
+      if (newlineIndex < 0) return;
+
+      const line = this.buffer.trim();
+      this.buffer = "";
+      this.bufferBytes = 0;
+      chunk = chunk.slice(newlineIndex + 1);
       if (!line) continue;
       let parsed: Record<string, unknown>;
       try {
@@ -459,6 +558,7 @@ class CodexRpcClient {
   }
 
   private request(method: string, params: Record<string, unknown> = {}, timeoutMs = 6_000): Promise<Record<string, unknown>> {
+    if (this.terminalError) return Promise.reject(this.terminalError);
     const id = this.nextId++;
     const payload = JSON.stringify({ id, method, params }) + "\n";
     return new Promise<Record<string, unknown>>((resolve, reject) => {
@@ -467,12 +567,25 @@ class CodexRpcClient {
         reject(new Error(`codex app-server timed out on ${method}`));
       }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
-      this.proc.stdin.write(payload);
+      try {
+        this.proc.stdin.write(payload, (error) => {
+          if (error) this.fail(new Error("codex app-server stdin write failed"));
+        });
+      } catch {
+        this.fail(new Error("codex app-server stdin write failed"));
+      }
     });
   }
 
   private notify(method: string, params: Record<string, unknown> = {}) {
-    this.proc.stdin.write(JSON.stringify({ method, params }) + "\n");
+    if (this.terminalError) return;
+    try {
+      this.proc.stdin.write(JSON.stringify({ method, params }) + "\n", (error) => {
+        if (error) this.fail(new Error("codex app-server stdin write failed"));
+      });
+    } catch {
+      this.fail(new Error("codex app-server stdin write failed"));
+    }
   }
 
   async initialize() {
@@ -500,7 +613,7 @@ class CodexRpcClient {
   }
 
   async shutdown() {
-    this.proc.kill("SIGTERM");
+    await this.terminate();
   }
 }
 

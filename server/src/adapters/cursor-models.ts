@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { models as cursorFallbackModels } from "@paperclipai/adapter-cursor-local";
+import { stripLocalAdapterProviderEnv } from "@paperclipai/adapter-utils/server-utils";
 import type { AdapterModel } from "./types.js";
 
 const CURSOR_MODELS_TIMEOUT_MS = 5_000;
@@ -114,6 +115,7 @@ function defaultCursorModelsRunner(): CursorModelsCommandResult {
     encoding: "utf8",
     timeout: CURSOR_MODELS_TIMEOUT_MS,
     maxBuffer: MAX_BUFFER_BYTES,
+    env: stripLocalAdapterProviderEnv(process.env),
   });
   return {
     status: result.status,

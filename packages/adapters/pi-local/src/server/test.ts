@@ -9,7 +9,7 @@ import {
   ensureAbsoluteDirectory,
   ensureCommandResolvable,
   ensurePathInEnv,
-  runChildProcess,
+  runProviderProbeChildProcess,
 } from "@paperclipai/adapter-utils/server-utils";
 import {
   asStringArray,
@@ -218,7 +218,7 @@ export async function testEnvironment(
     if (extraArgs.length > 0) args.push(...extraArgs);
 
     try {
-      const probe = await runChildProcess(
+      const probe = await runProviderProbeChildProcess(
         `pi-envtest-${Date.now()}-${Math.random().toString(16).slice(2)}`,
         command,
         args,
@@ -227,6 +227,7 @@ export async function testEnvironment(
           env: runtimeEnv,
           timeoutSec: 60,
           graceSec: 5,
+          signal: ctx.signal,
           onLog: async () => {},
         },
       );

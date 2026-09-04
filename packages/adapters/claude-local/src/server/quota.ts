@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { ProviderQuotaResult, QuotaWindow } from "@paperclipai/adapter-utils";
+import { stripLocalAdapterProviderEnv } from "@paperclipai/adapter-utils/server-utils";
 
 const execFileAsync = promisify(execFile);
 
@@ -23,7 +24,7 @@ function hasNonEmptyProcessEnv(key: string): boolean {
 
 function createClaudeQuotaEnv(): Record<string, string> {
   const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
+  for (const [key, value] of Object.entries(stripLocalAdapterProviderEnv(process.env))) {
     if (typeof value !== "string") continue;
     if (key.startsWith("ANTHROPIC_")) continue;
     env[key] = value;
@@ -115,7 +116,7 @@ interface ClaudeAuthStatus {
 export async function readClaudeAuthStatus(): Promise<ClaudeAuthStatus | null> {
   try {
     const { stdout } = await execFileAsync("claude", ["auth", "status"], {
-      env: process.env,
+      env: stripLocalAdapterProviderEnv(process.env),
       timeout: 5_000,
       maxBuffer: 1024 * 1024,
     });
