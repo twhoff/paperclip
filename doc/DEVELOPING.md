@@ -39,6 +39,10 @@ This starts:
 
 `pnpm dev` runs the server in watch mode and restarts on changes from workspace packages (including adapter packages). Use `pnpm dev:once` to run without file watching.
 
+Server development commands enable the `paperclip-dev` module condition, which loads the local plugin SDK from TypeScript source. SDK builds and typechecks can rewrite `packages/plugins/sdk/dist` without restarting the server; SDK source edits still trigger watch reloads. Default SDK imports and published packages continue to use compiled JavaScript.
+
+The watch-mode health watchdog gives source reloads a 60-second grace period before replacing an unavailable watcher. Unexpected watcher exits still trigger immediate recovery, and repeated failed recovery attempts stop the runner.
+
 `pnpm dev:once` now tracks backend-relevant file changes and pending migrations. When the current boot is stale, the board UI shows a `Restart required` banner. You can also enable guarded auto-restart in `Instance Settings > Experimental`, which waits for queued/running local agent runs to finish before restarting the dev server.
 
 Tailscale/private-auth dev mode:

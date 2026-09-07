@@ -25,6 +25,7 @@ export function createServerChildLaunch({
       args: [
         "watch",
         `--max-old-space-size=${SERVER_MAX_OLD_SPACE_MB}`,
+        "--conditions=paperclip-dev",
         "--ignore",
         "../ui/node_modules",
         "--ignore",
@@ -64,6 +65,7 @@ export function createServingChildWatchdog({
   clearIntervalFn = clearInterval,
   intervalMs = 2_500,
   startupGraceMs = 60_000,
+  restartGraceMs = startupGraceMs,
   failureThreshold = 3,
   maxRecoveryAttempts = 3,
 }) {
@@ -74,6 +76,7 @@ export function createServingChildWatchdog({
   let phase = "starting";
   let phaseStartedAt = now();
   let consecutiveFailures = 0;
+  let failureStartedAt = null;
   let recoveryAttempts = 0;
   let interval = null;
   let stopped = false;
@@ -107,6 +110,7 @@ export function createServingChildWatchdog({
       recoveryAttempts += 1;
       phase = "recovering";
       consecutiveFailures = 0;
+      failureStartedAt = null;
       try {
         await recover(reason);
       } catch (error) {
@@ -137,12 +141,16 @@ export function createServingChildWatchdog({
         await probe();
         phase = "healthy";
         consecutiveFailures = 0;
+        failureStartedAt = null;
         recoveryAttempts = 0;
         return true;
       } catch {
         if (phase === "healthy") {
+          failureStartedAt ??= now();
           consecutiveFailures += 1;
-          if (consecutiveFailures >= failureThreshold) {
+          // tsx owns normal source reloads. Allow its replacement server the
+          // same startup window before treating the watcher as unavailable.
+          if (consecutiveFailures >= failureThreshold && now() - failureStartedAt >= restartGraceMs) {
             await recoverNow("health_check_failed");
           }
           return false;
