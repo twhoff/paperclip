@@ -1245,26 +1245,18 @@ export function issueService(db: Db) {
 
       const conditions = [eq(issueComments.issueId, issueId)];
       if (afterCommentId) {
-        const anchor = await db
-          .select({
-            id: issueComments.id,
-            createdAt: issueComments.createdAt,
-          })
-          .from(issueComments)
-          .where(and(eq(issueComments.issueId, issueId), eq(issueComments.id, afterCommentId)))
-          .then((rows) => rows[0] ?? null);
-
-        if (!anchor) return [];
+        // Keep the anchor in PostgreSQL: JS Date loses submillisecond precision
+        // and cannot be bound as an untyped raw SQL parameter by postgres-js.
+        // A missing or wrong-issue anchor yields NULL, so no rows match.
+        const anchor = sql`(
+          SELECT ${issueComments.createdAt}, ${issueComments.id}
+          FROM ${issueComments}
+          WHERE ${issueComments.issueId} = ${issueId} AND ${issueComments.id} = ${afterCommentId}
+        )`;
         conditions.push(
           order === "asc"
-            ? sql<boolean>`(
-                ${issueComments.createdAt} > ${anchor.createdAt}
-                OR (${issueComments.createdAt} = ${anchor.createdAt} AND ${issueComments.id} > ${anchor.id})
-              )`
-            : sql<boolean>`(
-                ${issueComments.createdAt} < ${anchor.createdAt}
-                OR (${issueComments.createdAt} = ${anchor.createdAt} AND ${issueComments.id} < ${anchor.id})
-              )`,
+            ? sql<boolean>`(${issueComments.createdAt}, ${issueComments.id}) > ${anchor}`
+            : sql<boolean>`(${issueComments.createdAt}, ${issueComments.id}) < ${anchor}`,
         );
       }
 
