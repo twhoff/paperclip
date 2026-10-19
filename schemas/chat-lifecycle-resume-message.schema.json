@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/holly-chat-lifecycle-resume-message.schema.json",
+  "title": "Holly Chat Lifecycle Resume Message",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "kind",
+    "status",
+    "agent_name",
+    "session_id",
+    "task_id",
+    "intent",
+    "worktree_path",
+    "channel",
+    "channel_id"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "holly.chat.lifecycle.resume.v1"
+    },
+    "kind": {
+      "const": "task_resume"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["posted"]
+    },
+    "agent_name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "session_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "task_id": {
+      "type": ["string", "null"]
+    },
+    "intent": {
+      "type": "string"
+    },
+    "worktree_path": {
+      "type": ["string", "null"]
+    },
+    "channel": {
+      "const": "all-agents"
+    },
+    "channel_id": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

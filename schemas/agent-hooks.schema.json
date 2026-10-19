@@ -1,0 +1,60 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://holly.dev/schemas/agent-hooks.schema.json",
+  "title": "Holly agent hooks registration",
+  "description": "The runtime-agnostic hook-registration format consumed from .github/hooks/*.json. Each event maps to an ordered list of command hooks. Claude Code's nested {matcher, hooks:[...]} shape is produced from this by holly.claude_settings; Codex's by holly.codex_settings.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["hooks"],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Optional path/URI to this schema."
+    },
+    "hooks": {
+      "type": "object",
+      "description": "Map of hook event name to a list of command hooks.",
+      "minProperties": 1,
+      "propertyNames": {
+        "enum": [
+          "PreToolUse",
+          "PostToolUse",
+          "UserPromptSubmit",
+          "SessionStart",
+          "SessionEnd",
+          "PreCompact",
+          "SubagentStart",
+          "SubagentStop",
+          "Stop"
+        ]
+      },
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "command"],
+          "properties": {
+            "type": {
+              "const": "command",
+              "description": "Only command hooks are supported."
+            },
+            "command": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Shell command to run, e.g. 'holly hooks pre-tool-use'."
+            },
+            "cwd": {
+              "type": "string",
+              "description": "Working directory for the command (e.g. '.')."
+            },
+            "matcher": {
+              "type": "string",
+              "description": "Optional tool/event matcher; empty or absent means all."
+            }
+          }
+        }
+      }
+    }
+  }
+}

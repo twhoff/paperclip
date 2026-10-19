@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/holly-chat-lifecycle-error-message.schema.json",
+  "title": "Holly Chat Lifecycle Error Message",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "kind",
+    "command",
+    "stage",
+    "agent_name",
+    "session_id",
+    "task_id",
+    "intent",
+    "worktree_path",
+    "channel",
+    "channel_id",
+    "error",
+    "recovery",
+    "state"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "holly.chat.lifecycle.error.v1"
+    },
+    "kind": {
+      "const": "task_error"
+    },
+    "command": {
+      "type": "string",
+      "minLength": 1
+    },
+    "stage": {
+      "type": "string",
+      "minLength": 1
+    },
+    "agent_name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "session_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "task_id": {
+      "type": ["string", "null"]
+    },
+    "intent": {
+      "type": "string"
+    },
+    "worktree_path": {
+      "type": ["string", "null"]
+    },
+    "channel": {
+      "const": "all-agents"
+    },
+    "channel_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "error": {
+      "type": "string",
+      "minLength": 1
+    },
+    "recovery": {
+      "type": "string",
+      "minLength": 1
+    },
+    "state": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  }
+}

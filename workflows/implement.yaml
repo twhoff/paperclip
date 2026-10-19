@@ -15,12 +15,12 @@ description: >-
   Auto-iterates up to 3 fix cycles on quality gate failures.
 
   Epic support: when given an epic ID, iterates through ALL unblocked
-  children automatically (research, TDD, commit, close per child) until
-  the epic is complete. User approval is sought once for the overall
+  children automatically (research, TDD, commit, review handoff per child) until
+  implementation is ready for review. User approval is sought once for the overall
   plan, not per child.
 
-   Commits once at handoff unless the task or user explicitly needs smaller
-   checkpoints. For UI work, requires an explicit implementation loop using the
+   Commits a review candidate and a final candidate after batch repairs.
+   Follow .agents/skills/use-workflow/stable-delivery.md for each child. For UI work, requires an explicit implementation loop using the
    ui-visual-capture skill: do work -> capture -> assess -> adjust,
    repeated until the rendered UI is correct at target breakpoints.
    The workflow builds review expectations into normal delivery so the
@@ -29,6 +29,14 @@ description: >-
   Composable with the workflow wrapper for universal pre/postflight.
 
 preflight:
+  - prompt: >-
+      Run `holly preflight` after the runtime session is registered. Resolve any
+      failed prerequisite before implementation. Use this bounded command for
+      continuation checks; do not run exhaustive `holly validate` or `holly doctor`
+      during each edit/test iteration. Full health validation runs once at the
+      handoff or landing boundary, unless a failure requires diagnosis.
+    category: quality
+
   # Step 1: Resolve the task input
   - prompt: >-
       Determine what work to do from the user's input:
@@ -191,7 +199,7 @@ steps:
          - Follow Arrange-Act-Assert
          - Use existing test fixtures and helpers where available
 
-      4. Run the tests to confirm they FAIL (Red phase). All new tests
+      4. Run only the newly added tests to confirm they FAIL (Red phase). All new tests
          should fail because the implementation does not exist yet.
          Record the exact test command and failure output.
 
@@ -223,9 +231,9 @@ steps:
       4. Update any configuration, schemas, or documentation that the
          implementation requires.
 
-      5. After all targeted tests pass, defer full quality gates to the
-         handoff readiness / commit stage unless the change touches shared
-         contracts, schemas, infrastructure, or other high-blast-radius code.
+      5. After all targeted tests pass, defer the remaining relevant changed,
+         affected, or custom gates to the handoff readiness / commit stage.
+         Shared contracts or uncertainty never widen this to a full suite.
     category: delivery
 
   # UI iteration loop: implement -> capture -> iterate
@@ -268,7 +276,7 @@ steps:
 
   # TDD Refactor phase: clean up while green
   - prompt: >-
-      Refactor the implementation while keeping all tests green:
+      Refactor the implementation while keeping selected affected tests green:
 
       1. Review the new code for:
          - Duplication that can be extracted
@@ -278,8 +286,11 @@ steps:
          - Performance concerns
 
       2. Apply each refactoring as a discrete change. After each meaningful
-         refactor, run the narrowest relevant tests. Run the full suite only
-         when the refactor changes shared behavior or public contracts.
+         refactor, run the narrowest relevant tests. Do not widen testing
+         speculatively because shared behavior or public contracts changed.
+         Repository-prescribed release, landing and acceptance gates remain
+         mandatory, including a full suite where required; otherwise a full
+         suite needs an explicit user request.
 
       3. Update documentation:
          - Docstrings for new or changed public APIs
@@ -290,10 +301,10 @@ steps:
            orchestration capabilities changed
 
       4. If refactoring changed shared behavior, public contracts, schemas, or
-         infrastructure, run the relevant quality gates now. Otherwise defer the
-         full gate set to the handoff readiness / commit stage.
+         infrastructure, run the relevant affected quality gates now. Otherwise
+         defer those same scoped gates to the handoff readiness / commit stage.
 
-      5. Report the final state: all tests passing, all quality gates
+      5. Report the final state: selected tests passing, selected quality gates
          clean, or list remaining issues for the next step.
     category: delivery
     condition: Refactoring opportunities were identified or quality gates have failures to resolve.
@@ -345,11 +356,14 @@ steps:
          them. This is a completeness check for touched surfaces, not a new
          blast-radius search.
 
-      5. TEST AND PROOF ARTIFACTS PRESENT: Confirm the intended tests were
-         written and run. Run the full quality gate set once now when code
-         changed enough to require it. For UI work, confirm the final route,
-         viewport rule, interaction proof, and any date/time validation were
-         captured by the UI implementation loop.
+      5. TEST AND PROOF ARTIFACTS PRESENT: Confirm focused tests were written
+         and run. List required native, visual, release and landing gates.
+         Keep expensive acceptance pending until the stable candidate loop below;
+         do not claim pending evidence passed. Complete repository-prescribed
+         release, landing and acceptance gates, including a full suite where
+         required. Otherwise a full suite needs an explicit user request.
+         UI iteration captures guide development; final visual acceptance is
+         attributed to the final candidate, route, states and viewport rules.
 
       6. KNOWN GAPS EXPLICIT: If any limitation, follow-up, or unresolved edge
          case remains, write it down clearly in the handoff instead of letting
@@ -359,6 +373,22 @@ steps:
       repeat the full review workflow here.
     category: quality
 
+  # One candidate through review and final acceptance
+  - prompt: >-
+      STABLE CANDIDATE LOOP — Execute
+      .agents/skills/use-workflow/stable-delivery.md for this issue or child.
+      Implement directly in the registered task worktree; scratch holds only
+      experiments and evidence. Commit the candidate after focused checks.
+      Obtain independent review of the exact SHA and one consolidated defect
+      set. Apply the full batch, verify narrowly, commit the final candidate
+      and review the delta. Run required expensive native and visual acceptance
+      once against that final candidate with immutable-candidate receipts.
+      Complete the review record from the receipts; pending proof is not approval.
+      The authorised landing owner runs revision-guarded holly task finish.
+      Bounded workers return the exact SHA, receipt paths and pending gates to
+      their coordinator and stop; this step grants no dispatch or landing rights.
+    category: quality
+
   # Epic iteration: advance to next child
   - prompt: >-
       After completing the TDD cycle for the current child issue:
@@ -366,7 +396,8 @@ steps:
       1. Commit all work for this child (if not already committed by the
          afterEach hook).
       2. Leave the current child in `in_progress`. Review will move it to
-         `in_review`, and end-session will close it after approval.
+         `in_review`. Landing leaves it open by default; closure requires
+         verified review of the landed revision and explicit closure authority.
       3. Post a completion summary to the task epic channel.
       4. Run `holly tracker exec -- children <epic-id>` to find the next unblocked child.
       5. If a next unblocked child exists:
@@ -379,8 +410,8 @@ steps:
          d. Produce a brief design for the next child. For straightforward
             issues, a one-paragraph approach is sufficient — do NOT
             re-seek user approval for each child.
-         e. Re-execute main steps 1–4 (Red, Green, Refactor, Fix) for
-            the next child.
+         e. Re-execute TDD, handoff readiness and the stable candidate loop
+            for the next child, including its independent review and acceptance.
          f. Return to this step to check for more children.
       6. If no more unblocked children remain, proceed to postflight.
 
@@ -392,7 +423,9 @@ steps:
 postflight:
   # Commit the work
   - prompt: >-
-      Commit the completed work:
+      Commit the completed work. Run exhaustive `holly validate` once at this
+      handoff boundary; retain its result rather than repeating it after every
+      subsequent bookkeeping step unless the environment changes:
 
       1. Stage changes logically — group related files into coherent
          commits. Prefer fewer meaningful commits over many tiny ones.
@@ -402,11 +435,13 @@ postflight:
          Types: feat, fix, test, docs, refactor, chore.
          The issue ID MUST be included (commit-msg hook requires <issue-id>).
 
-      3. If the handoff readiness check already ran the full required gates
-         successfully and no files changed since then, do not repeat them.
-         Otherwise run the missing required gates once now.
+      3. Reuse the stable-candidate loop's receipts only when their candidate
+         SHA and clean content fingerprints match the current candidate.
+         Do not repeat acceptance merely for this handoff. Run missing required
+         gates once; changed candidates need refreshed review and evidence.
 
-      4. If any gate fails post-commit, fix with an additional commit.
+      4. If a gate fails, apply the complete defect batch, verify narrowly,
+         commit a new candidate and return to the stable-candidate loop.
     requires:
       - Holly tracker CLI
 
@@ -416,14 +451,15 @@ postflight:
 
       1. SINGLE ISSUE MODE: If working on a standalone issue (not part
          of an epic), leave it in `in_progress`. The review workflow will
-         move it to `in_review`, and end-session will close it after approval.
+         move it to `in_review`. Landing leaves it open by default; closure
+         requires verified review of the landed revision and explicit closure authority.
 
       2. EPIC MODE: Verify all children have been processed by running
          `holly tracker exec -- children <epic-id>`. Report:
          - Children completed in this session
          - Children still open or still awaiting review
-         Do not close the epic in this workflow. Review and end-session own
-         the final status progression.
+         Do not close the epic in this workflow. The authorized reviewer or
+         orchestrator owns final closure after checking every child and acceptance criterion.
          If some children remain open, explain why each was skipped
          (e.g. blocked by external dependency, deferred priority).
 

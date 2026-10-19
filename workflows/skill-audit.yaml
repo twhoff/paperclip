@@ -1,0 +1,102 @@
+# yaml-language-server: $schema=../schemas/workflow.schema.json
+
+name: Skill Audit
+description: >-
+  Reproducible Holly skill-contract audit workflow. Produces a durable,
+  evidence-complete audit row for every logical SKILL.md and separates
+  authoritative provider sources, live projections, deleted-upstream preserved
+  entries, symlink views, and third-party installed content.
+
+preflight:
+  - prompt: >-
+      Resolve the audit scope before collecting evidence.
+
+      1. Read the tracker item with `holly tracker show <id> --json`.
+      2. Record the exact issue ID, parent epic if present, current branch, and
+         the audit date.
+      3. Confirm the authoritative template path is
+         `docs/audits/skill-contract-audit-template.md`.
+      4. State which output document will hold this run's evidence before
+         writing any findings.
+    category: discovery
+
+  - prompt: >-
+      Build the discovery inventory from current Holly surfaces, not memory.
+
+      1. Run `holly sync skills --mode plan --verbose --json` or an equivalent
+         complete inventory that enumerates every current logical skill, live
+         projection, deleted-upstream/preserved entries, and logical symlink views.
+      2. Exclude virtualenv, vendor, and other non-authoritative copies from
+         the audit inventory.
+      3. Persist the complete inventory and the initial scorecards in the audit
+         document before judging any row.
+    category: discovery
+
+steps:
+  - prompt: >-
+      DISCOVERY PASS - Enumerate every logical skill as an auditable row.
+
+      Every discovered skill produces a durable row in the audit document.
+      Unchanged, excluded, skipped, preserved, and deleted-upstream entries
+      still need explicit rows; they must not disappear into aggregate counts.
+
+      Each row must record:
+      - logical skill name
+      - every visible path or view being audited
+      - ownership/classification
+      - authoritative provider source
+      - baseline or preserved-entry provenance
+      - creation SHA, or an explicit no-history reason
+      - current status
+      - change summary
+      - linked issue or commit
+      - final verification status
+    category: delivery
+
+  - prompt: >-
+      PROVENANCE PASS - Reconstruct how each row came to exist.
+
+      Use current implementation plus repository history. For history-bearing
+      rows, inspect creation-to-HEAD history with
+      `holly task exec_in_current_task_worktree -- git log --follow --stat -- <path>`
+      and record the creation SHA plus any materially relevant follow-up commit.
+
+      When a row has no meaningful history, record the explicit reason, such as
+      generated projection, deleted-upstream preserved baseline, symlinked view,
+      or third-party installed content. Do not fabricate provenance from a
+      missing Git trail.
+    category: discovery
+
+  - prompt: >-
+      CONTRACT PASS - Check current behaviour, not history alone.
+
+      In addition to creation-to-HEAD history, verify Current CLI help, schemas, implementation, ADRs, and tracker state together with live managed projections.
+
+      Compare those surfaces against each skill row and record contradictions,
+      stale baselines, deleted-upstream/preserved entries, and logical symlink
+      views explicitly in the audit.
+    category: discovery
+
+  - prompt: >-
+      FIX-AND-MATERIALISE PASS - If the audit finds a verified contradiction,
+      fix it in the authoritative source first, then deliberately materialise it
+      into managed projections.
+
+      Re-run the affected focused checks after each fix and update the row's
+      verification notes with the exact command and result.
+    category: delivery
+    condition: The audit finds verified contradictions that belong to this issue's scope.
+
+postflight:
+  - prompt: >-
+      Finalise the evidence package after the last edit.
+
+      1. Re-run the full inventory and final report after the last edit.
+      2. Persist the final scorecards, full path inventory, exact commands,
+         final commit SHA, skipped gates, and verification results in the audit
+         document.
+      3. Run `holly validate` and the focused workflow/asset tests required by
+         the issue.
+      4. Do not mark the audit complete unless the final rerun is captured in
+         the document.
+    category: quality

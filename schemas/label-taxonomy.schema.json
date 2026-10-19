@@ -1,0 +1,170 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/holly-label-taxonomy.schema.json",
+  "title": "Holly Label Taxonomy",
+  "description": "Adapter-declared label catalog for Holly tracker label discovery.",
+  "type": "object",
+  "required": ["adapter", "version", "canonical_labels"],
+  "additionalProperties": false,
+  "properties": {
+    "adapter": {
+      "type": "string",
+      "description": "Adapter name that declared this label surface.",
+      "minLength": 1
+    },
+    "version": {
+      "type": "integer",
+      "description": "Schema version for this adapter label surface.",
+      "const": 1
+    },
+    "canonical_labels": {
+      "type": "array",
+      "description": "Canonical Holly labels accepted by this adapter.",
+      "items": {
+        "$ref": "#/$defs/canonical_label"
+      },
+      "uniqueItems": true,
+      "allOf": [
+        {
+          "contains": {
+            "type": "object",
+            "required": ["name"],
+            "properties": {
+              "name": {
+                "const": "holly:type:epic"
+              }
+            }
+          }
+        },
+        {
+          "contains": {
+            "type": "object",
+            "required": ["name"],
+            "properties": {
+              "name": {
+                "const": "holly:type:task"
+              }
+            }
+          }
+        },
+        {
+          "contains": {
+            "type": "object",
+            "required": ["name"],
+            "properties": {
+              "name": {
+                "const": "holly:track:<track>"
+              }
+            }
+          }
+        },
+        {
+          "contains": {
+            "type": "object",
+            "required": ["name"],
+            "properties": {
+              "name": {
+                "const": "holly:wave:<wave>"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "native_labels": {
+      "type": "array",
+      "description": "Adapter-native labels explicitly allowed outside the canonical Holly namespace.",
+      "items": {
+        "$ref": "#/$defs/native_label"
+      },
+      "default": [],
+      "uniqueItems": true
+    },
+    "compatibility_map": {
+      "type": "object",
+      "description": "Mapping from canonical label names to adapter-native label behavior.",
+      "propertyNames": {
+        "$ref": "#/$defs/canonical_label_name"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/compatibility"
+      },
+      "default": {}
+    }
+  },
+  "$defs": {
+    "canonical_label_name": {
+      "type": "string",
+      "pattern": "^holly:[a-z0-9][a-z0-9:-]*(?::[a-z0-9-]+|:<[a-z0-9-]+>)*$"
+    },
+    "native_label_name": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[^\\s/][^\\s/]*$"
+    },
+    "canonical_label": {
+      "type": "object",
+      "required": ["name", "description"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/canonical_label_name"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "aliases": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/native_label_name"
+          },
+          "default": [],
+          "uniqueItems": true
+        },
+        "native_name": {
+          "type": ["string", "null"],
+          "description": "Adapter-native label used when the canonical label maps to a different concrete label.",
+          "default": null
+        },
+        "template": {
+          "type": "boolean",
+          "description": "Whether this catalog entry is a label pattern rather than a concrete label.",
+          "default": false
+        }
+      }
+    },
+    "native_label": {
+      "type": "object",
+      "required": ["name", "description"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/native_label_name"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "compatibility": {
+      "type": "object",
+      "required": ["supported"],
+      "additionalProperties": false,
+      "properties": {
+        "supported": {
+          "type": "boolean"
+        },
+        "native_name": {
+          "type": ["string", "null"],
+          "default": null
+        },
+        "notes": {
+          "type": "string",
+          "default": ""
+        }
+      }
+    }
+  }
+}

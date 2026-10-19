@@ -1,17 +1,17 @@
 {
   "schema": "holly.sync.manifest.v1",
-  "last_sync_iso": "2026-08-21T07:48:06Z",
+  "last_sync_iso": "2026-10-19T01:20:17Z",
   "entries": {
     ".agents/agents/model-capability-tiers.yaml": {
-      "sha256": "10f749b3de1002950a15ad3b0d77b3b1b3d55268e8443681348972919486ad89",
-      "size": 10469,
+      "sha256": "be724e00a050bfba073380140447b10192c69795839112a61fd726259ad194fd",
+      "size": 11194,
       "owner": "core",
       "source_package": "",
       "source_version": ""
     },
     ".agents/agents/orchestrator-v2.agent.md": {
-      "sha256": "9e3fa8a4818a40f3d5e94961a76f64b99bb6136f532fa728188ba52843f975d1",
-      "size": 19030,
+      "sha256": "bdd625a154cd368b988a143861cd315f3a1e212d47d898178feef4c56caef223",
+      "size": 20874,
       "owner": "core",
       "source_package": "",
       "source_version": ""
@@ -31,78 +31,71 @@
       "source_version": ""
     },
     ".agents/agents/swarm-principal-implementation.agent.md": {
-      "sha256": "d3283c3ba5db5b12d0d94f10de210959367b5a1d876efea01327957c0a0a5104",
-      "size": 23223,
+      "sha256": "6a75996b5cd97af5b076e8d8ba7412d5e8079d54acbfcaad1f2f7cd6df5980b8",
+      "size": 29549,
       "owner": "core",
       "source_package": "",
       "source_version": ""
     },
     ".agents/agents/swarm-principal-reviewer.agent.md": {
-      "sha256": "918f7224bf14898512f4ef429fde49c481f635b1341840fdc36c84b1fba3f6d7",
-      "size": 23340,
+      "sha256": "0a66a1ad56a43b395686b92d6e4f9735ce3a75047222760e473b5ae88aee6e77",
+      "size": 30414,
       "owner": "core",
       "source_package": "",
       "source_version": ""
     },
     ".agents/agents/swarm-reviewer.agent.md": {
-      "sha256": "150e66d9a478d29d99fe456053c3a9ba2f97f94a2c0190d30bc59429018ee252",
-      "size": 21921,
+      "sha256": "d7016a3177aff7ac95df54394a7d45b41a50d435c6a72769d9912607bc92d64d",
+      "size": 29117,
       "owner": "core",
       "source_package": "",
       "source_version": ""
     },
     ".agents/agents/swarm-senior-implementation.agent.md": {
-      "sha256": "ed83af6951c36bacadbae7dbf6bf7edb4735aa26efcc62b14cff891617c02e68",
-      "size": 22710,
+      "sha256": "ea714b95153a0b05e865760df0bcb3debf354de7073f73133dfd90468a948fe7",
+      "size": 29044,
       "owner": "core",
       "source_package": "",
       "source_version": ""
     },
     ".agents/agents/swarm-senior-reviewer.agent.md": {
-      "sha256": "087f265f9a17f81ae215153ed74dd7bc918fb4ddffcdc6b8ee4addf3b310deb3",
-      "size": 22932,
+      "sha256": "b8c0f116c13148443aafaadab653e45b9d2e18e251c9fd1f6b98b34c1ea4c055",
+      "size": 29952,
       "owner": "core",
       "source_package": "",
       "source_version": ""
     },
     ".agents/agents/swarm-standard-implementation.agent.md": {
-      "sha256": "a9ccfdaa1c4104f76a714c4d599d23c9f0cffc305a6060a6903ad64845811a0b",
-      "size": 21912,
+      "sha256": "e1e6b814c3a0ca184e0d05bdeec7235df7734cefbef17c87d5e9a5071ac8f8d8",
+      "size": 28123,
       "owner": "core",
       "source_package": "",
       "source_version": ""
     },
     ".agents/agents/swarm-tiny-implementation.agent.md": {
-      "sha256": "e05b9a6a5fd5f57a7280dbf3c744fb6a97a9cb6849872e0d539cfaf454e1e077",
-      "size": 20970,
+      "sha256": "a2c3b3cc52d15903118c5a384e4ca4760538b6f3749fa63e32c3cc8f495e1c9b",
+      "size": 28194,
       "owner": "core",
       "source_package": "",
       "source_version": ""
     },
     ".agents/agents/swarm-ui-browser-implementation.agent.md": {
-      "sha256": "344af146541a738a0796ff40f680a604473757aec5c840235a9f028bd261ca31",
-      "size": 22788,
+      "sha256": "ad990ea5c88890f9dd7693883eac354e3aaaab4c2636122c5db012d80366ff72",
+      "size": 29056,
       "owner": "core",
       "source_package": "",
       "source_version": ""
     },
     ".agents/skills/agent-chat/SKILL.md": {
-      "sha256": "fcd75b012ae35876c10db1d8bb11527620c9c650401f099f59864473c84ee956",
-      "size": 11817,
-      "owner": "core",
-      "source_package": "",
-      "source_version": ""
-    },
-    ".agents/skills/agent-fs/.lastscratch": {
-      "sha256": "8cecb85c2647b6597b080f6e114b3d9d818bf185f9e2d8eb58e3229824849d8d",
-      "size": 97,
+      "sha256": "f2fa8ddfdf10d82a9f5a05fd3ad4ed26062830ae00839558d2c4fd54698ec009",
+      "size": 12195,
       "owner": "core",
       "source_package": "",
       "source_version": ""
     },
     ".agents/skills/agent-fs/SKILL.md": {
-      "sha256": "a1fc1eb2e2e745dad0c609c9ec0871f7a6362d4daf5eb34c32a8da140fbf9484",
-      "size": 14092,
+      "sha256": "ad90d3f923371f389068002bac0a2838dcda753c2181e69ec9460e9f6fbf8c3f",
+      "size": 15250,
       "owner": "core",
       "source_package": "",
       "source_version": ""
@@ -115,8 +108,8 @@
       "source_version": ""
     },
     ".agents/skills/agent-fs/hooks/agent-fs-guard.sh": {
-      "sha256": "980530631f63f247671aedf866fb0757ef61317d3de51c7bb32630f0c6c93ae7",
-      "size": 9710,
+      "sha256": "c27f538395ba2e0e5d3e9859ddc79a3f495960c22be018bb01bb64c70e41c200",
+      "size": 10429,
       "owner": "core",
       "source_package": "",
       "source_version": ""
@@ -185,8 +178,8 @@
       "source_version": ""
     },
     ".agents/skills/agent-fs/lib/session-id.mjs": {
-      "sha256": "8d03065b466bb0e6986fcf0e7a373393785a9be8d0bc3ed3bfaa8592863abdfb",
-      "size": 3040,
+      "sha256": "4b4f0da71480d94ba14b616843eb7a6edffc0deb1f393864f71dd22785e248b4",
+      "size": 4453,
       "owner": "core",
       "source_package": "",
       "source_version": ""
@@ -304,8 +297,8 @@
       "source_version": ""
     },
     ".agents/skills/agent-fs/references/architecture.md": {
-      "sha256": "bd3e52403e3798dc11412f4f9c872d4a523884518278c5689b63b1a57ed31e9f",
-      "size": 6501,
+      "sha256": "d6b719b814e7369858e0724efb0847427209a0015e80a407f32b57f2516e3bf3",
+      "size": 7550,
       "owner": "core",
       "source_package": "",
       "source_version": ""
@@ -318,22 +311,22 @@
       "source_version": ""
     },
     ".agents/skills/agent-fs/references/runtime-integration.md": {
-      "sha256": "4fd50d553cc06b072a46a872c6d793bd6b014083395a334ca44622ed59784fa6",
-      "size": 3294,
+      "sha256": "b0d73d7cc7303a072f0d99cd0cb31a64bbc2a6b9f2a26c6b05a51218271bad20",
+      "size": 4004,
       "owner": "core",
       "source_package": "",
       "source_version": ""
     },
     ".agents/skills/agent-lifecycle/SKILL.md": {
-      "sha256": "7b8097f93a2734afcd4a0f308ac270fee9a02f88647ffa3d11d1f332f4c7cfeb",
-      "size": 14698,
+      "sha256": "c4040f9ef2e057f5c17e6884529cbfaeceaaff50955944fa62a1b5f644706798",
+      "size": 16229,
       "owner": "core",
       "source_package": "",
       "source_version": ""
     },
     ".agents/skills/agent-sessions/SKILL.md": {
-      "sha256": "94648525b649f89f450d228dd57bc16081bc60c27c1272838c8ae641d0af0cf8",
-      "size": 19518,
+      "sha256": "eceb1cab9f6eaa886e3a742387b6ded01f7f504f66ade26e5f12b3b746763a80",
+      "size": 25657,
       "owner": "core",
       "source_package": "",
       "source_version": ""
@@ -353,15 +346,15 @@
       "source_version": ""
     },
     ".agents/skills/beads-holly/README.md": {
-      "sha256": "4842b6044291328d0a6c6556f03d2e0c3ab1e498eaf92c7fa9491cc0646bd5da",
-      "size": 4806,
+      "sha256": "071adaf9dd23c650346ec6a7bbd5801fa56a64309147a54c25fe8e394bb8e4fd",
+      "size": 5063,
       "owner": "adapter:beads",
       "source_package": "",
       "source_version": ""
     },
     ".agents/skills/beads-holly/SKILL.md": {
-      "sha256": "bd66ea695c7e57f85b14a54bb35c5abcd76cd9eebf036cacb087bc93cb4a9cab",
-      "size": 2395,
+      "sha256": "1887d3d013482b52e24c4fab22248377af5d23dc15b42bc00fb53755cf4905bc",
+      "size": 3258,
       "owner": "adapter:beads",
       "source_package": "",
       "source_version": ""
@@ -374,8 +367,8 @@
       "source_version": ""
     },
     ".agents/skills/beads-holly/resources/AGENTS.md": {
-      "sha256": "0158c156ffe03858fea3816bc6142cb75133ed54748936a05202b485a02250b5",
-      "size": 2008,
+      "sha256": "f635737dac731fd344c499894f65beb6700bc9de65d8d3f426a310643dc7ac87",
+      "size": 2064,
       "owner": "adapter:beads",
       "source_package": "",
       "source_version": ""
@@ -388,15 +381,15 @@
       "source_version": ""
     },
     ".agents/skills/beads-holly/resources/BOUNDARIES.md": {
-      "sha256": "9239200595fdc742bc2422c82bd7e71a55dc1af02ff6eea179642a0276f53a7c",
-      "size": 17035,
+      "sha256": "c4820dcaf2485dd4c19c4217834ff28ba6dfc89d85c4b1134df2e8cc28bf692f",
+      "size": 17085,
       "owner": "adapter:beads",
       "source_package": "",
       "source_version": ""
     },
     ".agents/skills/beads-holly/resources/CHEMISTRY_PATTERNS.md": {
-      "sha256": "c81bf240429099eeafd68c06bad4af45b0360dd5d3c6444f6d5b60d31c1641c5",
-      "size": 6863,
+      "sha256": "4860e20bf4b77f1a5cba3505bee315f9a4d8c0f2b3f9f1c17400d30ea6b9455a",
+      "size": 6841,
       "owner": "adapter:beads",
       "source_package": "",
       "source_version": ""
@@ -486,15 +479,15 @@
       "source_version": ""
     },
     ".agents/skills/holly-bug-bash/SKILL.md": {
-      "sha256": "3811cef4e4099cf1ef171c94cfd9fe4cb0c74cd244f6d15708bb1499aefa72c0",
-      "size": 9496,
+      "sha256": "5cbf77b6007df7002f9c5e76d4626433f30b86f27dfd384d7c0600bcb3b89b7a",
+      "size": 10197,
       "owner": "core",
       "source_package": "",
       "source_version": ""
     },
     ".agents/skills/holly-project-release/SKILL.md": {
-      "sha256": "0006a4949ffa2a6bbeac1bd2cc4906408b3be94568e27b3759073c3c2a5288df",
-      "size": 5496,
+      "sha256": "f139f6dcea9525ad6d35576370456130680ba1841dc074945ad00d46a9d960ee",
+      "size": 8260,
       "owner": "core",
       "source_package": "",
       "source_version": ""
@@ -507,8 +500,8 @@
       "source_version": ""
     },
     ".agents/skills/holly-project-release/references/release-checklist.md": {
-      "sha256": "95a710c8d155396a2d71b0e5e238f4d27bb485a3d56c5c14735605f3f2d70a2a",
-      "size": 1691,
+      "sha256": "f551ad57afa828a7ecb41a22877417051a514aced22bec6c08fbf86144448223",
+      "size": 2024,
       "owner": "core",
       "source_package": "",
       "source_version": ""
@@ -535,29 +528,29 @@
       "source_version": ""
     },
     ".agents/skills/holly-wireframe-bash/SKILL.md": {
-      "sha256": "69c664a41c50aeae8dedb61bc2b50e5413814eb261b36d90ab57ddf480da9d81",
-      "size": 11386,
+      "sha256": "220ef49794cd30678d06a9b817111cda46ea01a822ec1cc5dde6a7ccf5fa9d35",
+      "size": 12240,
       "owner": "core",
       "source_package": "",
       "source_version": ""
     },
     ".agents/skills/holly/SKILL.md": {
-      "sha256": "58fb5b60153868e8b51882713a4fcedfe6a78ae040251c7ca698872feee7396d",
-      "size": 20864,
+      "sha256": "14a2309850892150cbb618840cbc081576e0557ecd3b0c20aef08d3e56b9ccfe",
+      "size": 23271,
       "owner": "core",
       "source_package": "",
       "source_version": ""
     },
     ".agents/skills/issue-tracker/SKILL.md": {
-      "sha256": "d023606bb06ac9d3211fe466badd0740d39265733f37f2294619e936134c713a",
-      "size": 11269,
+      "sha256": "ba80c37e8eeecb6015f657c22b8ac7f50d31e91fef4d52e4c735091cf4ba36f9",
+      "size": 14607,
       "owner": "core",
       "source_package": "",
       "source_version": ""
     },
     ".agents/skills/issue-tracker/addendum-beads.md": {
-      "sha256": "f4fcdb47837c52bf3a832598cab649b6647ba7af716233c086a34f8fb2674993",
-      "size": 2977,
+      "sha256": "6bff1b52f887d02838ac45245a8f12e8d3d0d360708e2ba461633066b0e2901a",
+      "size": 6206,
       "owner": "adapter:beads",
       "source_package": "",
       "source_version": ""
@@ -570,8 +563,8 @@
       "source_version": ""
     },
     ".agents/skills/issue-tracker/beads/README.md": {
-      "sha256": "4842b6044291328d0a6c6556f03d2e0c3ab1e498eaf92c7fa9491cc0646bd5da",
-      "size": 4806,
+      "sha256": "4b513f545c71e73a034f1f96465b40a9477ec9c305ed4faabcd7e176b6f2f252",
+      "size": 5031,
       "owner": "adapter:beads",
       "source_package": "",
       "source_version": ""
@@ -584,8 +577,8 @@
       "source_version": ""
     },
     ".agents/skills/issue-tracker/beads/resources/AGENTS.md": {
-      "sha256": "0158c156ffe03858fea3816bc6142cb75133ed54748936a05202b485a02250b5",
-      "size": 2008,
+      "sha256": "f635737dac731fd344c499894f65beb6700bc9de65d8d3f426a310643dc7ac87",
+      "size": 2064,
       "owner": "adapter:beads",
       "source_package": "",
       "source_version": ""
@@ -598,15 +591,15 @@
       "source_version": ""
     },
     ".agents/skills/issue-tracker/beads/resources/BOUNDARIES.md": {
-      "sha256": "9239200595fdc742bc2422c82bd7e71a55dc1af02ff6eea179642a0276f53a7c",
-      "size": 17035,
+      "sha256": "c4820dcaf2485dd4c19c4217834ff28ba6dfc89d85c4b1134df2e8cc28bf692f",
+      "size": 17085,
       "owner": "adapter:beads",
       "source_package": "",
       "source_version": ""
     },
     ".agents/skills/issue-tracker/beads/resources/CHEMISTRY_PATTERNS.md": {
-      "sha256": "c81bf240429099eeafd68c06bad4af45b0360dd5d3c6444f6d5b60d31c1641c5",
-      "size": 6863,
+      "sha256": "4860e20bf4b77f1a5cba3505bee315f9a4d8c0f2b3f9f1c17400d30ea6b9455a",
+      "size": 6841,
       "owner": "adapter:beads",
       "source_package": "",
       "source_version": ""
@@ -689,43 +682,71 @@
       "source_version": ""
     },
     ".agents/skills/orchestrate/SKILL.md": {
-      "sha256": "69e7b83a8e60f83b746e0aec13760677575081a1555681c143374702045bd795",
-      "size": 3178,
+      "sha256": "16ac8b3950b82a0d43194fa942c9982c05c1ca728334f2f8c9af93df7238165e",
+      "size": 3179,
       "owner": "core",
       "source_package": "",
       "source_version": ""
     },
     ".agents/skills/orchestration/SKILL.md": {
-      "sha256": "3af1965b1fd831c75cc9489c4776117cfa5f9751ee04b2f30eeb87391673a795",
-      "size": 12550,
+      "sha256": "d8b21e865f07c9fbb4d45f759a476257ed814b8bcc9eb472271e240d5fb64b53",
+      "size": 12982,
       "owner": "core",
       "source_package": "",
       "source_version": ""
     },
     ".agents/skills/project-knowledge/SKILL.md": {
-      "sha256": "5ad44d7ee75006eda38b995267cbbd9b7e4e72859c767842e385d4285274fc27",
-      "size": 7188,
+      "sha256": "b240a50ac4c61c971e323fcf36161f106c2178558a863e86993bdd172a381763",
+      "size": 12861,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/storybook-feature-lifecycle/SKILL.md": {
+      "sha256": "1cded286d05a84b3f6f6b01e63d8e6d08d0d90bba991b224506eeefce24027b0",
+      "size": 4761,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/storybook-feature-lifecycle/agents/openai.yaml": {
+      "sha256": "0927c872440847a63430b174c0db5c42c30978f2a5b92b3a6ebf6419daf5191c",
+      "size": 258,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/storybook-feature-lifecycle/references/provenance-assembler.md": {
+      "sha256": "70bffb7e53decd0057a79cd74feaba5a1873b648db3955c6f136d9fcb0ee9ea9",
+      "size": 4885,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/storybook-feature-lifecycle/scripts/assemble_provenance.py": {
+      "sha256": "d6f42e84e8baa03f119903b6ba6e10d80a0b3da5b3fa700efa4cead46457bd61",
+      "size": 49380,
       "owner": "core",
       "source_package": "",
       "source_version": ""
     },
     ".agents/skills/swarm-delivery/SKILL.md": {
-      "sha256": "682d55b0d46696f0a8c935d0fb0d64f72f70c12623c3f5d0207169e43a77458e",
-      "size": 22842,
+      "sha256": "a40bd2322f035e59f3fab835f35d050b97973aa12595695fd27cc0953532be0d",
+      "size": 28779,
       "owner": "core",
       "source_package": "",
       "source_version": ""
     },
     ".agents/skills/track/SKILL.md": {
-      "sha256": "6a578f30a7921ca6e2ff6cfa2b08d26ec9ae502db34f5222c52ed32a64399e2e",
-      "size": 3925,
+      "sha256": "a16394e219113fb0cb2885f6819861a5ad928bb11dd11dd780152ce211d8a3ac",
+      "size": 4165,
       "owner": "core",
       "source_package": "",
       "source_version": ""
     },
     ".agents/skills/ui-visual-capture/SKILL.md": {
-      "sha256": "8e106f2ccbf9f4be7e95c933bb79a9bc56fdf0fa5ca56cf55cc189a71d4e79cb",
-      "size": 41197,
+      "sha256": "cc2d2c2aa1f62a34d4f1ba371d883c1e74b7950f238d74844630a3c84aff1edf",
+      "size": 47018,
       "owner": "core",
       "source_package": "",
       "source_version": ""
@@ -752,15 +773,15 @@
       "source_version": ""
     },
     ".agents/skills/ui-visual-capture/scripts/lib/dev-server.mjs": {
-      "sha256": "fe8575ae6213dd6ac35db166331feffb26184d1157bcc2817386cf40c3520cd6",
-      "size": 15500,
+      "sha256": "8fa82384026d0f76d29c84471ae072af91c3efedc4e29b617d604a29e2f1730a",
+      "size": 20240,
       "owner": "core",
       "source_package": "",
       "source_version": ""
     },
     ".agents/skills/ui-visual-capture/scripts/lib/help.mjs": {
-      "sha256": "102fe68a82526ec07d27a04c31287902ec6a7cca50382034de5effef4595228a",
-      "size": 9264,
+      "sha256": "abf98be9fca6d2eeaffe938a69b2176c3893ffb9ef74f3cf76330d14c4e0b696",
+      "size": 9777,
       "owner": "core",
       "source_package": "",
       "source_version": ""
@@ -794,8 +815,8 @@
       "source_version": ""
     },
     ".agents/skills/ui-visual-capture/scripts/playwright-screenshot.mjs": {
-      "sha256": "1b9eb5c307ca51a85d128684aade0968be8385240c16151d934b5d25610c7ccc",
-      "size": 13193,
+      "sha256": "865ac3ab3f70b00cc1bb1c13356cf50543ce050e4d476e94d93ccb574b4aafce",
+      "size": 13123,
       "owner": "core",
       "source_package": "",
       "source_version": ""
@@ -836,8 +857,8 @@
       "source_version": ""
     },
     ".agents/skills/ui-visual-capture/tests/dev-server.test.mjs": {
-      "sha256": "2931d09d7511d92bf50cc60409a1a63da9481f36cd666afe279db80d5717e7ce",
-      "size": 19925,
+      "sha256": "8fdb9c811c69e244ff436d65d737e8f0a8a122d5dbca6f43a2712b66a35d56e5",
+      "size": 27279,
       "owner": "core",
       "source_package": "",
       "source_version": ""
@@ -885,8 +906,99 @@
       "source_version": ""
     },
     ".agents/skills/use-workflow/SKILL.md": {
-      "sha256": "f78bf8f48dd14b164b8e5ea6d9303c29aa84b1eb8e1feb4dff823430b2fb5420",
-      "size": 11265,
+      "sha256": "598ad5b567a6ab7299aaa62df1c7c9e248506ced3ade71b1b96c950dee30528b",
+      "size": 13216,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/use-workflow/review-contract.md": {
+      "sha256": "552c1a1ffc40a8782cc5d25b2543ac1e8a7ea86d89f10a17b4deff898d1c2644",
+      "size": 12166,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/use-workflow/review-record.schema.json": {
+      "sha256": "123746d8115ca92b7db82a2533bb1a7a1dbf7701d2e24e2c2c09bfb50d5cf78f",
+      "size": 5330,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    ".agents/skills/use-workflow/stable-delivery.md": {
+      "sha256": "95737349487441d5bea015960deb7947d150dc4f62d46b226fac79e0c69c391f",
+      "size": 3465,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    "schemas/agent-hooks.schema.json": {
+      "sha256": "aa60da5fc35be4f3de2a166f7db008367437a19945b48ed4de2b1a050848874e",
+      "size": 1960,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    "schemas/agent-sessions.schema.json": {
+      "sha256": "13ee4c92f796fa6043fb272ab6973a4c12f21c5b823e054274b279c21c162fa9",
+      "size": 18580,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    "schemas/chat-lifecycle-abort-message.schema.json": {
+      "sha256": "7f7f05f81f129e9e07a3137206cb1b46e08e2ec052a6798a75edec026ed29887",
+      "size": 1239,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    "schemas/chat-lifecycle-error-message.schema.json": {
+      "sha256": "7f7d479a8945e0d9da838e7683ac68b6a11efa671ac7364426aad0d208745cbe",
+      "size": 1463,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    "schemas/chat-lifecycle-finish-message.schema.json": {
+      "sha256": "810ea60f274704c8f83338b65786d44a793eef559055bd087b561cfdb7b175d7",
+      "size": 2448,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    "schemas/chat-lifecycle-resume-message.schema.json": {
+      "sha256": "c1542af9d3a61cb9d73d56981341865b875c93f11e3bbe4ff65911f7d42e1084",
+      "size": 1091,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    "schemas/chat-lifecycle-role-message.schema.json": {
+      "sha256": "bd40c6cc3cbfbadb3b979e3e2cbf345ea4a63a12d40a932bf0d49e19f6501299",
+      "size": 1897,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    "schemas/chat-lifecycle-start-message.schema.json": {
+      "sha256": "5e2aedbbbc049a6fd669c4cec5e7768951ddaef6f9cb1c07a7c6d5db12c564fa",
+      "size": 1611,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    "schemas/label-taxonomy.schema.json": {
+      "sha256": "90400195ba4df644777024df5ebb70e1d92949af19f68f07bf810e2d9eddc2e8",
+      "size": 4431,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
+    "schemas/workflow.schema.json": {
+      "sha256": "639142a6049c6472596ec2e990d3aa18c9066047829b75af33af346c2973a17c",
+      "size": 12634,
       "owner": "core",
       "source_package": "",
       "source_version": ""
@@ -899,8 +1011,8 @@
       "source_version": ""
     },
     "workflows/commit.yaml": {
-      "sha256": "4adbb269e16b888356d915031256b37a0066e36cab734ec5b4a1159844531f34",
-      "size": 6352,
+      "sha256": "a043def0c4c792c3bb3f365d1fde1640d8a7b77b2760370ab35e9cea2014e49d",
+      "size": 7793,
       "owner": "adapter:beads",
       "source_package": "",
       "source_version": ""
@@ -913,8 +1025,8 @@
       "source_version": ""
     },
     "workflows/end-session.yaml": {
-      "sha256": "7e8da46ea44e2eeb6aa866704ff1dee7b27772c8d071afd4f20c5bb0b371bb89",
-      "size": 2740,
+      "sha256": "96a2702b669ce1f96b83ca039a0a107c81fb3bec329e1598e29de3463eaea9b6",
+      "size": 4748,
       "owner": "adapter:beads",
       "source_package": "",
       "source_version": ""
@@ -927,15 +1039,15 @@
       "source_version": ""
     },
     "workflows/implement.yaml": {
-      "sha256": "6cb8429f2e326b19601fc85513bbaa668c7561204bd9f12b436605764cfbaf98",
-      "size": 21903,
+      "sha256": "79b65c638e8f148ee25a6d49ab07bd0e08fac62859b8a42b4cd3bdb82f6955a6",
+      "size": 24577,
       "owner": "adapter:beads",
       "source_package": "",
       "source_version": ""
     },
     "workflows/orchestrate-swarm.yaml": {
-      "sha256": "fa5e09e8475ccc65ec84c7aeba2195b6fa7c03a802c9babcd9d921ce94df2c3b",
-      "size": 27618,
+      "sha256": "2f57dbc2d2f00a67ea83caf98bd7c8c38dac7cd4939455100bb9ce2ce5c1c3c6",
+      "size": 29345,
       "owner": "adapter:beads",
       "source_package": "",
       "source_version": ""
@@ -955,22 +1067,36 @@
       "source_version": ""
     },
     "workflows/review-implementation.yaml": {
-      "sha256": "827bfd5358600a147ed297d11fbb65a2456046bf9905ea34a211ffb906cc542f",
-      "size": 11480,
+      "sha256": "26f738c76050a6ff378d68e1d7efc2676aca51118d0b77d15764434a091d395f",
+      "size": 3472,
       "owner": "adapter:beads",
       "source_package": "",
       "source_version": ""
     },
+    "workflows/skill-audit.yaml": {
+      "sha256": "f961a778ba7d7ea535ffda933cff84fdf323daadd9593cc9b04c47a930b4c629",
+      "size": 4349,
+      "owner": "adapter:beads",
+      "source_package": "",
+      "source_version": ""
+    },
+    "workflows/storybook-feature-lifecycle.yaml": {
+      "sha256": "fbb9103fa34a6f53fa597346d879f9d520053dd8d68f0b58241417397bb2ad8d",
+      "size": 1501,
+      "owner": "core",
+      "source_package": "",
+      "source_version": ""
+    },
     "workflows/track.yaml": {
-      "sha256": "4df82da136de970c45bf34dff22a87eb3525b2aeac98fc6861076fc44e69e535",
-      "size": 14639,
+      "sha256": "dad6a5182c1fd56dfee9b6a63a833414a710c9f229a2f2075dc915e93521db4e",
+      "size": 14562,
       "owner": "adapter:beads",
       "source_package": "",
       "source_version": ""
     },
     "workflows/workflow-wrapper.yaml": {
-      "sha256": "5633b410a9b83f909f100381684a75201dd18d9bc779a76df715cd3030359121",
-      "size": 5522,
+      "sha256": "058f9a225d4e70404b165805cb645f92fcf830a5d56a5f67c1221903868d964e",
+      "size": 6246,
       "owner": "adapter:beads",
       "source_package": "",
       "source_version": ""

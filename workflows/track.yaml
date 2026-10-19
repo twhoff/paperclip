@@ -15,11 +15,10 @@ description: >-
   children are established so `holly tracker ready` surfaces work in the right order.
 
   Orchestration phase: analyses the dependency DAG to assign wave labels
-  (topological layers for phased delivery) and agent-path labels (independent
-  chains for parallel multi-agent delivery). Wave labels (wave-1, wave-2, ...)
-  show execution order. Agent-path labels (agent-1, agent-2, ...) partition
-  work so multiple agents can each take a full dependency chain without
-  blocking each other.
+  (`holly:wave:<N>` topological layers for phased delivery) and named track
+  labels (`holly:track:<name>` workstreams for coordination). Wave labels show
+  execution order; track labels group related delivery lanes without inventing
+  numeric `agent-*` placeholders.
 
   Approval gate: the full epic structure is presented for user review before
   any issues are created. The user may request changes, re-ordering, or
@@ -200,7 +199,7 @@ steps:
       Create all approved child issues under the epic:
 
       1. Create children in DEPENDENCY ORDER (foundations first):
-         `holly tracker exec -- create "<child title>" --type <type> --priority <N>
+         `holly tracker create "<child title>" --type <type> --priority <N>
          --parent <epic-id>
          --description "<description with acceptance criteria>"`
 
@@ -215,58 +214,60 @@ steps:
 
       3. After each child is created, record its ID.
 
-      4. Set up dependencies between children using `holly tracker exec -- dep`:
+      4. Set up dependencies between children using `holly tracker dep add`:
          - For each dependency pair:
-           `holly tracker exec -- dep <blocker-id> --blocks <blocked-id>`
+           `holly tracker dep add <blocked-id> --on <blocker-id>`
          - Verify the dependency graph has no cycles:
-           `holly tracker exec -- dep cycles`
+           `holly tracker wave plan <epic-id>`
 
       5. Add labels to children for categorisation:
-         `holly tracker exec -- label add <child-id> <label>`
+         `holly tracker label add <child-id> --label <label>`
          Use labels like: foundation, feature, test, docs, integration
 
       6. After all children are created, verify the structure:
-         `holly tracker exec -- list --parent <epic-id> --json`
-         `holly tracker exec -- epic status <epic-id>`
+         `holly tracker show <epic-id>`
          Confirm all children exist with correct parent, dependencies,
          and priorities.
     category: delivery
 
-  # Step 4: Assign phase and parallel-agent labels
+  # Step 4: Assign wave and track labels
   # SKIP this step if a formula was poured in Step 1 (formula_was_used=true)
-  # holly tracker exec -- swarm validate already computes wave structure from the molecule's DAG
   - prompt: >-
-      SKIP if formula_was_used=true -- `holly tracker exec -- swarm validate` already computed
-      wave structure from the poured molecule. Proceed to Step 5.
+      SKIP if formula_was_used=true -- the formula already established a dependency
+      structure. Re-run `holly tracker wave plan <epic-id>` to verify the final
+      layering, then proceed to Step 5.
 
-      Analyse the dependency graph and assign orchestration labels
-      using `holly tracker exec -- swarm validate`:
+      Analyse the dependency graph and assign orchestration labels using the public
+      tracker wave/track commands:
 
-      1. Run `holly tracker exec -- swarm validate <epic-id>` to analyse the DAG.
-         This computes wave structure (topological layering),
-         maximum parallelism per wave, swarmability assessment,
-         and agent path partitioning automatically.
+      1. Run `holly tracker wave plan <epic-id>` to analyse the DAG.
+         This previews the `holly:wave:<N>` layering and fails if the dependency
+         graph contains a cycle.
 
-      2. Apply labels based on swarm validate output:
-         - `holly tracker exec -- label add <child-id> wave-N` for each child
-         - `holly tracker exec -- label add <child-id> agent-N` for path assignment
-         - `holly tracker exec -- label add <child-id> agent-shared` for merge points
+      2. After reviewing the layering, apply it:
+         `holly tracker wave plan <epic-id> --apply`
 
-      3. Verify: every child MUST have exactly one wave-N label
-         and one agent-N (or agent-shared) label. Re-run
-         `holly tracker exec -- swarm validate <epic-id>` to confirm clean output.
+      3. Apply `holly:track:<name>` labels with `holly tracker track set`:
+         - `holly tracker track set <child-id> --track <name>`
+         - Use meaningful track names such as `backend`, `frontend`, `docs`,
+           `qa`, or another real workstream from the plan.
 
-      4. Output a visual summary of the assignment:
-         - List each agent path with its chain of children
+      4. Verify: every child MUST have exactly one `holly:wave:<N>` label.
+         Add a `holly:track:<name>` label to each child when it clarifies the
+         delivery lanes. Re-run `holly tracker show <child-id>` or
+         `holly tracker show <epic-id>` to confirm the final labels.
+
+      5. Output a visual summary of the assignment:
+         - List each named track with its chain of children
          - Show wave numbers alongside each child
-         - Highlight any agent-shared nodes
+         - Highlight any merge or cross-track nodes
 
       SKIP CONDITIONS:
-      - If the epic has 3 or fewer children, skip agent path labels
-        (not enough work to parallelise). Still assign wave labels.
-      - If the DAG is a single linear chain (no branching), assign
-        all to agent-1 and note that parallel delivery is not
-        applicable.
+      - If the epic has 3 or fewer children, a single shared track label is
+        fine when it adds clarity. Still assign wave labels.
+      - If the DAG is a single linear chain (no branching), use one meaningful
+        `holly:track:<name>` label for the whole chain and note that parallel
+        delivery is not applicable.
     category: delivery
 
   # Step 5: Present final summary
@@ -283,13 +284,13 @@ steps:
          - Total children created
          - Dependency chain (visual or textual)
          - Wave breakdown: how many children per wave
-         - Agent paths: which chains each agent would work
+         - Tracks: which named workstreams each child belongs to
          - Which children are ready to work on NOW
          - Suggested first action (e.g. "Run /implement <first-child-id>")
 
       4. Ask the user how they want to proceed:
          - Start implementing immediately (hand off to implement workflow)
-         - Assign to agents for parallel work (reference agent-N labels)
+         - Assign to agents for parallel work (reference the named tracks)
          - Park for later
     category: discovery
 

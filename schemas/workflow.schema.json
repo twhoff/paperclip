@@ -1,0 +1,463 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "x-registry": {
+    "glob": "workflows/*.yaml",
+    "loader": "yaml",
+    "description": "Workflow definitions"
+  },
+  "title": "Agent Workflow Definition",
+  "description": "Schema for workflow YAML files in this repository",
+  "type": "object",
+  "required": ["name", "steps"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Workflow display name. Existing workflows use title case names.",
+      "minLength": 1
+    },
+    "description": {
+      "type": "string",
+      "description": "Human-readable description of what the workflow does"
+    },
+    "version": {
+      "oneOf": [
+        { "type": "integer" },
+        { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" }
+      ],
+      "description": "Workflow version (integer or semver string)",
+      "default": 1
+    },
+    "skip_wrapper": {
+      "type": "boolean",
+      "description": "When true, execute this workflow without the wrapper workflow",
+      "default": false
+    },
+    "config": {
+      "type": "object",
+      "description": "Workflow-level configuration",
+      "properties": {
+        "temp_dir": {
+          "type": "string",
+          "description": "Template for temporary working directory",
+          "default": "/tmp/agent-workflow-{{workflow_id}}"
+        },
+        "artifacts_dir": {
+          "type": "string",
+          "description": "Directory for permanent output artifacts",
+          "default": "docs/reports"
+        },
+        "max_retries": {
+          "type": "integer",
+          "description": "Default maximum retries for failed steps",
+          "minimum": 0,
+          "default": 3
+        },
+        "default_confirm": {
+          "type": "string",
+          "description": "Default confirmation mode for the workflow",
+          "enum": ["none", "critical", "all"],
+          "default": "critical"
+        },
+        "single_use": {
+          "type": "boolean",
+          "description": "Mark workflow as single-use",
+          "default": false
+        }
+      },
+      "additionalProperties": true
+    },
+    "inputs": {
+      "oneOf": [
+        {
+          "type": "array",
+          "description": "Workflow input parameters as array",
+          "items": {
+            "$ref": "#/$defs/input"
+          }
+        },
+        {
+          "type": "object",
+          "description": "Workflow input parameters as object",
+          "additionalProperties": {
+            "$ref": "#/$defs/inputObject"
+          }
+        }
+      ],
+      "description": "Workflow input parameters"
+    },
+    "preflight": {
+      "type": "array",
+      "description": "Ordered preflight checklist before main steps",
+      "items": { "$ref": "#/$defs/phaseItem" },
+      "default": []
+    },
+    "steps": {
+      "type": "array",
+      "description": "Main workflow steps",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/phaseItem" }
+    },
+    "postflight": {
+      "type": "array",
+      "description": "Ordered cleanup or handoff steps",
+      "items": { "$ref": "#/$defs/phaseItem" },
+      "default": []
+    },
+    "hooks": {
+      "type": "object",
+      "description": "Named hook definitions keyed by lifecycle event",
+      "additionalProperties": {
+        "$ref": "#/$defs/hook"
+      }
+    },
+    "category": {
+      "type": "string",
+      "description": "Workflow category for organisation"
+    },
+    "injectable": {
+      "type": "boolean",
+      "description": "Whether this workflow can be injected into other workflows",
+      "default": false
+    },
+    "injection_targets": {
+      "type": "array",
+      "description": "Parent workflows permitted to inject this workflow",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9-]*$"
+      },
+      "default": []
+    },
+    "stand_alone": {
+      "type": "boolean",
+      "description": "Whether this workflow can run independently",
+      "default": true
+    },
+    "quiz_questions": {
+      "type": "object",
+      "description": "Knowledge validation questions organised by topic",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["question", "answer"],
+          "properties": {
+            "question": { "type": "string" },
+            "answer": { "type": "string" },
+            "source": { "type": "string" },
+            "rag_query": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      }
+    }
+  },
+  "if": {
+    "properties": { "stand_alone": { "const": false } },
+    "required": ["stand_alone"]
+  },
+  "then": {
+    "properties": { "injectable": { "const": true } },
+    "required": ["injectable"]
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "input": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Input parameter name",
+          "pattern": "^_?[a-z][a-z0-9_]*$"
+        },
+        "description": { "type": "string" },
+        "type": {
+          "type": "string",
+          "enum": ["string", "boolean", "integer", "array"],
+          "default": "string"
+        },
+        "required": {
+          "type": "boolean",
+          "default": false
+        },
+        "default": {}
+      },
+      "additionalProperties": false
+    },
+    "inputObject": {
+      "type": "object",
+      "properties": {
+        "description": { "type": "string" },
+        "type": {
+          "type": "string",
+          "enum": ["string", "boolean", "integer", "array"],
+          "default": "string"
+        },
+        "required": {
+          "type": "boolean",
+          "default": false
+        },
+        "default": {}
+      },
+      "additionalProperties": false
+    },
+    "phaseItem": {
+      "type": "object",
+      "description": "A preflight, step, postflight, or hook item",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$"
+        },
+        "name": { "type": "string" },
+        "prompt": { "type": "string" },
+        "instruction": { "type": "string" },
+        "prompt_file": { "type": "string" },
+        "type": {
+          "type": "string",
+          "enum": ["chat_checkpoint", "inject"]
+        },
+        "config": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "agent": { "type": "string" },
+        "delegate": { "type": "string" },
+        "uses": {
+          "type": "string",
+          "pattern": "^([a-z][a-z0-9-]*|\\{\\{[^}]+\\}\\})$"
+        },
+        "with": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "depends_on": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
+        },
+        "when": { "type": "string" },
+        "condition": {
+          "oneOf": [
+            { "type": "string" },
+            { "$ref": "#/$defs/condition" }
+          ]
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 300
+        },
+        "retry_count": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0
+        },
+        "retry": { "$ref": "#/$defs/retry" },
+        "inputs": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "outputs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
+        },
+        "working_dir": { "type": "string" },
+        "output": { "$ref": "#/$defs/output" },
+        "validation": {
+          "type": "boolean",
+          "default": false
+        },
+        "on_fail": { "$ref": "#/$defs/on_fail" },
+        "critical": {
+          "type": "boolean",
+          "default": true
+        },
+        "dynamic_steps": { "$ref": "#/$defs/dynamic_steps" },
+        "workspace": { "type": "string" },
+        "category": { "type": "string" },
+        "requires": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "data_sources": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "collaborate_with": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "acceptance": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              { "type": "string" },
+              {
+                "type": "object",
+                "additionalProperties": { "type": "string" }
+              }
+            ]
+          }
+        },
+        "woolworths_sources": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "allowed_mutations": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "disallowed_mutations": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "tizzi_updates": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "paperclip_updates": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": { "type": { "const": "inject" } },
+            "required": ["type"]
+          },
+          "then": {
+            "required": ["uses", "with"],
+            "not": { "required": ["prompt"] }
+          }
+        },
+        {
+          "anyOf": [
+            { "required": ["prompt"] },
+            { "required": ["instruction"] },
+            { "required": ["uses"] }
+          ]
+        }
+      ]
+    },
+    "hook": {
+      "type": "object",
+      "properties": {
+        "prompt": { "type": "string" },
+        "instruction": { "type": "string" },
+        "category": { "type": "string" },
+        "condition": {
+          "oneOf": [
+            { "type": "string" },
+            { "$ref": "#/$defs/condition" }
+          ]
+        },
+        "requires": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": false,
+      "anyOf": [
+        { "required": ["prompt"] },
+        { "required": ["instruction"] }
+      ]
+    },
+    "condition": {
+      "type": "object",
+      "properties": {
+        "if": { "type": "string" },
+        "then": { "type": "string" },
+        "else": { "type": "string" },
+        "skip_if": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "schema": { "type": "string" },
+        "file": { "type": "string" },
+        "artifact": { "type": "string" },
+        "capture": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "on_fail": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": ["retry", "pause", "escalate", "skip", "abort"],
+          "default": "pause"
+        },
+        "retry_steps": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "max_retries": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 3
+        },
+        "escalate_after": {
+          "type": "string",
+          "enum": ["ask_user", "abort", "skip"],
+          "default": "ask_user"
+        },
+        "feedback_to": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "retry": {
+      "type": "object",
+      "properties": {
+        "max_attempts": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 3
+        },
+        "on_failure": {
+          "type": "string",
+          "enum": ["abort", "skip", "pause", "report-and-stop", "ask_user", "loop-to-implement"],
+          "default": "ask_user"
+        },
+        "delay_seconds": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0
+        },
+        "backoff_multiplier": {
+          "type": "number",
+          "minimum": 1,
+          "default": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "dynamic_steps": {
+      "type": "object",
+      "required": ["generator_prompt"],
+      "properties": {
+        "generator_prompt": { "type": "string" },
+        "schema": { "type": "string" },
+        "max_steps": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 10
+        },
+        "require_approval": {
+          "type": "boolean",
+          "default": true
+        },
+        "inject_after": { "type": "string" },
+        "resume_at": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

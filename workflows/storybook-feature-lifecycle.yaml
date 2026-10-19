@@ -1,0 +1,35 @@
+name: Storybook Feature Lifecycle
+description: >-
+  Reconstruct Storybook feature provenance, enforce phase gates, and deliver
+  reviewable evidence without confusing historical status with approval.
+
+preflight:
+  - prompt: >-
+      Load `storybook-feature-lifecycle`, all project-local addenda under that
+      skill, and the governing specs and ADRs. Identify one story, issue,
+      component, or story-file anchor and the current and target lifecycle
+      stations.
+    category: discovery
+
+  - prompt: >-
+      Run the managed provenance assembler for the anchor. Read its nine-section
+      brief and stop for the smallest repair when prerequisite evidence,
+      explicit authority, or a required Review Rail gate is missing.
+    category: discovery
+
+steps:
+  - prompt: >-
+      Execute only the current lifecycle station. Preserve the consumer's
+      taxonomy and schema. Keep intent, specification, historical wireframe
+      sources, Storybook metadata, Review Rail decisions, implementation, and
+      app integration as distinct evidence classes.
+    category: delivery
+
+postflight:
+  - prompt: >-
+      Regenerate the provenance brief; run the project-prescribed schema,
+      accessibility, responsive, and Review Rail checks; and run only changed,
+      affected, or custom-selected tests. Never widen testing to the full suite
+      without an explicit user request. Then report the brief path, sources,
+      gaps, current approval, and exact next human gate.
+    category: quality

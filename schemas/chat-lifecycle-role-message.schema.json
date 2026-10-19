@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/holly-chat-lifecycle-role-message.schema.json",
+  "title": "Holly Chat Lifecycle Role Transition Message",
+  "description": "One Holly session assuming or changing its agent role. The Holly session id never changes across a transition; readers must treat this as the same participant changing persona, not a new agent.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "kind",
+    "transition",
+    "status",
+    "agent_name",
+    "session_id",
+    "session_id_unchanged",
+    "previous_agent",
+    "agent",
+    "previous_identity_id",
+    "identity_id",
+    "native_session_id",
+    "task_id",
+    "worktree_path",
+    "channel",
+    "channel_id"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "holly.chat.lifecycle.role.v1"
+    },
+    "kind": {
+      "const": "role_transition"
+    },
+    "transition": {
+      "type": "string",
+      "enum": ["assumed", "reassumed", "reaffirmed"]
+    },
+    "status": {
+      "type": "string",
+      "enum": ["posted"]
+    },
+    "agent_name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "session_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "session_id_unchanged": {
+      "const": true
+    },
+    "previous_agent": {
+      "type": ["string", "null"]
+    },
+    "agent": {
+      "type": "string",
+      "minLength": 1
+    },
+    "previous_identity_id": {
+      "type": ["string", "null"]
+    },
+    "identity_id": {
+      "type": ["string", "null"]
+    },
+    "native_session_id": {
+      "type": ["string", "null"]
+    },
+    "task_id": {
+      "type": ["string", "null"]
+    },
+    "worktree_path": {
+      "type": ["string", "null"]
+    },
+    "channel": {
+      "const": "all-agents"
+    },
+    "channel_id": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

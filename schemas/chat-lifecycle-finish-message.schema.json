@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/holly-chat-lifecycle-finish-message.schema.json",
+  "title": "Holly Chat Lifecycle Finish Message",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "kind",
+    "status",
+    "agent_name",
+    "session_id",
+    "task_id",
+    "intent",
+    "summary",
+    "worktree_path",
+    "commit",
+    "channel",
+    "channel_id",
+    "lifecycle",
+    "verification",
+    "follow_ups",
+    "next_action"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "holly.chat.lifecycle.finish.v1"
+    },
+    "kind": {
+      "const": "task_finish"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["landed", "summary_only"]
+    },
+    "agent_name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "session_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "task_id": {
+      "type": ["string", "null"]
+    },
+    "intent": {
+      "type": "string"
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "worktree_path": {
+      "type": ["string", "null"]
+    },
+    "commit": {
+      "type": ["string", "null"]
+    },
+    "channel": {
+      "const": "all-agents"
+    },
+    "channel_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "lifecycle": {
+      "type": "object",
+      "required": [
+        "completion_summary_posted",
+        "task_completed",
+        "pushed",
+        "push",
+        "closed",
+        "synced",
+        "removed",
+        "cd"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "completion_summary_posted": {
+          "type": "boolean"
+        },
+        "task_completed": {
+          "type": "boolean"
+        },
+        "pushed": {
+          "type": "boolean"
+        },
+        "push": {
+          "type": "string"
+        },
+        "closed": {
+          "type": "boolean"
+        },
+        "synced": {
+          "type": "boolean"
+        },
+        "removed": {
+          "type": "boolean"
+        },
+        "cd": {
+          "type": "string"
+        }
+      }
+    },
+    "verification": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "follow_ups": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "next_action": {
+      "type": ["string", "null"]
+    }
+  }
+}

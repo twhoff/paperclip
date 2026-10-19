@@ -1,0 +1,492 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/holly-session-state.schema.json",
+  "title": "Holly Session State",
+  "type": "object",
+  "required": ["sessions", "uuid_map", "pending_uuids"],
+  "additionalProperties": false,
+  "properties": {
+    "task_slot_generations": {
+      "type": "object", "additionalProperties": {"type": "integer", "minimum": 0},
+      "description": "Retained session-slot fences, independent of tracker claim generations."
+    },
+    "retired_slot_fences": {
+      "type": "object", "additionalProperties": {"type": "string"},
+      "description": "ISO timestamp per pruned session whose slot fence is retained; the fence is dropped once FENCE_RETENTION_DAYS pass with no handoff receipt referencing it and no returning session."
+    },
+    "task_handoffs": {"type": "object", "additionalProperties": {"$ref": "#/$defs/handoff"}},
+    "sessions": {
+      "type": "object",
+      "description": "Map of session IDs to session state records.",
+      "additionalProperties": {
+        "$ref": "#/$defs/session"
+      }
+    },
+    "uuid_map": {
+      "type": "object",
+      "description": "Map of observed VS Code UUIDs to resolved Holly session IDs.",
+      "propertyNames": {
+        "type": "string",
+        "format": "uuid",
+        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+      },
+      "additionalProperties": {
+        "type": "string",
+        "description": "Session ID that the UUID resolved to."
+      },
+      "default": {}
+    },
+    "pending_uuids": {
+      "type": "array",
+      "description": "VS Code UUIDs observed before they are mapped to a Holly session.",
+      "items": {
+        "$ref": "#/$defs/pending_uuid"
+      },
+      "default": []
+    },
+    "workspace": {
+      "$ref": "#/$defs/workspace"
+    }
+  },
+  "$defs": {
+    "handoff_manifest": {
+      "type": "object", "additionalProperties": false,
+      "required": ["version", "project_root", "repository", "adapter", "task_id", "worktree_path", "branch", "head", "base", "claim_ref", "review_ref"],
+      "properties": {
+        "version": {"const": 1},
+        "project_root": {"type": "string", "minLength": 1},
+        "repository": {"type": "string", "minLength": 1},
+        "adapter": {"type": "string", "minLength": 1},
+        "task_id": {"type": "string", "minLength": 1},
+        "worktree_path": {"type": "string", "minLength": 1},
+        "branch": {"type": "string", "minLength": 1},
+        "head": {"type": "string", "pattern": "^[0-9a-fA-F]{40}$"},
+        "base": {"type": "string", "pattern": "^[0-9a-fA-F]{40}$"},
+        "claim_ref": {"type": "string", "minLength": 1},
+        "review_ref": {"type": ["string", "null"]}
+      }
+    },
+    "handoff_response": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "state", "revision", "source_generation", "recipient_generation", "transitioned_at"],
+      "properties": {
+        "transitioned_at": {"type": "string", "format": "date-time"},
+        "id": {"type": "string", "minLength": 1},
+        "state": {"enum": ["offered", "accepted", "cancelled", "released"]},
+        "revision": {"type": "integer", "minimum": 0},
+        "source_generation": {"type": "integer", "minimum": 1},
+        "recipient_generation": {"type": "integer", "minimum": 0}
+      }
+    },
+    "handoff": {
+      "type": "object", "additionalProperties": false,
+      "required": ["version", "id", "context", "source", "recipient", "source_generation", "recipient_generation", "manifest", "source_task", "state", "revision", "operations"],
+      "properties": {
+        "version": {"const": 1},
+        "id": {"type": "string", "minLength": 1},
+        "context": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"type": "string", "minLength": 1}},
+        "source": {"type": "string", "minLength": 1},
+        "recipient": {"type": "string", "minLength": 1},
+        "source_generation": {"type": "integer", "minimum": 1},
+        "recipient_generation": {"type": "integer", "minimum": 0},
+        "manifest": {"$ref": "#/$defs/handoff_manifest"},
+        "source_task": {"$ref": "#/$defs/task"},
+        "state": {"enum": ["offered", "accepted", "cancelled", "released"]},
+        "revision": {"type": "integer", "minimum": 0},
+        "operations": {
+          "type": "object", "required": ["offer"],
+          "propertyNames": {"enum": ["offer", "accept", "cancel", "release"]},
+          "additionalProperties": {
+            "type": "object", "additionalProperties": false, "required": ["request", "response"],
+            "properties": {
+              "request": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+              "response": {"$ref": "#/$defs/handoff_response"}
+            }
+          }
+        }
+      }
+    },
+    "session": {
+      "type": "object",
+      "required": [
+        "agent_name",
+        "status",
+        "started_at",
+        "ended_at",
+        "last_activity",
+        "current_task",
+        "task_history",
+        "subagents",
+        "pending_subagents"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "launch_receipt": {"type": "string", "maxLength": 64, "pattern": "^[a-f0-9]{64}$"},
+        "agent_name": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "idle", "ended", "aborted"]
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "ended_at": {
+          "type": ["string", "null"],
+          "format": "date-time"
+        },
+        "last_activity": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "current_task": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/task"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "task_history": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/task"
+          },
+          "default": []
+        },
+        "subagents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/subagent"
+          },
+          "default": []
+        },
+        "pending_subagents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/pending_subagent"
+          },
+          "default": []
+        },
+        "parent_session_id": {
+          "type": ["string", "null"],
+          "description": "Set on a dispatched worker's child session: the parent orchestrator session id it was spawned from (holly-chsu). Absent/null on top-level sessions."
+        },
+        "parent_subagent_id": {
+          "type": ["string", "null"],
+          "description": "Set on a child session: the parent-side subagent entry id (sub-xxxxxx) that minted this child."
+        },
+        "vscode_uuids": {
+          "type": "array",
+          "description": "VS Code UUIDs associated with this session.",
+          "items": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+          },
+          "uniqueItems": true,
+          "default": []
+        }
+      }
+    },
+    "task": {
+      "type": "object",
+      "required": [
+        "task_id",
+        "intent",
+        "started_at",
+        "ended_at",
+        "task_completed",
+        "intent_posted",
+        "completion_summary_posted",
+        "worktree_path"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "handoff_id": {"type": "string", "minLength": 1},
+        "transferred_handoff_id": {"type": "string", "minLength": 1},
+        "sync_lineage_status": {"enum": ["not-applicable", "pending", "promoted"]},
+        "provision": {"type": "array", "items": {"type": "object"}},
+        "base_sha": {
+          "type": ["string", "null"],
+          "description": "The worktree HEAD when the task started. Lets `holly task abort` tell an untouched branch from one whose work already landed \u2014 after a fast-forward land the branch tip equals the integration branch tip, so git alone cannot separate them. Null for intent-only tasks and for tasks started before this field existed (holly-ws8c)."
+        },
+        "task_id": {
+          "type": ["string", "null"],
+          "description": "Issue-backed task ID. Null for intent-only tasks."
+        },
+        "intent": {
+          "type": "string",
+          "description": "The verified task intent."
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "ended_at": {
+          "type": ["string", "null"],
+          "format": "date-time"
+        },
+        "task_completed": {
+          "type": "boolean"
+        },
+        "intent_posted": {
+          "type": "boolean"
+        },
+        "completion_summary_posted": {
+          "type": "boolean"
+        },
+        "worktree_path": {
+          "type": ["string", "null"],
+          "description": "Filesystem path to the task worktree. Null when no worktree exists."
+        }
+      }
+    },
+    "subagent": {
+      "type": "object",
+      "description": "A subagent dispatched by this session (parent-side bookkeeping).",
+      "required": ["id", "agent_name", "status", "started_at"],
+      "additionalProperties": false,
+      "properties": {
+        "launch": {"$ref": "#/$defs/launch_record"},
+        "id": {
+          "type": "string",
+          "description": "Holly subagent id (sub-xxxxxx).",
+          "pattern": "^sub-[a-f0-9]{6}$"
+        },
+        "agent_name": {
+          "type": "string",
+          "description": "Display/identity name — the assigned issue id when dispatched for an issue, else the runtime agent type."
+        },
+        "runtime_agent_name": {
+          "type": "string",
+          "description": "The runtime agent type the dispatcher reported (e.g. general-purpose, swarm-tiny-implementation)."
+        },
+        "runtime_agent_id": {
+          "type": "string",
+          "description": "The runtime's own subagent id (e.g. Claude Code agent_id), used to complete this exact worker at stop time."
+        },
+        "model": {
+          "type": "string",
+          "description": "Dispatched model when the dispatcher exposes it (e.g. haiku, sonnet). Absent when unknown."
+        },
+        "task": {
+          "type": ["string", "null"],
+          "description": "Short task description captured at dispatch."
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "unassigned",
+            "running",
+            "working",
+            "completed",
+            "failed",
+            "expired"
+          ]
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "ended_at": {
+          "type": ["string", "null"],
+          "format": "date-time"
+        },
+        "last_activity": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "child_session_id": {
+          "type": ["string", "null"],
+          "description": "The isolated child session id minted for this worker (holly-chsu)."
+        }
+      }
+    },
+    "launch_origin": {
+      "type": "object", "additionalProperties": false,
+      "required": ["binding", "parent_binding", "parent_subagent_id"],
+      "properties": {
+        "binding": {"$ref": "#/$defs/dispatch_slot"},
+        "parent_binding": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/dispatch_slot"}]},
+        "parent_subagent_id": {"type": ["string", "null"]}
+      }
+    },
+    "launch_assignment": {
+      "type": "object", "additionalProperties": false,
+      "required": ["agent_name", "task", "model"],
+      "properties": {
+        "agent_name": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "\\S"},
+        "task": {"type": ["string", "null"], "maxLength": 4096},
+        "model": {"type": ["string", "null"], "maxLength": 128}
+      }
+    },
+    "launch_assertion": {
+      "type": "object", "additionalProperties": false,
+      "required": ["version", "receipt", "origin", "target", "subagent_id", "assignment"],
+      "properties": {
+        "version": {"type": "integer", "const": 1},
+        "receipt": {"type": "string", "maxLength": 64, "pattern": "^[a-f0-9]{64}$"},
+        "origin": {"$ref": "#/$defs/launch_origin"},
+        "target": {"$ref": "#/$defs/dispatch_slot"},
+        "subagent_id": {"type": "string", "pattern": "^sub-[a-f0-9]{6}$"},
+        "assignment": {"$ref": "#/$defs/launch_assignment"}
+      }
+    },
+    "launch_seal": {
+      "type": "object", "additionalProperties": false,
+      "required": ["provider", "tool_use_id", "checked_input_digest"],
+      "properties": {
+        "provider": {"enum": ["codex", "claude-code"]},
+        "tool_use_id": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "\\S"},
+        "checked_input_digest": {"type": "string", "maxLength": 64, "pattern": "^[a-f0-9]{64}$"}
+      }
+    },
+    "launch_record": {
+      "type": "object", "additionalProperties": false,
+      "required": ["assertion", "phase", "seal", "runtime_id"],
+      "properties": {
+        "assertion": {"$ref": "#/$defs/launch_assertion"},
+        "phase": {"enum": ["prepared", "sealed", "active"]},
+        "seal": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/launch_seal"}]},
+        "runtime_id": {"type": ["string", "null"], "minLength": 1, "maxLength": 256}
+      },
+      "allOf": [
+        {"if": {"properties": {"phase": {"const": "prepared"}}},
+         "then": {"properties": {"seal": {"type": "null"}, "runtime_id": {"type": "null"}}}},
+        {"if": {"properties": {"phase": {"const": "sealed"}}},
+         "then": {"properties": {"seal": {"$ref": "#/$defs/launch_seal"}, "runtime_id": {"type": "null"}}}},
+        {"if": {"properties": {"phase": {"const": "active"}}},
+         "then": {"properties": {"seal": {"$ref": "#/$defs/launch_seal"}, "runtime_id": {"type": "string"}}}}
+      ]
+    },
+    "dispatch_slot": {
+      "type": "object", "additionalProperties": false,
+      "required": ["context", "session_id", "generation", "task_id", "worktree_path"],
+      "properties": {
+        "context": {"type": "array", "items": {"type": "string"}, "minItems": 3, "maxItems": 3},
+        "session_id": {"type": "string", "minLength": 1},
+        "generation": {"type": "integer", "minimum": 0},
+        "task_id": {"type": ["string", "null"]},
+        "worktree_path": {"type": ["string", "null"]}
+      }
+    },
+    "dispatch_assertion": {
+      "type": "object", "additionalProperties": false,
+      "required": ["version", "dispatch_id", "binding", "parent_binding", "parent_subagent_id"],
+      "properties": {
+        "version": {"const": 1, "type": "integer"},
+        "dispatch_id": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "\\S"},
+        "binding": {"$ref": "#/$defs/dispatch_slot"},
+        "parent_binding": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/dispatch_slot"}]},
+        "parent_subagent_id": {"type": ["string", "null"]}
+      }
+    },
+    "pending_subagent": {
+      "type": "object",
+      "description": "Legacy metadata is inert. Versioned dispatch records require an exact trusted assertion; native Start has none.",
+      "required": ["created_at"],
+      "additionalProperties": false,
+      "allOf": [
+        {"if": {"required": ["dispatch"]}, "then": {"required": ["status"]}},
+        {"if": {"required": ["status"], "properties": {"status": {"const": "consumed"}}},
+         "then": {"required": ["dispatch", "runtime_agent_id", "subagent_id", "child_session_id"]}}
+      ],
+      "properties": {
+        "dispatch": {"$ref": "#/$defs/dispatch_assertion"},
+        "status": {"enum": ["pending", "consumed"]},
+        "runtime_agent_id": {"type": "string", "minLength": 1},
+        "subagent_id": {"type": "string", "minLength": 1},
+        "child_session_id": {"type": "string", "minLength": 1},
+        "issue_id": {
+          "type": ["string", "null"],
+          "description": "Assigned issue id, when the dispatch was for a tracked issue."
+        },
+        "task": {
+          "type": ["string", "null"],
+          "description": "Short task description captured from the dispatch tool input."
+        },
+        "requested_agent": {
+          "type": ["string", "null"],
+          "description": "Requested runtime agent type."
+        },
+        "model": {
+          "type": ["string", "null"],
+          "description": "Requested model (e.g. haiku, sonnet), when set on the dispatch."
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "pending_uuid": {
+      "type": "object",
+      "required": ["uuid", "timestamp"],
+      "additionalProperties": false,
+      "properties": {
+        "uuid": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "workspace": {
+      "type": "object",
+      "description": "VS Code workspace metadata. Optional in general state, but required by runtime validation when running inside VS Code.",
+      "required": ["origin_project_root", "folders", "bootstrap_mode", "updated_at"],
+      "additionalProperties": false,
+      "properties": {
+        "origin_project_root": {
+          "type": "string",
+          "description": "Original project root from which the workspace/session was bootstrapped."
+        },
+        "folders": {
+          "type": "array",
+          "description": "Workspace folders visible to the VS Code session.",
+          "items": {
+            "$ref": "#/$defs/workspace_folder"
+          },
+          "minItems": 1
+        },
+        "bootstrap_mode": {
+          "type": "string",
+          "enum": ["lazy"]
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "workspace_folder": {
+      "type": "object",
+      "required": ["path", "kind", "repo_root", "session_project_root"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": ["git_repo"]
+        },
+        "repo_root": {
+          "type": "string"
+        },
+        "session_project_root": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/holly-chat-lifecycle-start-message.schema.json",
+  "title": "Holly Chat Lifecycle Start Message",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "kind",
+    "status",
+    "agent_name",
+    "session_id",
+    "task_id",
+    "intent",
+    "worktree_path",
+    "channel",
+    "channel_id",
+    "scope",
+    "plan",
+    "guards",
+    "next_action"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "holly.chat.lifecycle.start.v1"
+    },
+    "kind": {
+      "const": "task_start"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["posted", "refreshed", "duplicate"]
+    },
+    "agent_name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "session_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "task_id": {
+      "type": ["string", "null"]
+    },
+    "intent": {
+      "type": "string",
+      "minLength": 1
+    },
+    "worktree_path": {
+      "type": ["string", "null"]
+    },
+    "channel": {
+      "const": "all-agents"
+    },
+    "channel_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "scope": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "plan": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "guards": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "next_action": {
+      "type": ["string", "null"]
+    }
+  }
+}

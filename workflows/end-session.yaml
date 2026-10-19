@@ -4,7 +4,7 @@ name: End Session
 skip_wrapper: true
 description: >-
   Graceful session teardown. Archives the current task, files follow-up
-  issues, closes finished Beads work, pushes everything to remote, and
+  issues, lands reviewed work, pushes it to remote, and
   transitions the session to idle.
 
   This workflow runs WITHOUT the workflow-wrapper sandwich because it IS
@@ -13,16 +13,10 @@ description: >-
 
 preflight:
   - prompt: >-
-      Check the current session state by reading `.agent-sessions.json`.
+      Check current session and task state with `holly task status --json`.
       If no active session exists, report that and STOP -- nothing to tear down.
 
 steps:
-  - prompt: >-
-      Archive the current task. Run:
-        holly task abort
-      This moves the current_task to task_history with an ended_at timestamp.
-      If current_task is already null, this is a no-op.
-
   - prompt: >-
       Check for uncommitted changes. Run `holly task exec_in_current_task_worktree -- git status --porcelain`.
       If there are staged or unstaged changes, commit them using the
@@ -37,17 +31,46 @@ steps:
     condition: There is remaining work that needs follow-up issues.
 
   - prompt: >-
-      Close reviewed Beads work. Run `holly tracker exec -- list --status=in_review --json`
-      to find any issues that have passed review and are now ready to be
-      completed at session teardown.
-      Close them with `holly tracker close <id> --reason "Reviewed and approved"`.
-    condition: There are in-review Beads issues that are now complete.
+      If an active task is intended to land, capture its exact issue ID and
+      worktree from `holly task status --json`, its reviewed source revision
+      from `holly task exec_in_current_task_worktree -- git rev-parse HEAD`,
+      and issue context from `holly tracker show <id> --json` BEFORE finish.
+      Confirm required review and landing authority for that exact revision;
+      otherwise STOP this workflow and hand off with the issue open.
+      This teardown workflow requires review BEFORE landing; core finish itself
+      can leave work pending review. An in_review status alone does not meet this policy.
+      Awaiting review does not mean abandoned work and does not authorize abort.
+      Land through Holly FIRST:
+      `eval "$(holly task finish --eval --completion-summary '<what changed; checks run>')"`.
+      Landing depends on the committed work from the previous steps; finish
+      lands, pushes, syncs tracker state, and removes the worktree. It leaves the issue open by default.
+      If finish fails, is blocked, or prints a recovery command, STOP this workflow
+      before closure, abort or session teardown; follow the supported recovery
+      without manual push/rebase sequences. With worktree_path: null, finish is
+      summary-only: do not claim landing or permit closure through this workflow.
 
   - prompt: >-
-      If an active task remains, finish it through Holly:
-      `eval "$(holly task finish)"`.
-      If finish is blocked or prints a recovery command, follow the printed command
-      first; do not run manual push/rebase sequences.
+      Optional closure applies ONLY to the captured issue and reviewed source revision,
+      after confirmed successful landing and push from a real worktree. Verify
+      that the landing result matches the captured reviewed source revision;
+      changed or unverified landed revisions require fresh review, not closure.
+      Verify independent review and acceptance evidence, and explicit closure authority
+      for that exact issue and revision. Re-read `holly tracker show <id> --json`:
+      changed issue content, mismatched identity/revision, unknown evidence or
+      missing authority means leave the issue open and hand off. An in_review
+      status alone is not approval. Never enumerate or close other issues here.
+      Only when every check passes, use
+      `holly tracker close <id> --reason "Reviewed, landed and explicitly approved for closure"`
+      with the captured issue ID. Do not infer closure authority from finish.
+    condition: The captured issue passed all landing, review, revision and explicit closure authority checks.
+
+  - prompt: >-
+      Only when a remaining task must NOT land (exploratory or abandoned
+      work): archive it with `eval "$(holly task abort --eval)"`. Abort discards the task
+      claim and can remove its worktree, so it must never run before the
+      commit and finish steps above (holly-t8cm). If current_task is already
+      null, skip this step.
+    condition: An active task remains whose work should not be landed.
 
   - prompt: >-
       Transition the session to idle. Run:

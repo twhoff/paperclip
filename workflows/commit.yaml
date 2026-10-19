@@ -125,12 +125,31 @@ steps:
       - Holly tracker CLI
 
   - prompt: >-
-      Run quality gates on the committed changes:
+      Run all project-declared quality gates on the committed changes, using
+      the commands and runtime specified by AGENTS.md, project configuration,
+      and the owning package. Record each command and result.
 
-      - `python scripts/validate_schemas.py` — all schemas must pass.
+      - Schema validation: all schemas must pass. If the project owns `scripts/validate_schemas.py`,
+        run it with the project's runtime (in the Holly source repository:
+        `uv run --extra dev python scripts/validate_schemas.py`). This is a
+        project-owned helper, not a file supplied to every consumer by Holly.
+        Otherwise run the project's configured schema checks or follow the
+        schema-validation skill to discover and validate the applicable
+        contracts and their targets. Record discovery scope and counts;
+        missing tooling or empty discovery is not a successful schema check.
 
-      - `get_errors` — zero problems policy, no lint/type errors allowed.
+      - Diagnostics: use `get_errors` only when the runtime exposes it.
+        Enforce the zero problems policy: no lint/type errors allowed.
+        Run the project's lint and type-check commands, including when the
+        editor tool is unavailable. In that case report
+        "editor diagnostics unavailable / not inspected" alongside the
+        executable lint/type results; do not claim an editor inspection.
+        In the Holly source repository use the full Ruff paths and
+        `mypy src` commands prescribed by AGENTS.md through `uv run --extra dev`.
 
+      Do not mark unavailable or failed required gates as passed. If required
+      checks cannot be executed or no applicable validation procedure can be
+      established, stop and report the exact missing prerequisite.
       If any gate fails, fix the issue with an additional commit (following
       the same commitizen format and issue-ID rules), then re-run gates
       until all pass.
@@ -141,7 +160,7 @@ postflight:
       Land all committed work through Holly:
 
       ```
-      eval "$(holly task finish)"
+      eval "$(holly task finish --eval)"
       ```
 
       Then verify:

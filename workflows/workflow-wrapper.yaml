@@ -36,8 +36,10 @@ preflight:
       context-mode, pass the existing parent-shell value explicitly.
 
   - prompt: >-
-      Set the current task and intent for your session. Determine the task
-      description and intent from the user's request and run:
+      Inspect `holly task status --json` in your own runtime session. Preserve
+      any existing matching task and worktree; refresh its intent through
+      `holly task intent --intent '<what you plan to do>'` when needed. If no
+      task is active, declare the task description and intent:
         eval "$(holly task start --intent '<what you plan to do>')"
       This registers the task in .agent-sessions.json so other agents and
       the user can see what you are working on. The --intent flag describes
@@ -47,19 +49,23 @@ preflight:
         holly task status
       The PreToolUse hook blocks write operations until intent is verified.
       After each new user prompt, verification can reset; refresh it with
-      `holly task start --intent "<what you plan to do>"` when needed.
+      `holly task intent --intent "<what you plan to do>"` when needed.
 
-      If you already have a current_task set (check the UserPromptSubmit
-      hook output), verify it matches the user's intent. If the intent has
-      changed, running task set again will automatically archive the old task.
-      This step is MANDATORY — do not skip it.
+      Never replace an unrelated task slot silently. Read-only reviewers use
+      their own intent-only task; do not claim the implementation issue or
+      create an implementation worktree just to inspect its committed objects.
+      Establish review authority through the shared review contract before
+      any tracker write. This intent step is mandatory.
 
   - prompt: >-
       Read AGENTS.md to load project rules and conventions. Confirm you
       understand the critical rules before proceeding.
 
   - prompt: >-
-      Check memories for relevant context. Use the second-brain skill if available.
+      Load the canonical Holly skill floor and follow project-knowledge memory
+      precedence. Reuse loaded skills and relevant context. Second-brain is
+      conditional behind active project memory; do not install or reload it
+      merely to execute a workflow.
 
   - prompt: >-
       Verify workspace isolation. If this task will involve file modifications
@@ -73,11 +79,14 @@ preflight:
 
   - prompt: >-
       Verify the Holly tracker adapter is usable for this project. Run
-      `holly tracker ready`. If Beads is not initialised for the current project,
-      STOP and ask the user to run the required tracker setup (`holly tracker info`
-      or the repo's documented bootstrap step) before continuing.
+      `holly preflight`. Use `holly tracker ready` only to select eligible work,
+      not as an environment health probe. If Beads is not initialised for the current project,
+      record the missing tracker context/action and follow the repo's bootstrap
+      guidance. Block dependent actions, not independent source inspection.
+      Untracked advisory review needs no tracker setup.
     requires:
       - Holly tracker CLI
+    condition: Required tracker context or authorised tracker actions are needed.
 
   - prompt: >-
       Verify Beads issue tracking for this task. If the user provided an
@@ -95,8 +104,9 @@ steps:
   - prompt: >-
       Execute the wrapped workflow. Run its preflight steps, then its main
       steps (with any hooks: beforeAll, beforeEach/afterEach per step,
-      afterAll), then its postflight steps. Track all steps using
-      manage_todo_list. When a step has no delegate defined, the primary
+      afterAll), then its postflight steps. Track all steps in an observable
+      checklist using an available task-list tool or scratch Markdown.
+      When a step has no delegate defined, the primary
       agent decides whether to execute it directly or delegate to an
       appropriate worker sub-agent.
 
@@ -114,4 +124,4 @@ hooks:
       For frontend steps, apply any already-loaded design-system and AX
       constraints silently. Load additional frontend reference material only if
       the current step cannot be completed safely from existing context.
-    condition: The step focuses on files in the `<frontend>/` directory.
+    condition: The step has actual visual or interactive UI impact.

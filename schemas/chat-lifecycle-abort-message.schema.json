@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/holly-chat-lifecycle-abort-message.schema.json",
+  "title": "Holly Chat Lifecycle Abort Message",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "kind",
+    "status",
+    "agent_name",
+    "session_id",
+    "task_id",
+    "intent",
+    "worktree_path",
+    "worktree_removed",
+    "issue_reset",
+    "channel",
+    "channel_id"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "holly.chat.lifecycle.abort.v1"
+    },
+    "kind": {
+      "const": "task_abort"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["posted"]
+    },
+    "agent_name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "session_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "task_id": {
+      "type": ["string", "null"]
+    },
+    "intent": {
+      "type": "string"
+    },
+    "worktree_path": {
+      "type": ["string", "null"]
+    },
+    "worktree_removed": {
+      "type": "boolean"
+    },
+    "issue_reset": {
+      "type": "boolean"
+    },
+    "channel": {
+      "const": "all-agents"
+    },
+    "channel_id": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}
