@@ -7,6 +7,9 @@
 #   git worktree  -- ALWAYS (use the adapter's worktree tool)
 #   git add       -- on main checkout only (not in worktrees)
 #   git commit    -- on main checkout only (not in worktrees)
+#   any write to the main checkout (add, commit, merge, pull, rebase, reset,
+#   checkout, stash, ...) while ANOTHER process holds Holly's repository-wide
+#   main lock (`holly task finish` landing, `holly sync --mode apply`, ...)
 #
 # Requires <project>/scripts/bin on PATH (set via .vscode/settings.json
 # or .envrc). The block messages are sourced from
@@ -56,6 +59,80 @@ if [ "$1" = "add" ] || [ "$1" = "commit" ]; then
         exit 1
     fi
 fi
+
+# -- Rule 3: no main-checkout write while another process holds the main lock --
+# Holly operations that change the main checkout hold one repository-wide lock
+# (see `holly main-lock status`); a `holly task finish` may have set main's own
+# changes aside and will restore them. `holly main-lock check-git` exits 1 only
+# while ANOTHER process holds it — the holder's own subprocesses pass.
+#
+# The decision is Holly's (`holly main-lock check-git`, the same resolver the
+# PreToolUse hook and `holly task exec` use): git itself resolves the target
+# from this command's global options (-C, --git-dir, --work-tree, -c ...) and
+# GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE. The one shortcut taken here is the
+# case that resolver also clears without a lock: a linked worktree writing
+# only its own git dir, index and work tree.
+_holly_args=("$@")
+_holly_opts=()
+_holly_verb=""
+_holly_verb_arg=""
+_holly_i=0
+while [ "$_holly_i" -lt "${#_holly_args[@]}" ]; do
+    _holly_tok="${_holly_args[$_holly_i]}"
+    case "$_holly_tok" in
+        -C|-c|--git-dir|--work-tree|--namespace|--exec-path|--super-prefix)
+            _holly_opts+=("$_holly_tok" "${_holly_args[$((_holly_i + 1))]:-}")
+            _holly_i=$((_holly_i + 1))
+            ;;
+        -*) _holly_opts+=("$_holly_tok") ;;
+        *)
+            _holly_verb="$_holly_tok"
+            _holly_verb_arg="${_holly_args[$((_holly_i + 1))]:-}"
+            break
+            ;;
+    esac
+    _holly_i=$((_holly_i + 1))
+done
+case "$_holly_verb" in
+    add|am|apply|checkout|checkout-index|cherry-pick|clean|commit|merge|mv|pull|read-tree|rebase|reset|restore|revert|rm|stash|switch|update-index|update-ref)
+        if [ "$_holly_verb" = "stash" ] && { [ "$_holly_verb_arg" = "list" ] || [ "$_holly_verb_arg" = "show" ]; }; then
+            :
+        elif command -v holly >/dev/null 2>&1; then
+            _holly_probe="$("$REAL_GIT" ${_holly_opts[@]+"${_holly_opts[@]}"} rev-parse \
+                --path-format=absolute --absolute-git-dir --git-common-dir --show-toplevel 2>/dev/null)"
+            _holly_gitdir="$(printf '%s\n' "$_holly_probe" | sed -n 1p)"
+            _holly_common="$(printf '%s\n' "$_holly_probe" | sed -n 2p)"
+            _holly_top="$(printf '%s\n' "$_holly_probe" | sed -n 3p)"
+            if [ -z "${GIT_INDEX_FILE+x}" ] && [ -n "$_holly_gitdir" ] \
+                    && [ "$_holly_gitdir" != "$_holly_common" ] \
+                    && [ -n "$_holly_top" ] && [ ! -d "$_holly_top/.git" ]; then
+                :  # a linked worktree's own write: no main lock involved
+            else
+                _holly_envargs=()
+                for _holly_var in GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE; do
+                    if printenv "$_holly_var" >/dev/null 2>&1; then
+                        _holly_envargs+=(--env "$_holly_var=$(printenv "$_holly_var")")
+                    fi
+                done
+                _holly_why="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR \
+                    -u GIT_INDEX_FILE holly main-lock check-git \
+                    ${_holly_envargs[@]+"${_holly_envargs[@]}"} -- "$@" 2>&1)"
+                _holly_rc=$?
+                if [ "$_holly_rc" -eq 2 ]; then
+                    # An older Holly without check-git: guard the cwd's repository.
+                    _holly_why="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR \
+                        -u GIT_INDEX_FILE holly main-lock check 2>&1)"
+                    _holly_rc=$?
+                fi
+                if [ "$_holly_rc" -ne 0 ]; then
+                    echo "BLOCKED: \`git $_holly_verb\` would change the main checkout while Holly's main lock is held." >&2
+                    [ -n "$_holly_why" ] && echo "$_holly_why" >&2
+                    exit 1
+                fi
+            fi
+        fi
+        ;;
+esac
 
 # -- Pass through to real git --
 exec "$REAL_GIT" "$@"
