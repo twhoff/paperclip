@@ -4,7 +4,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import EmbeddedPostgres from "embedded-postgres";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   agents,
   applyPendingMigrations,
@@ -15,6 +15,21 @@ import {
   issues,
 } from "@paperclipai/db";
 import { issueService } from "../services/issues.js";
+
+// Comment redaction builds its secret list from the host environment
+// (collectSensitiveEnvValues), so returned bodies are not deterministic across
+// machines: any env var whose name matches the sensitive-key pattern contributes
+// its value, even a one-character one that collides with ordinary text. Redaction
+// has its own coverage in issue-comments-redaction.test.ts; here it is reduced to
+// the page bound so these assertions exercise only the native pagination path.
+vi.mock("../services/comment-redaction.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../services/comment-redaction.js")>();
+  return {
+    ...actual,
+    redactCommentRecords: <T extends { body: string }>(comments: readonly T[]) =>
+      comments.slice(0, actual.MAX_COMMENT_PAGE_ROWS).map((comment) => ({ ...comment })),
+  };
+});
 
 // Exercise production postgres-js binding, not a mocked query builder.
 describe("native issue comment pagination", () => {
