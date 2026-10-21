@@ -4,7 +4,14 @@ import os from "node:os";
 import path from "node:path";
 import EmbeddedPostgres from "embedded-postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createDb, ensurePostgresDatabase, runDatabaseBackup, runDatabaseRestore } from "@paperclipai/db";
+import {
+  applyPendingMigrations,
+  createDb,
+  ensurePostgresDatabase,
+  inspectMigrations,
+  runDatabaseBackup,
+  runDatabaseRestore,
+} from "@paperclipai/db";
 
 const ROWS = 125;
 
@@ -24,12 +31,14 @@ function freePort(): Promise<number> {
 describe("database backup and restore", () => {
   let pg: EmbeddedPostgres | undefined;
   let root: string;
+  let databaseUrl: (name: string) => string;
   let sourceUrl: string;
   let targetUrl: string;
 
   beforeAll(async () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "database-backup-"));
     const port = await freePort();
+    databaseUrl = (name) => `postgres://fixture:fixture-only@127.0.0.1:${port}/${name}`;
     pg = new EmbeddedPostgres({
       databaseDir: path.join(root, "db"),
       user: "fixture",
@@ -44,11 +53,10 @@ describe("database backup and restore", () => {
     });
     await pg.initialise();
     await pg.start();
-    const adminUrl = `postgres://fixture:fixture-only@127.0.0.1:${port}/postgres`;
-    await ensurePostgresDatabase(adminUrl, "backup_source");
-    await ensurePostgresDatabase(adminUrl, "backup_target");
-    sourceUrl = `postgres://fixture:fixture-only@127.0.0.1:${port}/backup_source`;
-    targetUrl = `postgres://fixture:fixture-only@127.0.0.1:${port}/backup_target`;
+    await ensurePostgresDatabase(databaseUrl("postgres"), "backup_source");
+    await ensurePostgresDatabase(databaseUrl("postgres"), "backup_target");
+    sourceUrl = databaseUrl("backup_source");
+    targetUrl = databaseUrl("backup_target");
 
     const source = createDb(sourceUrl);
     try {
@@ -117,6 +125,27 @@ describe("database backup and restore", () => {
       await Promise.all([source.$client.end(), target.$client.end()]);
     }
   });
+
+  it("carries the migration journal so a restored database can start", async () => {
+    const migratedUrl = databaseUrl("migrated_source");
+    const restoredUrl = databaseUrl("migrated_target");
+    await ensurePostgresDatabase(databaseUrl("postgres"), "migrated_source");
+    await ensurePostgresDatabase(databaseUrl("postgres"), "migrated_target");
+    await applyPendingMigrations(migratedUrl);
+
+    const result = await runDatabaseBackup({
+      connectionString: migratedUrl,
+      backupDir: path.join(root, "migrated"),
+      retentionDays: 7,
+      filenamePrefix: "migrated",
+    });
+    await runDatabaseRestore({ connectionString: restoredUrl, backupFile: result.backupFile });
+
+    // The server refuses to start on tables it has no migration history for.
+    const expected = await inspectMigrations(migratedUrl);
+    expect(expected.status).toBe("upToDate");
+    expect(await inspectMigrations(restoredUrl)).toEqual(expected);
+  }, 120_000);
 
   it("leaves no file behind when the dump fails", async () => {
     const backupDir = path.join(root, "failed");

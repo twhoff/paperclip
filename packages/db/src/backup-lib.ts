@@ -247,7 +247,9 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
     ? Math.max(1, Math.trunc(opts.retentionCount))
     : null;
   const connectTimeout = Math.max(1, Math.trunc(opts.connectTimeoutSeconds ?? 5));
-  const includeMigrationJournal = opts.includeMigrationJournal === true;
+  // A database restored without its migration journal cannot start: the server
+  // refuses tables it has no migration history for. Callers may still opt out.
+  const includeMigrationJournal = opts.includeMigrationJournal !== false;
   const excludedTableNames = normalizeTableNameSet(opts.excludeTables);
   const nullifiedColumnsByTable = normalizeNullifyColumnMap(opts.nullifyColumns);
   const sql = postgres(opts.connectionString, { max: 1, connect_timeout: connectTimeout });
