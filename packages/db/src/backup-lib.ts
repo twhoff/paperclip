@@ -1,15 +1,18 @@
 import {
+  createReadStream,
   createWriteStream,
   existsSync,
   mkdirSync,
   readFileSync,
   readdirSync,
+  renameSync,
+  rmSync,
   statSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
+import { once } from "node:events";
 import { finished } from "node:stream/promises";
 import { basename, resolve } from "node:path";
 import postgres from "postgres";
@@ -72,6 +75,17 @@ const STATEMENT_BREAKPOINT = "-- paperclip statement breakpoint 69f6f3f1-42fd-46
 
 const CONTENT_HASH_SUFFIX = ".sha256";
 const CREATED_HEADER_PREFIX = "-- Created:";
+const PARTIAL_SUFFIX = ".partial";
+
+// Rows are read through a cursor in small batches. Some tables hold rows of
+// several megabytes, so loading a whole table at once can exhaust the heap.
+const ROW_BATCH_SIZE = 20;
+
+// Read these as PostgreSQL text so they round-trip exactly. postgres-js would
+// otherwise parse json into object graphs (losing large-number precision) and
+// arrays into JavaScript arrays, which JSON.stringify cannot turn back into
+// array literals.
+const TEXT_CAST_DATA_TYPES = new Set(["json", "jsonb", "ARRAY"]);
 
 function contentHashPath(backupFile: string): string {
   return `${backupFile}${CONTENT_HASH_SUFFIX}`;
@@ -240,7 +254,20 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
 
   mkdirSync(opts.backupDir, { recursive: true });
   const backupFile = resolve(opts.backupDir, `${filenamePrefix}-${timestamp()}.sql`);
-  const outStream = createWriteStream(backupFile, "utf8");
+  // Dump under a temporary name and rename only once complete, so an
+  // interrupted run never leaves a truncated file that passes for a backup.
+  const partialFile = `${backupFile}${PARTIAL_SUFFIX}`;
+  const outStream = createWriteStream(partialFile, "utf8");
+  // Keep a listener attached so a write error such as a full disk fails this
+  // backup instead of surfacing as an unhandled error in the host process.
+  let streamError: Error | null = null;
+  outStream.on("error", (error) => {
+    streamError ??= error;
+  });
+  const drain = async () => {
+    if (streamError) throw streamError;
+    if (outStream.writableNeedDrain) await once(outStream, "drain");
+  };
 
   try {
     await sql`SELECT 1`;
@@ -560,23 +587,31 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
         ORDER BY ordinal_position
       `;
       const colNames = cols.map((c) => `"${c.column_name}"`).join(", ");
+      const selectList = cols
+        .map((c) => TEXT_CAST_DATA_TYPES.has(c.data_type)
+          ? `${quoteIdentifier(c.column_name)}::text`
+          : quoteIdentifier(c.column_name))
+        .join(", ");
 
       emit(`-- Data for: ${schema_name}.${tablename} (${count[0]!.n} rows)`);
 
-      const rows = await sql.unsafe(`SELECT * FROM ${qualifiedTableName}`).values();
       const nullifiedColumns = nullifiedColumnsByTable.get(tablename) ?? new Set<string>();
-      for (const row of rows) {
-        const values = row.map((rawValue: unknown, index) => {
-          const columnName = cols[index]?.column_name;
-          const val = columnName && nullifiedColumns.has(columnName) ? null : rawValue;
-          if (val === null || val === undefined) return "NULL";
-          if (typeof val === "boolean") return val ? "true" : "false";
-          if (typeof val === "number") return String(val);
-          if (val instanceof Date) return formatSqlLiteral(val.toISOString());
-          if (typeof val === "object") return formatSqlLiteral(JSON.stringify(val));
-          return formatSqlLiteral(String(val));
-        });
-        emitStatement(`INSERT INTO ${qualifiedTableName} (${colNames}) VALUES (${values.join(", ")});`);
+      const batches = sql.unsafe(`SELECT ${selectList} FROM ${qualifiedTableName}`).values().cursor(ROW_BATCH_SIZE);
+      for await (const rows of batches) {
+        for (const row of rows) {
+          const values = row.map((rawValue: unknown, index) => {
+            const columnName = cols[index]?.column_name;
+            const val = columnName && nullifiedColumns.has(columnName) ? null : rawValue;
+            if (val === null || val === undefined) return "NULL";
+            if (typeof val === "boolean") return val ? "true" : "false";
+            if (typeof val === "number") return String(val);
+            if (val instanceof Date) return formatSqlLiteral(val.toISOString());
+            if (typeof val === "object") return formatSqlLiteral(JSON.stringify(val));
+            return formatSqlLiteral(String(val));
+          });
+          emitStatement(`INSERT INTO ${qualifiedTableName} (${colNames}) VALUES (${values.join(", ")});`);
+        }
+        await drain();
       }
       emit("");
     }
@@ -611,7 +646,7 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
     // redundant copy and point the caller at the retained file.
     const unchangedPrior = findUnchangedPriorBackup(opts.backupDir, filenamePrefix, backupFile, digest);
     if (unchangedPrior) {
-      unlinkSync(backupFile);
+      unlinkSync(partialFile);
       return {
         backupFile: unchangedPrior.path,
         sizeBytes: unchangedPrior.sizeBytes,
@@ -621,6 +656,7 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
       };
     }
 
+    renameSync(partialFile, backupFile);
     const sizeBytes = statSync(backupFile).size;
     writeFileSync(contentHashPath(backupFile), digest);
     const prunedCount = pruneOldBackups(opts.backupDir, retentionDays, filenamePrefix, retentionCount);
@@ -634,8 +670,35 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
     };
   } finally {
     if (!outStream.writableEnded) outStream.destroy();
+    await finished(outStream).catch(() => undefined);
     await sql.end();
+    // Only an interrupted dump still has its temporary file at this point.
+    rmSync(partialFile, { force: true });
   }
+}
+
+/**
+ * Yield a backup's statements one at a time. A full backup can be larger than
+ * the maximum JavaScript string length, so the file is never read whole.
+ */
+async function* readBackupStatements(backupFile: string): AsyncGenerator<string> {
+  let pending = "";
+  for await (const chunk of createReadStream(backupFile, { encoding: "utf8" })) {
+    // A breakpoint can straddle two chunks, so rescan the tail of the last one.
+    const searchFrom = Math.max(0, pending.length - STATEMENT_BREAKPOINT.length + 1);
+    pending += chunk;
+    let start = 0;
+    let index = pending.indexOf(STATEMENT_BREAKPOINT, searchFrom);
+    while (index !== -1) {
+      const statement = pending.slice(start, index).trim();
+      if (statement.length > 0) yield statement;
+      start = index + STATEMENT_BREAKPOINT.length;
+      index = pending.indexOf(STATEMENT_BREAKPOINT, start);
+    }
+    pending = pending.slice(start);
+  }
+  const statement = pending.trim();
+  if (statement.length > 0) yield statement;
 }
 
 export async function runDatabaseRestore(opts: RunDatabaseRestoreOptions): Promise<void> {
@@ -644,13 +707,7 @@ export async function runDatabaseRestore(opts: RunDatabaseRestoreOptions): Promi
 
   try {
     await sql`SELECT 1`;
-    const contents = await readFile(opts.backupFile, "utf8");
-    const statements = contents
-      .split(STATEMENT_BREAKPOINT)
-      .map((statement) => statement.trim())
-      .filter((statement) => statement.length > 0);
-
-    for (const statement of statements) {
+    for await (const statement of readBackupStatements(opts.backupFile)) {
       await sql.unsafe(statement).execute();
     }
   } catch (error) {
