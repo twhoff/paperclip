@@ -147,6 +147,9 @@ const LOCAL_ADAPTER_PROVIDER_RUNTIME_ENV_KEY_SET = new Set<string>([
   "HOLLY_SESSION_ID",
 ]);
 const SENSITIVE_ENV_KEY = /(key|token|secret|password|passwd|authorization|cookie)/i;
+// Shorter values are flags, counts or single characters, not credentials, and
+// redacting them would garble every message that happens to contain them.
+const MIN_SENSITIVE_ENV_VALUE_LENGTH = 6;
 const REDACTED_ENV_VALUE = "***REDACTED***";
 export const MAX_REDACTION_SECRET_VALUES = 128;
 export const MAX_REDACTION_SECRET_VALUE_BYTES = 64 * 1024;
@@ -373,7 +376,7 @@ export function collectSensitiveEnvValues(env: NodeJS.ProcessEnv): string[] {
   for (const [key, value] of Object.entries(env)) {
     if (
       typeof value === "string" &&
-      value.length > 0 &&
+      value.length >= MIN_SENSITIVE_ENV_VALUE_LENGTH &&
       (SENSITIVE_ENV_KEY.test(key) || isControlPlaneEnvKey(key))
     ) {
       values.add(value);

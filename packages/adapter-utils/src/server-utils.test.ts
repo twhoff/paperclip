@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   MAX_CAPTURE_BYTES,
   SensitiveValueStreamRedactor,
+  collectSensitiveEnvValues,
   finalizeLocalAdapterEnv,
   runningProcesses,
   runChildProcess,
@@ -843,5 +844,20 @@ setInterval(() => {}, 1000);
     expect(Date.now() - startedAt).toBeLessThan(1_000);
     expect(result.signal).toBe("SIGTERM");
     expect(runningProcesses.has("aborted-provider-probe")).toBe(false);
+  });
+});
+
+describe("collectSensitiveEnvValues", () => {
+  it("ignores values too short to be secrets", () => {
+    // A one-character value would otherwise be redacted from every message
+    // that contains that character.
+    expect(collectSensitiveEnvValues({
+      API_TOKEN: "t",
+      MAX_OUTPUT_TOKENS: "75",
+      FEATURE_KEY: "true",
+      PROVIDER_API_KEY: "provider-secret-value",
+      SESSION_COOKIE: "cookie",
+      USER_PREFERENCE: "keep-me",
+    })).toEqual(["provider-secret-value", "cookie"]);
   });
 });
