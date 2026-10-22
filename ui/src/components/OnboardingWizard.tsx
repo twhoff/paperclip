@@ -21,7 +21,7 @@ import {
   extractModelName,
   extractProviderIdWithFallback
 } from "../lib/model-utils";
-import { getUIAdapter } from "../adapters";
+import { getUIAdapter, isAdapterTypeDisabled } from "../adapters";
 import { defaultCreateValues } from "./agent-config-defaults";
 import { parseOnboardingGoalInput } from "../lib/onboarding-goal";
 import {
@@ -828,7 +828,7 @@ export function OnboardingWizard() {
                             icon: OzLogoIcon,
                             desc: "Local Warp Oz agent"
                           }
-                        ].map((opt) => (
+                        ].filter((opt) => !isAdapterTypeDisabled(opt.value)).map((opt) => (
                           <button
                             key={opt.value}
                             disabled={!!opt.comingSoon}

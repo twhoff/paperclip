@@ -19,7 +19,7 @@ import { cn, agentUrl } from "../lib/utils";
 import { roleLabels } from "../components/agent-config-primitives";
 import { AgentConfigForm, type CreateConfigValues } from "../components/AgentConfigForm";
 import { defaultCreateValues } from "../components/agent-config-defaults";
-import { getUIAdapter } from "../adapters";
+import { getUIAdapter, isAdapterTypeDisabled } from "../adapters";
 import { AgentIcon } from "../components/AgentIconPicker";
 import {
   DEFAULT_CODEX_LOCAL_BYPASS_APPROVALS_AND_SANDBOX,
@@ -122,7 +122,10 @@ export function NewAgent() {
   useEffect(() => {
     const requested = presetAdapterType;
     if (!requested) return;
-    if (!SUPPORTED_ADVANCED_ADAPTER_TYPES.has(requested as CreateConfigValues["adapterType"])) {
+    if (
+      !SUPPORTED_ADVANCED_ADAPTER_TYPES.has(requested as CreateConfigValues["adapterType"]) ||
+      isAdapterTypeDisabled(requested)
+    ) {
       return;
     }
     setConfigValues((prev) => {

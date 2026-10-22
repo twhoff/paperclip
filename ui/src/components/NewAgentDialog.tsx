@@ -23,6 +23,7 @@ import {
 import { cn } from "@/lib/utils";
 import { OpenCodeLogoIcon } from "./OpenCodeLogoIcon";
 import { OzLogoIcon } from "./OzLogoIcon";
+import { isAdapterTypeDisabled } from "../adapters";
 
 type AdvancedAdapterType =
   | "claude_local"
@@ -209,7 +210,7 @@ export function NewAgentDialog() {
               </div>
 
               <div className="grid grid-cols-2 gap-2">
-                {ADVANCED_ADAPTER_OPTIONS.map((opt) => (
+                {ADVANCED_ADAPTER_OPTIONS.filter((opt) => !isAdapterTypeDisabled(opt.value)).map((opt) => (
                   <button
                     key={opt.value}
                     className={cn(

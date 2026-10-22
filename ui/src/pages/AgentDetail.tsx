@@ -24,7 +24,7 @@ import { queryKeys } from "../lib/queryKeys";
 import { AgentConfigForm } from "../components/AgentConfigForm";
 import { PageTabBar } from "../components/PageTabBar";
 import { adapterLabels, roleLabels, help } from "../components/agent-config-primitives";
-import { getUIAdapter, buildTranscript } from "../adapters";
+import { getUIAdapter, buildTranscript, isAdapterTypeDisabled } from "../adapters";
 import { StatusBadge } from "../components/StatusBadge";
 import { agentStatusDot, agentStatusDotDefault } from "../lib/status-colors";
 import { MarkdownBody } from "../components/MarkdownBody";
@@ -795,6 +795,8 @@ export function AgentDetail() {
     return <Navigate to={`/agents/${canonicalAgentRef}/dashboard`} replace />;
   }
   const isPendingApproval = agent.status === "pending_approval";
+  const isPaused = agent.status === "paused" || agent.nativeStatus === "paused";
+  const adapterDisabled = isAdapterTypeDisabled(agent.adapterType);
   const showConfigActionBar = (activeView === "configuration" || activeView === "instructions") && (configDirty || configSaving);
 
   return (
@@ -837,14 +839,19 @@ export function AgentDetail() {
           </Button>
           <RunButton
             onClick={() => agentAction.mutate("invoke")}
-            disabled={agentAction.isPending || isPendingApproval || agent.status === "under_emulation"}
+            disabled={agentAction.isPending || isPendingApproval || adapterDisabled || agent.status === "under_emulation"}
             label={agent.status === "under_emulation" ? "Emulating" : "Run Heartbeat"}
           />
           <PauseResumeButton
-            isPaused={agent.status === "paused" || agent.nativeStatus === "paused"}
+            isPaused={isPaused}
             onPause={() => agentAction.mutate("pause")}
             onResume={() => agentAction.mutate("resume")}
-            disabled={agentAction.isPending || isPendingApproval || agent.status === "under_emulation"}
+            disabled={
+              agentAction.isPending ||
+              isPendingApproval ||
+              agent.status === "under_emulation" ||
+              (adapterDisabled && isPaused)
+            }
           />
           <span className="hidden sm:flex items-center gap-1.5">
             <StatusBadge status={agent.status} />
@@ -934,6 +941,12 @@ export function AgentDetail() {
       {isPendingApproval && (
         <p className="text-sm text-amber-500">
           This agent is pending board approval and cannot be invoked yet.
+        </p>
+      )}
+      {adapterDisabled && (
+        <p className="text-sm text-amber-500">
+          The {getUIAdapter(agent.adapterType).label} adapter is disabled, so this agent cannot be run or
+          resumed. Choose another adapter in its configuration to use it again.
         </p>
       )}
 
