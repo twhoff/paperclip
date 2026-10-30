@@ -840,7 +840,14 @@ export function issueRoutes(db: Db, storage: StorageService) {
 
     const actor = getActorInfo(req);
     const isClosed = existing.status === "done" || existing.status === "cancelled";
-    const { comment: commentBody, reopen: reopenRequested, hiddenAt: hiddenAtRaw, ...updateFields } = req.body;
+    const {
+      comment: commentBody,
+      commentMetadata: commentMetadataRaw,
+      reopen: reopenRequested,
+      hiddenAt: hiddenAtRaw,
+      ...updateFields
+    } = req.body;
+    const commentMetadata = commentMetadataRaw ?? null;
     if (hiddenAtRaw !== undefined) {
       updateFields.hiddenAt = hiddenAtRaw ? new Date(hiddenAtRaw) : null;
     }
@@ -924,7 +931,7 @@ export function issueRoutes(db: Db, storage: StorageService) {
       comment = await svc.addComment(id, commentBody, {
         agentId: actor.agentId ?? undefined,
         userId: actor.actorType === "user" ? actor.actorId : undefined,
-      });
+      }, commentMetadata);
 
       await logActivity(db, {
         companyId: issue.companyId,
@@ -942,6 +949,7 @@ export function issueRoutes(db: Db, storage: StorageService) {
           issueTitle: issue.title,
           ...(reopened ? { reopened: true, reopenedFrom: reopenFromStatus, source: "comment" } : {}),
           ...(hasFieldChanges ? { updated: true } : {}),
+          ...(commentMetadata?.via ? { via: commentMetadata.via } : {}),
         },
       });
 
@@ -1310,10 +1318,11 @@ export function issueRoutes(db: Db, storage: StorageService) {
       }
     }
 
+    const commentMetadata = req.body.metadata ?? null;
     const comment = await svc.addComment(id, req.body.body, {
       agentId: actor.agentId ?? undefined,
       userId: actor.actorType === "user" ? actor.actorId : undefined,
-    });
+    }, commentMetadata);
 
     if (actor.runId) {
       await heartbeat.reportRunActivity(actor.runId).catch((err) =>
@@ -1336,6 +1345,7 @@ export function issueRoutes(db: Db, storage: StorageService) {
         issueTitle: currentIssue.title,
         ...(reopened ? { reopened: true, reopenedFrom: reopenFromStatus, source: "comment" } : {}),
         ...(interruptedRunId ? { interruptedRunId } : {}),
+        ...(commentMetadata?.via ? { via: commentMetadata.via } : {}),
       },
     });
 

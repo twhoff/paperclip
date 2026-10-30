@@ -176,16 +176,29 @@ const TimelineList = memo(function TimelineList({
             className={`border p-3 overflow-hidden min-w-0 rounded-sm transition-colors duration-1000 ${isHighlighted ? "border-primary/50 bg-primary/5" : "border-border"}`}
           >
             <div className="flex items-center justify-between mb-1">
-              {comment.authorAgentId ? (
-                <Link to={`/agents/${comment.authorAgentId}`} className="hover:underline">
-                  <Identity
-                    name={agentMap?.get(comment.authorAgentId)?.name ?? comment.authorAgentId.slice(0, 8)}
-                    size="sm"
-                  />
-                </Link>
-              ) : (
-                <Identity name="You" size="sm" />
-              )}
+              <span className="flex items-center gap-1.5 min-w-0">
+                {comment.authorAgentId ? (
+                  <Link to={`/agents/${comment.authorAgentId}`} className="hover:underline">
+                    <Identity
+                      name={agentMap?.get(comment.authorAgentId)?.name ?? comment.authorAgentId.slice(0, 8)}
+                      size="sm"
+                    />
+                  </Link>
+                ) : (
+                  <Identity name="You" size="sm" />
+                )}
+                {comment.metadata?.via ? (
+                  <span
+                    className="text-xs text-muted-foreground truncate"
+                    title={[
+                      `Holly session ${comment.metadata.via.sessionId}`,
+                      comment.metadata.via.role ? `acting as ${comment.metadata.via.role}` : null,
+                    ].filter(Boolean).join(", ")}
+                  >
+                    via {comment.metadata.via.name ?? comment.metadata.via.sessionId}
+                  </span>
+                ) : null}
+              </span>
               <span className="flex items-center gap-1.5">
                 {companyId ? (
                   <PluginSlotOutlet

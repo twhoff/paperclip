@@ -20,6 +20,7 @@ import {
   projects,
 } from "@paperclipai/db";
 import { extractProjectMentionIds, normalizeAgentUrlKey } from "@paperclipai/shared";
+import type { IssueCommentMetadata } from "@paperclipai/shared";
 import { conflict, notFound, unprocessable } from "../errors.js";
 import {
   defaultIssueExecutionWorkspaceSettingsForProject,
@@ -1315,7 +1316,12 @@ export function issueService(db: Db) {
             : null;
         })),
 
-    addComment: async (issueId: string, body: string, actor: { agentId?: string; userId?: string }) => {
+    addComment: async (
+      issueId: string,
+      body: string,
+      actor: { agentId?: string; userId?: string },
+      metadata: IssueCommentMetadata | null = null,
+    ) => {
       const issue = await db
         .select({ companyId: issues.companyId })
         .from(issues)
@@ -1336,6 +1342,7 @@ export function issueService(db: Db) {
           authorAgentId: actor.agentId ?? null,
           authorUserId: actor.userId ?? null,
           body: redactedBody,
+          metadata,
         })
         .returning();
 

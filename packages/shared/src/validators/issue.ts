@@ -63,8 +63,30 @@ export const createIssueLabelSchema = z.object({
 
 export type CreateIssueLabel = z.infer<typeof createIssueLabelSchema>;
 
+// A display label naming who wrote a comment on the author's behalf, such as the
+// Holly session acting as this agent's role. Authority stays with the author.
+export const issueCommentViaSchema = z
+  .object({
+    source: z.literal("holly"),
+    sessionId: z.string().trim().min(1).max(128),
+    name: z.string().trim().min(1).max(128).optional(),
+    role: z.string().trim().min(1).max(128).optional(),
+  })
+  .strict();
+
+export type IssueCommentVia = z.infer<typeof issueCommentViaSchema>;
+
+export const issueCommentMetadataSchema = z
+  .object({
+    via: issueCommentViaSchema.optional(),
+  })
+  .strict();
+
+export type IssueCommentMetadata = z.infer<typeof issueCommentMetadataSchema>;
+
 export const updateIssueSchema = createIssueSchema.partial().extend({
   comment: z.string().min(1).optional(),
+  commentMetadata: issueCommentMetadataSchema.optional(),
   reopen: z.boolean().optional(),
   hiddenAt: z.string().datetime().nullable().optional(),
 });
@@ -83,6 +105,7 @@ export const addIssueCommentSchema = z.object({
   body: z.string().min(1).max(64 * 1024),
   reopen: z.boolean().optional(),
   interrupt: z.boolean().optional(),
+  metadata: issueCommentMetadataSchema.optional(),
 });
 
 export type AddIssueComment = z.infer<typeof addIssueCommentSchema>;

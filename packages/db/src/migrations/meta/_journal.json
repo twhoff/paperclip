@@ -351,6 +351,13 @@
       "when": 1787501521632,
       "tag": "0049_equal_gauntlet",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1793352540432,
+      "tag": "0050_wise_shiva",
+      "breakpoints": true
     }
   ]
 }

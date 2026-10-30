@@ -132,7 +132,7 @@ describe("native issue comment pagination", () => {
   async function storedRows() {
     const rows = await db!.$client`
       select id, company_id as "companyId", issue_id as "issueId",
-        author_agent_id as "authorAgentId", author_user_id as "authorUserId", body,
+        author_agent_id as "authorAgentId", author_user_id as "authorUserId", body, metadata,
         created_at as "createdAt", updated_at as "updatedAt"
       from issue_comments where issue_id = ${issueId} order by created_at, id
     `;
