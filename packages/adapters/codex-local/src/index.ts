@@ -4,6 +4,8 @@ export const DEFAULT_CODEX_LOCAL_MODEL = "gpt-5.6-sol";
 export const DEFAULT_CODEX_LOCAL_BYPASS_APPROVALS_AND_SANDBOX = true;
 
 export const models = [
+  { id: "gpt-6.2-astra", label: "gpt-6.2-astra" },
+  { id: "gpt-6.2-sol", label: "gpt-6.2-sol" },
   { id: "gpt-5.6-sol", label: "gpt-5.6-sol" },
   { id: "gpt-5.6-terra", label: "gpt-5.6-terra" },
   { id: "gpt-5.6-luna", label: "gpt-5.6-luna" },
@@ -22,7 +24,7 @@ Core fields:
 - instructionsFilePath (string, optional): absolute path to a markdown instructions file prepended to stdin prompt at runtime
 - model (string, optional): Codex model id
 - effort (string, optional): reasoning effort override passed via -c model_reasoning_effort=...
-  - gpt-5.6-sol, gpt-5.6-terra: low|medium|high|xhigh|max|ultra
+  - gpt-6.2-astra, gpt-6.2-sol, gpt-5.6-sol, gpt-5.6-terra: low|medium|high|xhigh|max|ultra
   - gpt-5.6-luna: low|medium|high|xhigh|max
   - gpt-5.5, gpt-5.4, gpt-5.4-mini, gpt-5.3-codex-spark: low|medium|high|xhigh
   Codex CLI 0.143.0 or newer is required for max and ultra.

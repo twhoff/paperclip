@@ -29,6 +29,8 @@ Curated Codex Local choices:
 
 | Model | Effort choices |
 |-------|----------------|
+| `gpt-6.2-astra` | `low`, `medium`, `high`, `xhigh`, `max`, `ultra` |
+| `gpt-6.2-sol` | `low`, `medium`, `high`, `xhigh`, `max`, `ultra` |
 | `gpt-5.6-sol` | `low`, `medium`, `high`, `xhigh`, `max`, `ultra` |
 | `gpt-5.6-terra` | `low`, `medium`, `high`, `xhigh`, `max`, `ultra` |
 | `gpt-5.6-luna` | `low`, `medium`, `high`, `xhigh`, `max` |
@@ -44,7 +46,7 @@ Legacy saved values such as `gpt-5`, `none`, or `minimal` remain readable for ex
 When switching between `codex_local` and `copilot_cli`, `claude_local`, or `oz_local`, the UI uses canonical model and effort helpers. It preserves only real supported semantic equivalents and clears invalid combinations.
 
 - `codex_local` <-> `copilot_cli`: shared GPT models preserve where both adapters support them. Codex-only models and unsupported effort levels fall back or clear rather than introducing invalid combinations.
-- `codex_local` <-> `claude_local`: no model equivalence exists, so the target adapter default model is used. Shared effort levels preserve only when the target model supports them. Codex `ultra` and Claude `ultracode` are distinct and do not map; `max` can preserve between Claude and Codex Sol, Terra, or Luna.
+- `codex_local` <-> `claude_local`: no model equivalence exists, so the target adapter default model is used. Shared effort levels preserve only when the target model supports them. Codex `ultra` and Claude `ultracode` are distinct and do not map; `max` can preserve between Claude and Codex models that support it.
 - `codex_local` <-> `oz_local`: only real Oz equivalents map. Codex `gpt-5.4` with `high` maps to Oz `gpt-5-4-high`, and back to Codex `gpt-5.4` with `high`. Oz has no separate effort field.
 
 Adapter pairs that do not involve `codex_local` are unchanged by this remapping.

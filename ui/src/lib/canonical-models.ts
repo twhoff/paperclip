@@ -132,6 +132,18 @@ export const CANONICAL_MODELS: Record<string, CanonicalModel> = {
   },
 
   // ── GPT ─────────────────────────────────────────────────────────────────
+  "gpt-6.2-astra": {
+    label: "GPT-6.2 Astra",
+    adapters: {
+      codex_local: "gpt-6.2-astra",
+    },
+  },
+  "gpt-6.2-sol": {
+    label: "GPT-6.2 Sol",
+    adapters: {
+      codex_local: "gpt-6.2-sol",
+    },
+  },
   "gpt-5.6-sol": {
     label: "GPT-5.6 Sol",
     adapters: {
@@ -395,6 +407,8 @@ export const ALLOWED_EFFORT_LEVELS: Partial<
     "claude-haiku-4.5": [],
   },
   codex_local: {
+    "gpt-6.2-astra": ["low", "medium", "high", "xhigh", "max", "ultra"],
+    "gpt-6.2-sol": ["low", "medium", "high", "xhigh", "max", "ultra"],
     "gpt-5.6-sol": ["low", "medium", "high", "xhigh", "max", "ultra"],
     "gpt-5.6-terra": ["low", "medium", "high", "xhigh", "max", "ultra"],
     "gpt-5.6-luna": ["low", "medium", "high", "xhigh", "max"],

@@ -112,6 +112,8 @@ describe("Codex Local model catalogue", () => {
   it("uses the verified Codex default and curated model choices", () => {
     expect(DEFAULT_CODEX_LOCAL_MODEL).toBe("gpt-5.6-sol");
     expect(codexLocalModels.map((model) => model.id)).toEqual([
+      "gpt-6.2-astra",
+      "gpt-6.2-sol",
       "gpt-5.6-sol",
       "gpt-5.6-terra",
       "gpt-5.6-luna",
@@ -128,6 +130,13 @@ describe("Codex Local model catalogue", () => {
     expect(codexLocalModels.map((model) => model.id)).not.toContain("gpt-5");
     expect(getAllowedEffortLevels("codex_local", "gpt-5.5")).not.toContain("minimal");
     expect(getAllowedEffortLevels("codex_local", "gpt-5.5")).not.toContain("none");
+  });
+
+  it.each(["gpt-6.2-astra", "gpt-6.2-sol"])("resolves %s and its verified Codex efforts", (model) => {
+    expect(resolveCanonicalModel("codex_local", model)).toBe(model);
+    expect(getAllowedEffortLevels("codex_local", model)).toEqual([
+      "low", "medium", "high", "xhigh", "max", "ultra",
+    ]);
   });
 
   it("models Codex effort support per verified model", () => {

@@ -34,6 +34,7 @@ describe("adapter model listing", () => {
     const models = await listAdapterModels("codex_local");
 
     expect(models).toEqual(codexFallbackModels);
+    expect(models.map(({ id }) => id)).toEqual(expect.arrayContaining(["gpt-6.2-astra", "gpt-6.2-sol"]));
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
@@ -44,6 +45,7 @@ describe("adapter model listing", () => {
       json: async () => ({
         data: [
           { id: "gpt-5-pro" },
+          { id: "gpt-6.2-sol" },
           { id: "gpt-5" },
         ],
       }),
@@ -54,6 +56,8 @@ describe("adapter model listing", () => {
 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(first).toEqual(second);
+    expect(first.filter(({ id }) => id === "gpt-6.2-sol")).toHaveLength(1);
+    expect(first.some(({ id }) => id === "gpt-6.2-astra")).toBe(true);
     expect(first.some((model) => model.id === "gpt-5-pro")).toBe(true);
     expect(first.some((model) => model.id === "gpt-5.3-codex-spark")).toBe(true);
   });
