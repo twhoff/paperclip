@@ -61,8 +61,12 @@ tests/release-smoke/playwright-report/
 .dolt/
 *.db
 .beads-credential-key
+/.beads.gate.lock
 .agent-*.json
 
 # Holly runtime coordination state (machine-local sessions and caches)
 .holly/state/
 .holly/cache/
+
+# Holly-generated Claude skill links
+/.claude/skills/holly-*
