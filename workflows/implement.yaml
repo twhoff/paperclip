@@ -20,8 +20,8 @@ description: >-
   plan, not per child.
 
    Commits a review candidate and a final candidate after batch repairs.
-   Follow .agents/skills/use-workflow/stable-delivery.md for each child. For UI work, requires an explicit implementation loop using the
-   ui-visual-capture skill: do work -> capture -> assess -> adjust,
+   Follow .agents/skills/holly-use-workflow/stable-delivery.md for each child. For UI work, requires an explicit implementation loop using the
+   holly-ui-visual-capture skill: do work -> capture -> assess -> adjust,
    repeated until the rendered UI is correct at target breakpoints.
    The workflow builds review expectations into normal delivery so the
    first formal review is primarily confirmation, not discovery. The
@@ -241,14 +241,14 @@ steps:
       UI IMPLEMENTATION LOOP — for UI/frontend tasks, iterate until the
       rendered output is correct:
 
-      1. Load `ui-visual-capture` and the relevant design-system skills or
+      1. Load `holly-ui-visual-capture` and the relevant design-system skills or
          source docs identified in research.
       2. Make the smallest UI change needed for the current acceptance check.
       3. Apply any relevant ADRs that govern UI testability, selectors,
          visual proof, or interaction evidence. Use ADR-governed selector
          manifests for Playwright actions, scroll anchors, and capture targets
          when the project defines one.
-      4. Use the ui-visual-capture skill to capture the changed route.
+      4. Use the holly-ui-visual-capture skill to capture the changed route.
          Use a dedicated local server instance for this ticket and include
          the exact route, viewport expectation, and interaction goal in your notes.
          Do not treat a static screenshot as sufficient proof when the feature
@@ -376,7 +376,7 @@ steps:
   # One candidate through review and final acceptance
   - prompt: >-
       STABLE CANDIDATE LOOP — Execute
-      .agents/skills/use-workflow/stable-delivery.md for this issue or child.
+      .agents/skills/holly-use-workflow/stable-delivery.md for this issue or child.
       Implement directly in the registered task worktree; scratch holds only
       experiments and evidence. Commit the candidate after focused checks.
       Obtain independent review of the exact SHA and one consolidated defect

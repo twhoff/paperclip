@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/holly-chat-lifecycle-review-message.schema.json",
+  "title": "Holly Chat Lifecycle Review Message",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "kind",
+    "event",
+    "status",
+    "agent_name",
+    "session_id",
+    "task_id",
+    "reviewer",
+    "candidate_head",
+    "candidate_branch",
+    "reason",
+    "withdrawn_from",
+    "reviewer_session",
+    "reviewer_gone",
+    "released_from",
+    "channel",
+    "channel_id"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "holly.chat.lifecycle.review.v1"
+    },
+    "kind": {
+      "const": "task_review"
+    },
+    "event": {
+      "type": "string",
+      "enum": ["submitted", "resubmitted", "withdrawn", "released"]
+    },
+    "status": {
+      "type": "string",
+      "enum": ["posted"]
+    },
+    "agent_name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "session_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "task_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "reviewer": {
+      "type": "string",
+      "minLength": 1
+    },
+    "candidate_head": {
+      "type": "string",
+      "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+    },
+    "candidate_branch": {
+      "type": "string",
+      "minLength": 1
+    },
+    "reason": {
+      "type": ["string", "null"]
+    },
+    "withdrawn_from": {
+      "enum": [null, "submitted", "reviewing", "verdict-pending", "pass"]
+    },
+    "reviewer_session": {
+      "type": ["string", "null"]
+    },
+    "reviewer_gone": {
+      "type": ["string", "null"]
+    },
+    "released_from": {
+      "enum": [null, "reviewing", "pass"]
+    },
+    "channel": {
+      "const": "all-agents"
+    },
+    "channel_id": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"event": {"const": "withdrawn"}}},
+      "then": {"properties": {"reason": {"type": "string", "pattern": "\\S"}, "withdrawn_from": {"type": "string"}}}
+    },
+    {
+      "if": {"properties": {"event": {"const": "released"}}},
+      "then": {"properties": {"reason": {"type": "string", "pattern": "\\S"}, "released_from": {"type": "string"}, "reviewer_session": {"type": "string"}}}
+    }
+  ]
+}

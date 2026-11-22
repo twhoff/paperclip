@@ -12,7 +12,7 @@ description: >-
   principal-grade work on a weaker model. Routing is owned by swarm-agents.manifest.yaml and
   model-capability-tiers.yaml.
 capability_tier: principal_implementation
-model: fable
+model: claude-fable-5-2
 user-invocable: false
 skills: [ax-commandments, agent-fs, agent-sessions, use-workflow, issue-tracker, project-knowledge]
 tools: Bash, Read, Edit, Write, Grep, Glob, WebFetch, WebSearch, ToolSearch

@@ -43,11 +43,15 @@ steps:
       Land through Holly FIRST:
       `eval "$(holly task finish --eval --completion-summary '<what changed; checks run>')"`.
       Landing depends on the committed work from the previous steps; finish
-      lands, pushes, syncs tracker state, and removes the worktree. It leaves the issue open by default.
+      lands, pushes, syncs tracker state, and removes the worktree, then moves the
+      issue as the review plan recorded at task start says (closed, or in_review
+      under the reviewer).
       If finish fails, is blocked, or prints a recovery command, STOP this workflow
       before closure, abort or session teardown; follow the supported recovery
-      without manual push/rebase sequences. With worktree_path: null, finish is
-      summary-only: do not claim landing or permit closure through this workflow.
+      without manual push/rebase sequences. With an issue but worktree_path: null,
+      finish is summary-only: do not claim landing or permit closure through this
+      workflow. A read-only intent task (no issue) finishes as read_only and
+      delivers nothing.
 
   - prompt: >-
       Optional closure applies ONLY to the captured issue and reviewed source revision,

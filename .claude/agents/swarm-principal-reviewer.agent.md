@@ -10,7 +10,7 @@ description: >-
   Fable 5); if none is available it escalates rather than approving. Routing is owned by
   swarm-agents.manifest.yaml and model-capability-tiers.yaml.
 capability_tier: principal_review
-model: fable
+model: claude-fable-5-2
 user-invocable: false
 skills: [ax-commandments, agent-fs, agent-sessions, use-workflow, issue-tracker, project-knowledge]
 tools: Bash, Read, Grep, Glob, WebFetch, WebSearch, ToolSearch

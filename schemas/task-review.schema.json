@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://holly.local/schemas/task-review.schema.json",
+  "title": "Independent task review binding",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "id", "context", "issue_id", "author_session", "author_generation", "owner", "reviewer", "reviewer_actor", "handoff", "candidate", "acceptance_pending", "state", "submission_published", "reviewer_session", "findings", "verdict", "verdict_published"],
+  "properties": {
+    "version": {"const": 1},
+    "id": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+    "context": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"type": "string", "minLength": 1}},
+    "issue_id": {"type": "string", "minLength": 1},
+    "author_session": {"type": "string", "minLength": 1},
+    "author_generation": {"type": "integer", "minimum": 1},
+    "owner": {"type": "string", "minLength": 1},
+    "reviewer": {"type": "string", "minLength": 1},
+    "handoff": {"type": "string", "pattern": "\\S"},
+    "candidate": {
+      "type": "object", "additionalProperties": false,
+      "required": ["worktree_path", "branch", "head", "base"],
+      "properties": {
+        "worktree_path": {"type": "string", "minLength": 1},
+        "branch": {"type": "string", "minLength": 1},
+        "head": {"$ref": "#/$defs/commit"},
+        "base": {"$ref": "#/$defs/commit"}
+      }
+    },
+    "acceptance_pending": {"type": "boolean"},
+    "submitted_at": {"type": "string", "minLength": 1},
+    "landing_checkpoint": {
+      "type": "object", "additionalProperties": false,
+      "required": ["head", "main_root", "main_branch"],
+      "properties": {
+        "head": {"$ref": "#/$defs/commit"},
+        "main_root": {"type": "string", "minLength": 1},
+        "main_branch": {"type": "string", "minLength": 1}
+      }
+    },
+    "state": {"enum": ["submitted", "reviewing", "verdict-pending", "pass", "changes-requested", "landed", "withdrawn"]},
+    "withdrawal": {
+      "type": "object", "additionalProperties": false,
+      "required": ["at", "by", "reason", "from_state", "reviewer_session", "reviewer_gone"],
+      "properties": {
+        "at": {"type": "string", "minLength": 1},
+        "by": {"type": "string", "minLength": 1},
+        "reason": {"type": "string", "pattern": "\\S"},
+        "from_state": {"enum": ["submitted", "reviewing", "verdict-pending", "pass"]},
+        "reviewer_session": {"type": ["string", "null"], "minLength": 1},
+        "reviewer_gone": {"type": ["string", "null"], "minLength": 1}
+      }
+    },
+    "releases": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["at", "by", "reviewer_actor", "reason", "from_state"],
+        "properties": {
+          "at": {"type": "string", "minLength": 1},
+          "by": {"type": "string", "minLength": 1},
+          "reviewer_actor": {"type": "string", "minLength": 1},
+          "reason": {"type": "string", "pattern": "\\S"},
+          "from_state": {"enum": ["reviewing", "verdict-pending", "pass"]},
+          "taken_over_from": {"type": "string", "minLength": 1},
+          "reviewer_gone": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "submission_published": {"type": "boolean"},
+    "reviewer_session": {"type": ["string", "null"], "minLength": 1},
+    "reviewer_actor": {"type": ["string", "null"], "minLength": 1},
+    "findings": {"type": "string"},
+    "verdict": {"enum": [null, "pass", "changes-requested"]},
+    "verdict_published": {"type": "boolean"},
+    "carried": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["from_head", "from_base", "to_head", "to_base", "patch_ids", "check", "exit_code", "at"],
+        "properties": {
+          "from_head": {"$ref": "#/$defs/commit"},
+          "from_base": {"$ref": "#/$defs/commit"},
+          "to_head": {"$ref": "#/$defs/commit"},
+          "to_base": {"$ref": "#/$defs/commit"},
+          "patch_ids": {"type": "array", "minItems": 1, "items": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"}},
+          "check": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+          "exit_code": {"const": 0},
+          "at": {"type": "string", "minLength": 1},
+          "normalised_patch_id": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
+          "versions": {
+            "type": "array",
+            "items": {
+              "type": "object", "additionalProperties": false,
+              "required": ["path", "package", "reviewed", "main", "carried"],
+              "properties": {
+                "path": {"type": "string", "minLength": 1},
+                "package": {"type": ["string", "null"]},
+                "reviewed": {"type": "string", "minLength": 1},
+                "main": {"type": ["string", "null"]},
+                "carried": {"type": "string", "minLength": 1}
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {"if": {"properties": {"state": {"enum": ["pass", "landed"]}}},
+     "then": {"properties": {"verdict": {"const": "pass"}, "verdict_published": {"const": true}}}},
+    {"if": {"properties": {"state": {"const": "changes-requested"}}},
+     "then": {"properties": {"verdict": {"const": "changes-requested"}, "verdict_published": {"const": true}}}},
+    {"if": {"properties": {"state": {"enum": ["reviewing", "verdict-pending", "pass", "changes-requested", "landed"]}}},
+     "then": {"properties": {"submission_published": {"const": true}, "reviewer_session": {"type": "string"}, "reviewer_actor": {"type": "string"}}}},
+    {"if": {"properties": {"state": {"const": "withdrawn"}}},
+     "then": {"required": ["withdrawal"]}}
+  ],
+  "$defs": {"commit": {"type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"}}
+}

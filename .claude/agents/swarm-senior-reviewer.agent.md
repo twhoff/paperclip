@@ -10,7 +10,7 @@ description: >-
   Capability tier senior_review. If no senior-capable model is available it escalates rather than approving.
   Routing is owned by swarm-agents.manifest.yaml and model-capability-tiers.yaml.
 capability_tier: senior_review
-model: opus
+model: claude-opus-5-5
 user-invocable: false
 skills: [ax-commandments, agent-fs, agent-sessions, use-workflow, issue-tracker, project-knowledge]
 tools: Bash, Read, Grep, Glob, WebFetch, WebSearch, ToolSearch

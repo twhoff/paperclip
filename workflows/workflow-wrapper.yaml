@@ -71,7 +71,7 @@ preflight:
       Verify workspace isolation. If this task will involve file modifications
       and no active task workspace exists, start one through Holly before
       proceeding:
-        eval "$(holly task start --id <issue-id> --intent '<agent-intent>')"
+        eval "$(holly task start --id <issue-id> --intent '<agent-intent>' --review-required yes --reviewer self)"
       The PreToolUse hook and task guards enforce this: file-modifying tools and
       common shell mutation commands are blocked on the main checkout. Read-only
       operations are allowed.

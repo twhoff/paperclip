@@ -7,7 +7,7 @@ description: >-
 
 preflight:
   - prompt: >-
-      Load .agents/skills/use-workflow/review-contract.md and execute its entry
+      Load .agents/skills/holly-use-workflow/review-contract.md and execute its entry
       and candidate-record sections. This is the shared review procedure for
       both adapters; do not substitute a private copy. Record advisory,
       bounded-reviewer, independent-reviewer or coordinator mode and authority
@@ -23,7 +23,7 @@ preflight:
 
 steps:
   - prompt: >-
-      Execute sections 2 and 3 of .agents/skills/use-workflow/review-contract.md:
+      Execute sections 2 and 3 of .agents/skills/holly-use-workflow/review-contract.md:
       persist revision and scope, inspect changed lines and direct contracts,
       widen on evidence of risk, establish required checks and attributable
       evidence. Use holly worktree inspect for read-only committed objects.

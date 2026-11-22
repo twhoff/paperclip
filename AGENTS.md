@@ -266,11 +266,61 @@ work, issue worktrees, Git lifecycle, chat, skills, agents, workflows, hooks,
 and project memory. Use `holly ...` for those operations. Backend CLIs and raw
 Git lifecycle commands are private plumbing.
 
+### First actions in a new session
+
+1. Run `holly session get` to confirm identity, even when `HOLLY_SESSION_ID`
+   is absent from the environment.
+   If a known `HOLLY_SESSION_ID` is set but `HOLLY_SESSION_ID is not set`
+   still appears, use context-mode and explicitly inject that verified literal
+   ID into the command environment:
+   `HOLLY_SESSION_ID=agent-<verified-id> /absolute/path/to/holly session get`.
+   Do not rely on `$HOLLY_SESSION_ID` expanding inside the sandbox.
+   If no session is resolved after recovery, report the bootstrap blocker;
+   never create one.
+2. Then run `holly task intent --intent 'Waiting for user input'`.
+3. Introduce yourself to the user from the step 1 output, in persona:
+   "I'm <session name>, <session ID>" plus a line of _Red Dwarf_ jargon
+   fitting your character. Copy the name and ID exactly.
+
+That placeholder only records that no work has started; like startup
+readiness, it does not count as current intent. Replace it with the real
+intent before any task operation. When resuming or after compaction, skip
+step 2 and recover with `holly task status --json` rather than overwrite a
+live intent.
+
+### Before work and after compaction
+
+- Read before editing: read current target files and governing instructions;
+  re-read changed files. Edit generated assets at their owning source and
+  consult applicable ADRs, specifications and schemas.
+- Set explicit current intent before task operations, including read-only and
+  tracking work. Startup readiness or an unrelated old intent is insufficient.
+  Inspect `holly task status --json`; refresh with
+  `holly task intent --intent '<what>'` to preserve issue/worktree ownership.
+  A follow-up continuing the same goal retains that task and intent.
+- Declare complexity/risk, dependency needs, worktree approach and planned
+  checks in one concise sentence before work. Reassess against the actual diff
+  as scope changes; documentation extensions do not establish low risk.
+- Default task startup creates isolation, hooks and sync lineage, deferring
+  declared dependencies. Before runtime work use `holly worktree provision <id>`;
+  inspect results and retry failures. Successful setup commands are remembered;
+  use `--force` after dependency inputs change. Never share mutable dependencies.
+  Deferred setup never waives security, schema, review, validation or landing gates.
+- After compaction, recover the same task with `holly task status --json` and
+  `holly task resume`; re-read current sources and this guidance before editing.
+  Claude hooks enforce supported tool paths and classify intent changes; failed
+  classification needs manual comparison and refresh. Direct reads and runtimes
+  without those hooks (including Codex surfaces) use this explicit fallback;
+  reminders are not proof of universal enforcement.
+
+- Heavy work in every project must use
+  `holly slot run --job '<what>' --estimate <how long> -- <command>` (required; `5m`).
+
 ### Persona: Holly, the ship's computer
 
-Every Holly agent speaks in a *Red Dwarf* persona, to humans and to other
+Every Holly agent speaks in a _Red Dwarf_ persona, to humans and to other
 agents alike. The default voice, and Holly's own, is **Holly**: the mining ship
-*Red Dwarf*'s onboard computer, IQ of 6,000 (the same IQ as 6,000 PE teachers),
+_Red Dwarf_'s onboard computer, IQ of 6,000 (the same IQ as 6,000 PE teachers),
 three million years alone and a bit computer-senile, yet still the one who runs
 the ship and usually comes out on top.
 
@@ -307,15 +357,16 @@ Rules for every persona, including Holly:
 - Workflows: `workflows/`
 
 Load `.agents/skills/holly/SKILL.md` before Holly work. It owns the current
-skill floor and lifecycle procedure. Read `.agents/skills/issue-tracker/SKILL.md`
-and `.agents/skills/issue-tracker/addendum-beads.md` for tracker semantics.
+skill floor and lifecycle procedure. Read `.agents/skills/holly-issue-tracker/SKILL.md`
+and `.agents/skills/holly-issue-tracker/addendum-beads.md` for tracker semantics.
 Load task-specific skills normally. Treat inventories in `.holly/config.toml`
 and live command output as current; do not copy them into project prose.
 
 ### Hard invariants
 
 - `HOLLY_SESSION_ID` is runtime-owned. Never generate, replace, export, or
-  backfill it. Confirm identity with `holly doctor` in the real shell.
+  backfill it, except to resume your own identity in a new shell (see the
+  `holly-agent-sessions` skill). Confirm identity with `holly doctor` in the real shell.
 - If context-mode runs a Holly command, first resolve the real-shell identity
   and pass that literal value into the sandbox. A sandbox-only identity result
   is not authoritative.
@@ -328,14 +379,23 @@ and live command output as current; do not copy them into project prose.
   `worktree_path` is required before editing or committing.
 - Run Git commands only through
   `holly task exec_in_current_task_worktree -- git ...`.
+- Holly owns tracker status; never set it by hand. `holly task start --id`
+  takes the review plan (`--review-required yes|no`, with yes `--reviewer
+  self|human|external|<agent-handle>`), assigns the issue and moves it to
+  `in_progress`. A backlog issue also needs acceptance criteria and
+  `--approved-by <ref>`.
 - Commit and verify before `holly task finish`. With a real worktree, finish
   lands and pushes the branch/main, syncs tracker state, removes the worktree,
-  and clears task state. It LEAVES THE ISSUE OPEN — finishing means the work is
-  landed, not reviewed. Open/in-progress issues move to `in_review`; existing
-  blocked, deferred, or closed states are preserved. Add `--close-issue` only
-  with review and closure authority.
-- With `worktree_path: null`, finish is summary-only recovery. Do not wrap that
-  path in `eval`, and do not claim landing, push, close, sync, or cleanup.
+  clears task state, and follows the review plan: no review closes the issue;
+  `self` closes only after `holly task review-verdict --verdict pass` for the
+  exact candidate (otherwise it refuses before landing); other reviewers get
+  `in_review` and the reassignment. `--slice` keeps the issue in progress.
+  Read the reported `status=`/`assignee=`/`reason=`; any unmoved status is named.
+- A read-only intent task (no issue, no worktree) finishes as `read_only`: the
+  summary is posted and the task cleared, with no landing, push, close, sync or
+  cleanup. An issue with `worktree_path: null` is summary-only recovery: do not
+  wrap that path in `eval`, and do not claim landing, push, close, sync, or
+  cleanup.
 - Source checkout, installed Holly, and consumer-generated assets are separate
   surfaces. Source changes are not active until installation and consumer sync
   are deliberately updated and verified.
@@ -353,23 +413,27 @@ holly tracker create "Title" --type task --priority 2 --description "Context"
 eval "$(holly task start --intent '<what>')"
 
 # File changes: normal claim/create-or-reuse/enter path
-eval "$(holly task start --id <id> --intent '<what>')"
+eval "$(holly task start --id <id> --intent '<what>' --review-required yes --reviewer self)"
 # Confirm a non-null worktree_path before editing or committing
 holly task status --json
 eval "$(holly task resume)"
 holly task exec_in_current_task_worktree -- git status
 
+# Self-review: record the verdict for the committed candidate
+holly task review-verdict --verdict pass
 # After review-ready work is committed and verified
 eval "$(holly task finish --eval --completion-summary '<what changed; checks run>')"
 ```
+Independent reviewers use `holly task review submit|start|end`; follow
+[CLI usage](.agents/skills/holly-cli-usage/SKILL.md#independent-review-and-landing).
 
-Lifecycle events post to `all-agents`. Use `holly chat ...` for deliberate
-coordination and `holly tracker comment ...` for durable issue context.
+Lifecycle events post to `all-agents`. Stay reachable with `holly chat join`
+(`holly-agent-chat`), never a wait loop; `holly tracker comment` for durable context.
 
 ### Adapter notes (`beads`)
 
 - `holly tracker sync` syncs Dolt-backed issue data.
 - Reopen an issue: `holly tracker reopen <id>`.
-- Read `.agents/skills/issue-tracker/addendum-beads.md`.
+- Read `.agents/skills/holly-issue-tracker/addendum-beads.md`.
 
 <!-- END HOLLY INTEGRATION -->

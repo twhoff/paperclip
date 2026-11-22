@@ -169,19 +169,17 @@ steps:
       invocation in a code block.
 
       Invocation syntax rules (stay multi-platform; do not assume one IDE):
-      - Holly workflows run through the `use-workflow` executor, not a
+      - Holly workflows run through the `holly-use-workflow` executor, not a
         universal slash command. Only `track` and `orchestrate` ship a real
-        command surface (a Claude Code skill plus a `.github/prompts`
-        loader). Every other workflow -- `implement`, `commit`,
+        command surface (a Claude Code skill). Every other workflow -- `implement`, `commit`,
         `begin-session`, `review-implementation`, `zero-problems` -- is
-        invoked by its phrase, which the agent's `use-workflow` skill routes
+        invoked by its phrase, which the agent's `holly-use-workflow` skill routes
         to the matching `workflows/*.yaml`.
       - Emit the portable phrase form as the primary pasteable, with the
         resolved ID substituted in: `implement <ISSUE-ID>` for serial work,
         `orchestrate <EPIC-ID>` for parallel swarm delivery, or
         `track <scope>` for decomposition.
-      - On runtimes that register slash commands (Claude Code and GitHub
-        Copilot / VS Code), note that `orchestrate` and `track` may also be
+      - On Claude Code, note that `orchestrate` and `track` may also be
         run as `/orchestrate <EPIC-ID>` and `/track <scope>`.
       - Never invent commands that do not exist: there is no `/implement`,
         no `/begin-session`, and no `/orchestrate-swarm`. Never emit a

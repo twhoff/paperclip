@@ -10,7 +10,7 @@ description: >-
   rather than running architecture on an under-powered model. Routing is owned by swarm-agents.manifest.yaml
   and model-capability-tiers.yaml.
 capability_tier: senior_implementation
-model: opus
+model: claude-opus-5-5
 user-invocable: false
 skills: [ax-commandments, agent-fs, agent-sessions, use-workflow, issue-tracker, project-knowledge]
 tools: Bash, Read, Edit, Write, Grep, Glob, WebFetch, WebSearch, ToolSearch

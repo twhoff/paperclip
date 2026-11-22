@@ -8,7 +8,7 @@ description: >-
   implementation to tiered swarm agents when cost-efficient and codes directly
   only when delegation overhead exceeds the task.
 capability_tier: orchestrator
-model: opus
+model: claude-opus-5-5
 tools: Bash, Read, Agent, Task, Edit, Write, Grep, Glob, WebFetch, WebSearch, TodoWrite, ToolSearch
 user-invocable: true
 agents: ['*']

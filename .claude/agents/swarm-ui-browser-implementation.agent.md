@@ -9,7 +9,7 @@ description: >-
   Capability tier ui_browser_implementation. Default model is a per-runtime tier choice, not part of the agent identity;
   routing is owned by swarm-agents.manifest.yaml and model-capability-tiers.yaml.
 capability_tier: ui_browser_implementation
-model: sonnet
+model: claude-sonnet-5-5
 user-invocable: false
 skills: [ax-commandments, agent-fs, agent-sessions, use-workflow, issue-tracker, ui-visual-capture, project-knowledge]
 tools: Bash, Read, Edit, Write, Grep, Glob, ToolSearch
